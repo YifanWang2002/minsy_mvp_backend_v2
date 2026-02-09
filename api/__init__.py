@@ -1,0 +1,1 @@
+"""Minsy API module."""
