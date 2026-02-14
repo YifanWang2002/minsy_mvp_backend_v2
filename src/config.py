@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     auth_rate_window: int = Field(default=60, alias="AUTH_RATE_WINDOW")
     openai_response_model: str = Field(default="gpt-5", alias="OPENAI_RESPONSE_MODEL")
     mcp_server_url: str = Field(
-        default="http://127.0.0.1:8111/mcp",
+        default="https://mcp.minsyai.com/mcp",
         alias="MCP_SERVER_URL",
     )
 
