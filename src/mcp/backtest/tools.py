@@ -14,16 +14,36 @@ from src.engine.backtest import (
     get_backtest_job_view,
     schedule_backtest_job,
 )
+from src.engine.backtest.analytics import (
+    build_backtest_overview,
+    compute_entry_hour_pnl_heatmap,
+    compute_entry_weekday_pnl,
+    compute_exit_reason_breakdown,
+    compute_holding_period_pnl_bins,
+    compute_long_short_breakdown,
+    compute_monthly_return_table,
+    compute_rolling_metrics,
+    compute_underwater_curve,
+)
 from src.mcp._utils import to_json, utc_now_iso
 from src.models import database as db_module
 
 TOOL_NAMES: tuple[str, ...] = (
     "backtest_create_job",
     "backtest_get_job",
+    "backtest_entry_hour_pnl_heatmap",
+    "backtest_entry_weekday_pnl",
+    "backtest_monthly_return_table",
+    "backtest_holding_period_pnl_bins",
+    "backtest_long_short_breakdown",
+    "backtest_exit_reason_breakdown",
+    "backtest_underwater_curve",
+    "backtest_rolling_metrics",
 )
 
 _MAX_SAMPLE_TRADES = 5
 _MAX_SAMPLE_EVENTS = 5
+_MAX_CURVE_POINTS = 240
 
 
 def _payload(
@@ -79,7 +99,11 @@ def _view_payload(view: Any) -> dict[str, Any]:
     }
 
     if view.status == "done":
-        data["result"] = _summarize_result_payload(view.result)
+        data["result"] = build_backtest_overview(
+            view.result,
+            sample_trades=_MAX_SAMPLE_TRADES,
+            sample_events=_MAX_SAMPLE_EVENTS,
+        )
     elif view.status == "failed":
         data["result"] = {
             "error": view.error or {"code": "BACKTEST_FAILED", "message": "Backtest failed"}
@@ -89,55 +113,42 @@ def _view_payload(view: Any) -> dict[str, Any]:
     return data
 
 
-def _summarize_result_payload(result: Any) -> dict[str, Any]:
-    if not isinstance(result, dict):
-        return {
-            "summary": {},
-            "performance": {},
-            "counts": {"trades": 0, "equity_points": 0, "events": 0},
-            "sample_trades": [],
-            "sample_events": [],
-            "result_truncated": True,
-        }
-
-    summary = result.get("summary")
-    if not isinstance(summary, dict):
-        summary = {}
-
-    performance = result.get("performance")
-    if not isinstance(performance, dict):
-        performance = {}
-
-    trades = result.get("trades")
-    if not isinstance(trades, list):
-        trades = []
-
-    events = result.get("events")
-    if not isinstance(events, list):
-        events = []
-
-    equity_curve = result.get("equity_curve")
-    if not isinstance(equity_curve, list):
-        equity_curve = []
-
-    output: dict[str, Any] = {
-        "market": result.get("market"),
-        "symbol": result.get("symbol"),
-        "timeframe": result.get("timeframe"),
-        "summary": summary,
-        "performance": performance,
-        "counts": {
-            "trades": len(trades),
-            "equity_points": len(equity_curve),
-            "events": len(events),
-        },
-        "sample_trades": trades[:_MAX_SAMPLE_TRADES],
-        "sample_events": events[:_MAX_SAMPLE_EVENTS],
-        "started_at": result.get("started_at"),
-        "finished_at": result.get("finished_at"),
-        "result_truncated": True,
+def _build_job_stub(view: Any) -> dict[str, Any]:
+    return {
+        "job_id": str(view.job_id),
+        "strategy_id": str(view.strategy_id),
+        "status": view.status,
+        "progress": view.progress,
+        "current_step": view.current_step,
+        "result_ready": view.status == "done" and isinstance(view.result, dict),
+        "error": view.error,
+        "submitted_at": view.submitted_at.isoformat(),
+        "completed_at": view.completed_at.isoformat() if view.completed_at else None,
     }
-    return output
+
+
+def _require_completed_result(
+    *,
+    tool: str,
+    view: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if view.status == "failed":
+        return None, _payload(
+            tool=tool,
+            ok=False,
+            data=_build_job_stub(view),
+            error_code="BACKTEST_FAILED",
+            error_message=(view.error or {}).get("message", "Backtest failed."),
+        )
+    if view.status != "done" or not isinstance(view.result, dict):
+        return None, _payload(
+            tool=tool,
+            ok=False,
+            data=_build_job_stub(view),
+            error_code="JOB_NOT_READY",
+            error_message="Backtest job is not completed yet.",
+        )
+    return view.result, None
 
 
 def register_backtest_tools(mcp: FastMCP) -> None:
@@ -233,4 +244,165 @@ def register_backtest_tools(mcp: FastMCP) -> None:
             tool="backtest_get_job",
             ok=True,
             data=_view_payload(view),
+        )
+
+    async def _load_completed_result(tool: str, job_id: str) -> tuple[dict[str, Any] | None, str | None]:
+        try:
+            job_uuid = _parse_uuid(job_id, "job_id")
+        except ValueError as exc:
+            return None, _payload(
+                tool=tool,
+                ok=False,
+                error_code="INVALID_UUID",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                view = await get_backtest_job_view(db, job_id=job_uuid)
+        except BacktestJobNotFoundError as exc:
+            return None, _payload(
+                tool=tool,
+                ok=False,
+                error_code="JOB_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return None, _payload(
+                tool=tool,
+                ok=False,
+                error_code="BACKTEST_GET_JOB_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        result, error_payload = _require_completed_result(tool=tool, view=view)
+        if error_payload is not None:
+            return None, error_payload
+        assert result is not None
+        return result, None
+
+    @mcp.tool()
+    async def backtest_entry_hour_pnl_heatmap(job_id: str) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_entry_hour_pnl_heatmap",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        return _payload(
+            tool="backtest_entry_hour_pnl_heatmap",
+            ok=True,
+            data=compute_entry_hour_pnl_heatmap(result),
+        )
+
+    @mcp.tool()
+    async def backtest_entry_weekday_pnl(job_id: str) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_entry_weekday_pnl",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        return _payload(
+            tool="backtest_entry_weekday_pnl",
+            ok=True,
+            data=compute_entry_weekday_pnl(result),
+        )
+
+    @mcp.tool()
+    async def backtest_monthly_return_table(job_id: str) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_monthly_return_table",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        return _payload(
+            tool="backtest_monthly_return_table",
+            ok=True,
+            data=compute_monthly_return_table(result),
+        )
+
+    @mcp.tool()
+    async def backtest_holding_period_pnl_bins(job_id: str) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_holding_period_pnl_bins",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        return _payload(
+            tool="backtest_holding_period_pnl_bins",
+            ok=True,
+            data=compute_holding_period_pnl_bins(result),
+        )
+
+    @mcp.tool()
+    async def backtest_long_short_breakdown(job_id: str) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_long_short_breakdown",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        return _payload(
+            tool="backtest_long_short_breakdown",
+            ok=True,
+            data=compute_long_short_breakdown(result),
+        )
+
+    @mcp.tool()
+    async def backtest_exit_reason_breakdown(job_id: str) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_exit_reason_breakdown",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        return _payload(
+            tool="backtest_exit_reason_breakdown",
+            ok=True,
+            data=compute_exit_reason_breakdown(result),
+        )
+
+    @mcp.tool()
+    async def backtest_underwater_curve(
+        job_id: str,
+        max_points: int = _MAX_CURVE_POINTS,
+    ) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_underwater_curve",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        cap = max(10, min(1000, int(max_points)))
+        return _payload(
+            tool="backtest_underwater_curve",
+            ok=True,
+            data=compute_underwater_curve(result, max_points=cap),
+        )
+
+    @mcp.tool()
+    async def backtest_rolling_metrics(
+        job_id: str,
+        window_bars: int = 0,
+        max_points: int = _MAX_CURVE_POINTS,
+    ) -> str:
+        result, error_payload = await _load_completed_result(
+            "backtest_rolling_metrics",
+            job_id,
+        )
+        if error_payload is not None:
+            return error_payload
+        requested_window = max(0, int(window_bars))
+        cap = max(10, min(1000, int(max_points)))
+        return _payload(
+            tool="backtest_rolling_metrics",
+            ok=True,
+            data=compute_rolling_metrics(
+                result,
+                window_bars=requested_window,
+                max_points=cap,
+            ),
         )

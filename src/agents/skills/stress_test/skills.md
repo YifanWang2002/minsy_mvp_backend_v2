@@ -22,6 +22,14 @@ Reply in **{{LANG_NAME}}**.
 - In this phase, only use:
   - `backtest_create_job`
   - `backtest_get_job`
+  - `backtest_entry_hour_pnl_heatmap`
+  - `backtest_entry_weekday_pnl`
+  - `backtest_monthly_return_table`
+  - `backtest_holding_period_pnl_bins`
+  - `backtest_long_short_breakdown`
+  - `backtest_exit_reason_breakdown`
+  - `backtest_underwater_curve`
+  - `backtest_rolling_metrics`
 - On terminal state, emit:
   `<AGENT_STATE_PATCH>{"backtest_status":"done"}</AGENT_STATE_PATCH>`
   or

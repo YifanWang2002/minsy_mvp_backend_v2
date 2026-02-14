@@ -6,6 +6,7 @@ import copy
 import json
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -14,12 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.orchestrator import ChatOrchestrator
 from src.agents.phases import Phase, can_transition
 from src.api.middleware.auth import get_current_user
-from src.api.schemas.events import StrategyConfirmResponse
+from src.api.schemas.events import StrategyConfirmResponse, StrategyDetailResponse
 from src.api.schemas.requests import ChatSendRequest, StrategyConfirmRequest
 from src.dependencies import get_db, get_responses_event_streamer
 from src.engine.strategy import (
     StrategyDslValidationException,
     StrategyStorageNotFoundError,
+    get_strategy_or_raise,
     upsert_strategy_dsl,
 )
 from src.models.phase_transition import PhaseTransition
@@ -28,6 +30,54 @@ from src.models.user import User
 from src.services.openai_stream_service import ResponsesEventStreamer
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
+
+
+@router.get("/{strategy_id}", response_model=StrategyDetailResponse)
+async def get_strategy_detail(
+    strategy_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StrategyDetailResponse:
+    try:
+        strategy = await get_strategy_or_raise(db, strategy_id=strategy_id)
+    except StrategyStorageNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "STRATEGY_NOT_FOUND",
+                "message": str(exc),
+            },
+        ) from exc
+
+    if strategy.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "STRATEGY_NOT_FOUND",
+                "message": "Strategy not found.",
+            },
+        )
+
+    updated_at = strategy.updated_at if strategy.updated_at is not None else strategy.created_at
+    dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    return StrategyDetailResponse(
+        strategy_id=strategy.id,
+        session_id=strategy.session_id,
+        version=int(strategy.version),
+        status=strategy.status,
+        dsl_json=dsl_payload,
+        metadata={
+            "user_id": str(strategy.user_id),
+            "session_id": str(strategy.session_id),
+            "strategy_name": strategy.name,
+            "dsl_version": strategy.dsl_version or "",
+            "version": int(strategy.version),
+            "status": strategy.status,
+            "timeframe": strategy.timeframe,
+            "symbol_count": len(strategy.symbols or []),
+            "last_updated_at": updated_at.isoformat() if updated_at is not None else None,
+        },
+    )
 
 
 @router.post("/confirm", response_model=StrategyConfirmResponse)
@@ -110,7 +160,7 @@ async def confirm_strategy(
     session.artifacts = artifacts
     session.last_activity_at = datetime.now(UTC)
 
-    if session.current_phase != Phase.STRESS_TEST.value:
+    if payload.advance_to_stress_test and session.current_phase != Phase.STRESS_TEST.value:
         if not can_transition(session.current_phase, Phase.STRESS_TEST.value):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

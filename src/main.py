@@ -27,9 +27,9 @@ async def lifespan(_: FastAPI):
     ensure_market_data()
 
     logger.info(
-        "Runtime AI config: model=%s, yfinance_mcp=%s",
+        "Runtime AI config: model=%s, mcp_server=%s",
         settings.openai_response_model,
-        settings.yfinance_mcp_server_url,
+        settings.mcp_server_url,
     )
     await init_postgres()
     await init_redis()

@@ -26,7 +26,7 @@ from openai import OpenAI
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000/api/v1"
 DEFAULT_MODEL = "gpt-5.2"
-DEFAULT_MCP_SERVER_URL = "https://mcp.minsyai.com/yfinance/mcp"
+DEFAULT_MCP_SERVER_URL = "http://127.0.0.1:8111/mcp"
 
 _AGENT_UI_PATTERN = re.compile(
     r"<\s*AGENT_UI_JSON\s*>([\s\S]*?)</\s*AGENT_UI_JSON\s*>",
@@ -327,15 +327,15 @@ def _run_direct_mcp_probe(
             tools=[
                 {
                     "type": "mcp",
-                    "server_label": "yfinance",
+                    "server_label": "market_data",
                     "server_url": mcp_server_url,
-                    "allowed_tools": [tool_choice_name, "get_quote"],
+                    "allowed_tools": [tool_choice_name, "get_symbol_quote"],
                     "require_approval": "never",
                 }
             ],
             tool_choice={
                 "type": "mcp",
-                "server_label": "yfinance",
+                "server_label": "market_data",
                 "name": tool_choice_name,
             },
             timeout=120,
@@ -378,7 +378,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--mcp-server-url",
-        default=os.getenv("YFINANCE_MCP_SERVER_URL", DEFAULT_MCP_SERVER_URL),
+        default=os.getenv("MCP_SERVER_URL", DEFAULT_MCP_SERVER_URL),
         help="MCP server URL used in direct MCP probe",
     )
     parser.add_argument(

@@ -1,0 +1,37 @@
+name: Deploy to GCP VM
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (optional)
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCP_VM_HOST }}
+          username: ${{ secrets.GCP_VM_USER }}
+          key: ${{ secrets.GCP_VM_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /home/yifan/minsy_mvp_backend_v2
+
+            # 强制与 main 对齐
+            git fetch origin main
+            git reset --hard origin/main
+
+            # 使用 uv 同步依赖
+            uv sync
+
+            sudo systemctl restart minsy-fastapi
+            sudo systemctl restart minsy-mcp
+
+            sudo systemctl is-active --quiet minsy-fastapi
+            sudo systemctl is-active --quiet minsy-mcp
+            echo "Deploy success."

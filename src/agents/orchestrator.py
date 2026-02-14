@@ -34,6 +34,7 @@ from src.agents.skills.pre_strategy_skills import (
 )
 from src.api.schemas.requests import ChatSendRequest
 from src.config import settings
+from src.engine.strategy import validate_strategy_payload
 from src.models.phase_transition import PhaseTransition
 from src.models.session import Message, Session
 from src.models.user import User, UserProfile
@@ -42,6 +43,8 @@ from src.util.logger import log_agent
 
 _AGENT_UI_TAG = "AGENT_UI_JSON"
 _AGENT_STATE_PATCH_TAG = "AGENT_STATE_PATCH"
+_STRATEGY_CARD_GENUI_TYPE = "strategy_card"
+_STRATEGY_REF_GENUI_TYPE = "strategy_ref"
 _STOP_CRITERIA_TURN_LIMIT = 10
 _PHASE_CARRYOVER_TAG = "PHASE CARRYOVER MEMORY"
 _PHASE_CARRYOVER_MAX_TURNS = 4
@@ -216,7 +219,6 @@ class ChatOrchestrator:
         tools = self._merge_tools(
             base_tools=prompt.tools,
             runtime_policy=runtime_policy,
-            message=payload.message,
         )
 
         # -- stream from Responses API -----------------------------------
@@ -299,6 +301,12 @@ class ChatOrchestrator:
         selected_genui_payloads = normalize_genui_payloads(
             genui_payloads,
             allow_passthrough_unregistered=True,
+        )
+        selected_genui_payloads = self._maybe_auto_wrap_strategy_genui(
+            phase=phase_before,
+            artifacts=artifacts,
+            assistant_text=assistant_text,
+            existing_genui=selected_genui_payloads,
         )
 
         # -- delegate post-processing to handler --------------------------
@@ -541,6 +549,148 @@ class ChatOrchestrator:
 
         return cleaned, genui_payloads, patch_payloads
 
+    def _maybe_auto_wrap_strategy_genui(
+        self,
+        *,
+        phase: str,
+        artifacts: dict[str, Any],
+        assistant_text: str,
+        existing_genui: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if phase != Phase.STRATEGY.value:
+            return existing_genui
+        if self._contains_strategy_genui(existing_genui):
+            return existing_genui
+
+        strategy_profile = self._extract_phase_profile(
+            artifacts=artifacts,
+            phase=Phase.STRATEGY.value,
+        )
+        strategy_id = strategy_profile.get("strategy_id")
+        if isinstance(strategy_id, str) and strategy_id.strip():
+            return existing_genui
+
+        dsl_payload = self._try_extract_strategy_dsl_from_text(assistant_text)
+        if not isinstance(dsl_payload, dict):
+            return existing_genui
+
+        wrapped = {
+            "type": _STRATEGY_CARD_GENUI_TYPE,
+            "dsl_json": dsl_payload,
+            "source": "auto_detected_first_dsl",
+            "display_mode": "draft",
+        }
+        dedupe_key = json.dumps(wrapped, ensure_ascii=False, sort_keys=True)
+        existing_keys = {
+            json.dumps(item, ensure_ascii=False, sort_keys=True)
+            for item in existing_genui
+        }
+        if dedupe_key in existing_keys:
+            return existing_genui
+        return [*existing_genui, wrapped]
+
+    @staticmethod
+    def _contains_strategy_genui(payloads: list[dict[str, Any]]) -> bool:
+        for payload in payloads:
+            payload_type = payload.get("type")
+            if not isinstance(payload_type, str):
+                continue
+            normalized = payload_type.strip().lower()
+            if normalized in {_STRATEGY_CARD_GENUI_TYPE, _STRATEGY_REF_GENUI_TYPE}:
+                return True
+        return False
+
+    def _try_extract_strategy_dsl_from_text(self, text: str) -> dict[str, Any] | None:
+        if not isinstance(text, str):
+            return None
+        body = text.strip()
+        if not body:
+            return None
+
+        candidates = self._extract_json_candidates_from_text(body)
+        for raw_candidate in candidates:
+            try:
+                parsed = json.loads(raw_candidate)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            if not self._looks_like_strategy_dsl(parsed):
+                continue
+
+            validation = validate_strategy_payload(parsed)
+            if validation.is_valid:
+                return parsed
+        return None
+
+    @staticmethod
+    def _looks_like_strategy_dsl(payload: dict[str, Any]) -> bool:
+        required_keys = ("strategy", "universe", "timeframe", "trade")
+        for key in required_keys:
+            if key not in payload:
+                return False
+        return isinstance(payload.get("strategy"), dict) and isinstance(payload.get("trade"), dict)
+
+    @staticmethod
+    def _extract_json_candidates_from_text(text: str) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def _add(candidate: str) -> None:
+            normalized = candidate.strip()
+            if not normalized:
+                return
+            if normalized in seen:
+                return
+            seen.add(normalized)
+            candidates.append(normalized)
+
+        for match in re.finditer(
+            r"```(?:json)?\s*([\s\S]*?)```",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            block = match.group(1)
+            if isinstance(block, str):
+                _add(block)
+
+        depth = 0
+        in_string = False
+        escaped = False
+        start_index: int | None = None
+        max_candidates = 40
+
+        for idx, ch in enumerate(text):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+
+            if ch == "{":
+                if depth == 0:
+                    start_index = idx
+                depth += 1
+                continue
+
+            if ch == "}":
+                if depth <= 0:
+                    continue
+                depth -= 1
+                if depth == 0 and start_index is not None:
+                    _add(text[start_index : idx + 1])
+                    if len(candidates) >= max_candidates:
+                        break
+                    start_index = None
+
+        return candidates
+
     def _extract_json_by_tag(self, text: str, tag: str) -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []
         pattern = self._build_tag_pattern(tag)
@@ -680,6 +830,7 @@ class ChatOrchestrator:
                             "strategy_validate_dsl",
                             "strategy_upsert_dsl",
                             "strategy_get_dsl",
+                            "strategy_list_tunable_params",
                             "strategy_patch_dsl",
                             "strategy_list_versions",
                             "strategy_get_version_dsl",
@@ -688,7 +839,21 @@ class ChatOrchestrator:
                             "get_indicator_detail",
                             "get_indicator_catalog",
                         ],
-                    )
+                    ),
+                    self._build_backtest_tool_def(
+                        allowed_tools=[
+                            "backtest_create_job",
+                            "backtest_get_job",
+                            "backtest_entry_hour_pnl_heatmap",
+                            "backtest_entry_weekday_pnl",
+                            "backtest_monthly_return_table",
+                            "backtest_holding_period_pnl_bins",
+                            "backtest_long_short_breakdown",
+                            "backtest_exit_reason_breakdown",
+                            "backtest_underwater_curve",
+                            "backtest_rolling_metrics",
+                        ],
+                    ),
                 ],
             )
 
@@ -717,13 +882,25 @@ class ChatOrchestrator:
                 tool_mode="replace",
                 allowed_tools=[
                     self._build_backtest_tool_def(
-                        allowed_tools=["backtest_create_job", "backtest_get_job"],
+                        allowed_tools=[
+                            "backtest_create_job",
+                            "backtest_get_job",
+                            "backtest_entry_hour_pnl_heatmap",
+                            "backtest_entry_weekday_pnl",
+                            "backtest_monthly_return_table",
+                            "backtest_holding_period_pnl_bins",
+                            "backtest_long_short_breakdown",
+                            "backtest_exit_reason_breakdown",
+                            "backtest_underwater_curve",
+                            "backtest_rolling_metrics",
+                        ],
                     ),
                     self._build_strategy_tool_def(
                         allowed_tools=[
                             "strategy_validate_dsl",
                             "strategy_upsert_dsl",
                             "strategy_get_dsl",
+                            "strategy_list_tunable_params",
                             "strategy_patch_dsl",
                             "strategy_list_versions",
                             "strategy_get_version_dsl",
@@ -776,27 +953,11 @@ class ChatOrchestrator:
             "require_approval": "never",
         }
 
-    def _build_optional_tools(self, message: str) -> list[dict[str, Any]] | None:
-        lower = message.lower()
-        dice_keywords = ("dice", "roll", "掷骰", "骰子")
-        if not any(kw in lower for kw in dice_keywords):
-            return None
-        return [
-            {
-                "type": "mcp",
-                "server_label": "dice",
-                "server_url": settings.dice_mcp_server_url,
-                "allowed_tools": ["roll_dice"],
-                "require_approval": "never",
-            }
-        ]
-
     def _merge_tools(
         self,
         *,
         base_tools: list[dict[str, Any]] | None,
         runtime_policy: HandlerRuntimePolicy,
-        message: str,
     ) -> list[dict[str, Any]] | None:
         merged = list(base_tools or [])
 
@@ -806,10 +967,6 @@ class ChatOrchestrator:
                 merged = list(requested_tools)
             else:
                 merged.extend(requested_tools)
-
-        keyword_tools = self._build_optional_tools(message)
-        if keyword_tools:
-            merged.extend(keyword_tools)
 
         return merged or None
 

@@ -9,6 +9,7 @@ import pytest
 from src.agents.handler_registry import init_all_artifacts
 from src.agents.orchestrator import ChatOrchestrator
 from src.api.schemas.requests import ChatSendRequest
+from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload
 from src.models.session import Session
 from src.models.user import User
 
@@ -142,6 +143,45 @@ async def test_strategy_phase_auto_policy_limits_tools_to_validation(db_session)
 
 
 @pytest.mark.asyncio
+async def test_strategy_phase_with_strategy_id_exposes_strategy_and_backtest_tools(db_session) -> None:
+    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    db_session.add(user)
+    await db_session.flush()
+
+    artifacts = init_all_artifacts()
+    artifacts["strategy"]["profile"] = {"strategy_id": str(uuid4())}
+    artifacts["strategy"]["missing_fields"] = []
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=artifacts,
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    streamer = _CaptureStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="run first backtest and iterate")
+    async for _ in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+        pass
+
+    assert streamer.calls
+    tools = streamer.calls[0]["tools"]
+    assert isinstance(tools, list) and tools
+    labels = {
+        tool.get("server_label")
+        for tool in tools
+        if isinstance(tool, dict)
+    }
+    assert "strategy" in labels
+    assert "backtest" in labels
+
+
+@pytest.mark.asyncio
 async def test_stress_test_feedback_stage_exposes_strategy_and_backtest_tools(db_session) -> None:
     user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
     db_session.add(user)
@@ -183,6 +223,47 @@ async def test_stress_test_feedback_stage_exposes_strategy_and_backtest_tools(db
     }
     assert "strategy" in labels
     assert "backtest" in labels
+
+
+@pytest.mark.asyncio
+async def test_strategy_phase_auto_wraps_first_full_dsl_into_strategy_genui(db_session) -> None:
+    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    dsl_payload = load_strategy_payload(EXAMPLE_PATH)
+    dsl_text = json.dumps(dsl_payload, ensure_ascii=False)
+    streamer = _SequencedStreamer([f"Draft generated.\n```json\n{dsl_text}\n```"])
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="draft strategy dsl")
+    genui_payloads: list[dict[str, object]] = []
+    async for chunk in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") != "genui":
+            continue
+        candidate = envelope.get("payload")
+        if isinstance(candidate, dict):
+            genui_payloads.append(candidate)
+
+    assert genui_payloads
+    strategy_card = next(
+        item for item in genui_payloads if item.get("type") == "strategy_card"
+    )
+    assert isinstance(strategy_card.get("dsl_json"), dict)
+    assert strategy_card.get("source") == "auto_detected_first_dsl"
 
 
 @pytest.mark.asyncio

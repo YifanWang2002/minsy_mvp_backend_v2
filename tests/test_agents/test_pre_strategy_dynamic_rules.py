@@ -34,19 +34,19 @@ def _sample_valid_values() -> dict[str, set[str]]:
 
 
 def test_symbol_conversion_rules_across_markets() -> None:
-    assert skills_mod.get_yfinance_symbol_for_market_instrument(
+    assert skills_mod.get_market_data_symbol_for_market_instrument(
         market="us_stocks",
         instrument="brk.b",
     ) == "BRK-B"
-    assert skills_mod.get_yfinance_symbol_for_market_instrument(
+    assert skills_mod.get_market_data_symbol_for_market_instrument(
         market="crypto",
         instrument="BTCUSD",
     ) == "BTC-USD"
-    assert skills_mod.get_yfinance_symbol_for_market_instrument(
+    assert skills_mod.get_market_data_symbol_for_market_instrument(
         market="forex",
         instrument="EURUSD",
     ) == "EURUSD=X"
-    assert skills_mod.get_yfinance_symbol_for_market_instrument(
+    assert skills_mod.get_market_data_symbol_for_market_instrument(
         market="futures",
         instrument="ES",
     ) == "ES=F"
@@ -87,11 +87,11 @@ def test_dynamic_state_uses_catalog_and_normalized_values(monkeypatch) -> None:
     assert "- selected_target_market: us_stocks" in state
     assert "- selected_target_instrument: SPY" in state
     assert "- allowed_instruments_for_selected_market: SPY, QQQ, AAPL" in state
-    assert "- mapped_yfinance_symbol_for_selected_instrument: SPY" in state
+    assert "- mapped_market_data_symbol_for_selected_instrument: SPY" in state
     assert "- mapped_tradingview_symbol_for_selected_instrument: SPY" in state
     assert "- symbol_newly_provided_this_turn_hint: true" in state
     assert "market_symbol_catalog:" not in state
-    assert "instrument_symbol_map (instrument:yfinance|tradingview):" not in state
+    assert "instrument_symbol_map (instrument:market_data|tradingview):" not in state
 
 
 def test_sanitize_profile_infers_market_and_drops_cross_market_instrument(monkeypatch) -> None:
@@ -155,7 +155,7 @@ def test_validate_patch_normalizes_market_alias_and_symbol_case(monkeypatch) -> 
     }
 
 
-def test_infer_instrument_supports_yfinance_style_aliases(monkeypatch) -> None:
+def test_infer_instrument_supports_market_data_style_aliases(monkeypatch) -> None:
     monkeypatch.setattr(
         handler_mod,
         "get_pre_strategy_market_instrument_map",
@@ -229,4 +229,4 @@ def test_dynamic_state_handles_empty_market_catalog(monkeypatch) -> None:
 
     assert "available_markets: none - no local market parquet data found" in state
     assert "market_symbol_catalog:" not in state
-    assert "instrument_symbol_map (instrument:yfinance|tradingview):" not in state
+    assert "instrument_symbol_map (instrument:market_data|tradingview):" not in state

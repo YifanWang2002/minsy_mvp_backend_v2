@@ -35,6 +35,7 @@ TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
     "strategy_upsert_dsl",
     "strategy_get_dsl",
+    "strategy_list_tunable_params",
     "strategy_patch_dsl",
     "strategy_list_versions",
     "strategy_get_version_dsl",
@@ -274,6 +275,48 @@ async def _new_db_session():
         await db_module.init_postgres()
     assert db_module.AsyncSessionLocal is not None
     return db_module.AsyncSessionLocal()
+
+
+def _to_dsl_param_name(*, factor_type: str, indicator_param_name: str) -> str:
+    mapping: dict[str, str] = {
+        "length": "period",
+        "std": "std_dev",
+        "fastk_period": "k_period",
+        "slowk_period": "k_smooth",
+        "slowd_period": "d_period",
+    }
+    if factor_type in {"ema", "sma", "wma", "dema", "tema", "kama", "rsi", "atr", "bbands"}:
+        if indicator_param_name == "length":
+            return "period"
+    if factor_type == "bbands" and indicator_param_name == "std":
+        return "std_dev"
+    if factor_type == "stoch":
+        return mapping.get(indicator_param_name, indicator_param_name)
+    return mapping.get(indicator_param_name, indicator_param_name)
+
+
+def _estimate_step(
+    *,
+    value_type: str,
+    min_value: Any,
+    max_value: Any,
+    default: Any,
+) -> float | int | None:
+    kind = value_type.strip().lower()
+    if kind == "int":
+        return 1
+    if kind != "float":
+        return None
+
+    min_float = min_value if isinstance(min_value, int | float) else None
+    max_float = max_value if isinstance(max_value, int | float) else None
+    default_float = default if isinstance(default, int | float) else None
+
+    if min_float is not None and max_float is not None and max_float > min_float:
+        return float(max((max_float - min_float) / 100.0, 1e-4))
+    if default_float is not None:
+        return float(max(abs(default_float) / 10.0, 1e-4))
+    return 0.01
 
 
 def register_strategy_tools(mcp: FastMCP) -> None:
@@ -593,6 +636,112 @@ def register_strategy_tools(mcp: FastMCP) -> None:
                 "strategy_id": str(strategy.id),
                 "dsl_json": dsl_payload,
                 "metadata": _strategy_metadata_snapshot(strategy),
+            },
+        )
+
+    @mcp.tool()
+    async def strategy_list_tunable_params(
+        session_id: str,
+        strategy_id: str,
+    ) -> str:
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_list_tunable_params",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                session_user_id = await get_session_user_id(db, session_id=session_uuid)
+                strategy = await get_strategy_or_raise(db, strategy_id=strategy_uuid)
+                if strategy.user_id != session_user_id:
+                    raise StrategyStorageNotFoundError(
+                        "Strategy ownership mismatch for the provided session/user context.",
+                    )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_list_tunable_params",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_list_tunable_params",
+                ok=False,
+                error_code="STRATEGY_STORAGE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+        factors_raw = dsl_payload.get("factors")
+        factors = factors_raw if isinstance(factors_raw, dict) else {}
+
+        tunable_params: list[dict[str, Any]] = []
+        for factor_id, factor_def in factors.items():
+            if not isinstance(factor_id, str):
+                continue
+            if not isinstance(factor_def, dict):
+                continue
+
+            factor_type = str(factor_def.get("type", "")).strip().lower()
+            params = factor_def.get("params")
+            if not isinstance(params, dict):
+                params = {}
+
+            metadata = IndicatorRegistry.get(factor_type)
+            if metadata is None:
+                continue
+
+            for param in metadata.params:
+                dsl_param = _to_dsl_param_name(
+                    factor_type=factor_type,
+                    indicator_param_name=param.name,
+                )
+                current_value = params.get(dsl_param, param.default)
+                tunable = param.type in {"int", "float"} or bool(param.choices)
+                tunable_params.append(
+                    {
+                        "factor_id": factor_id,
+                        "factor_type": factor_type,
+                        "param_name": dsl_param,
+                        "json_path": f"/factors/{factor_id}/params/{dsl_param}",
+                        "current_value": current_value,
+                        "type": param.type,
+                        "min": param.min_value,
+                        "max": param.max_value,
+                        "default": param.default,
+                        "choices": list(param.choices) if param.choices else [],
+                        "suggested_step": _estimate_step(
+                            value_type=param.type,
+                            min_value=param.min_value,
+                            max_value=param.max_value,
+                            default=param.default,
+                        ),
+                        "tunable": tunable,
+                    }
+                )
+
+        tunable_params.sort(
+            key=lambda item: (
+                str(item.get("factor_id", "")),
+                str(item.get("param_name", "")),
+            )
+        )
+
+        return _payload(
+            tool="strategy_list_tunable_params",
+            ok=True,
+            data={
+                "strategy_id": str(strategy.id),
+                "metadata": _strategy_metadata_snapshot(strategy),
+                "count": len(tunable_params),
+                "params": tunable_params,
             },
         )
 

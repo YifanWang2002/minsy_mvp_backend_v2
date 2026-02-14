@@ -84,19 +84,14 @@ class StrategyHandler:
                 profile.update(validated)
 
         missing = self._compute_missing(profile)
-        completed = not missing
         phase_data["profile"] = profile
         phase_data["missing_fields"] = missing
 
-        result = PostProcessResult(
+        return PostProcessResult(
             artifacts=artifacts,
             missing_fields=missing,
-            completed=completed,
+            completed=False,
         )
-        if completed:
-            result.next_phase = Phase.STRESS_TEST.value
-            result.transition_reason = "strategy_completed_to_stress_test"
-        return result
 
     def filter_genui(
         self,
@@ -110,8 +105,11 @@ class StrategyHandler:
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
         if ctx.language == "zh":
-            return "进入策略阶段：请先产出并保存可验证的 DSL，然后返回 strategy_id。"
-        return "Entering strategy phase: generate and store a valid DSL, then return strategy_id."
+            return "进入策略阶段：先产出完整 DSL 供前端确认，确认保存后再基于 strategy_id 做回测与迭代。"
+        return (
+            "Entering strategy phase: draft a full DSL for frontend confirmation first, "
+            "then use strategy_id for backtesting and iteration."
+        )
 
     def _compute_missing(self, profile: dict[str, Any]) -> list[str]:
         return [field for field in REQUIRED_FIELDS if not _has_value(profile.get(field))]
@@ -147,6 +145,7 @@ def _build_strategy_tools() -> list[dict[str, Any]]:
                 "strategy_validate_dsl",
                 "strategy_upsert_dsl",
                 "strategy_get_dsl",
+                "strategy_list_tunable_params",
                 "strategy_patch_dsl",
                 "strategy_list_versions",
                 "strategy_get_version_dsl",

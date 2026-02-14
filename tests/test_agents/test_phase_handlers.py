@@ -19,7 +19,7 @@ def test_handler_registry_uses_real_handlers_for_later_phases() -> None:
 
 
 @pytest.mark.asyncio
-async def test_strategy_handler_collects_strategy_id_and_transitions() -> None:
+async def test_strategy_handler_collects_strategy_id_without_forcing_transition() -> None:
     handler = StrategyHandler()
     strategy_id = str(uuid4())
     ctx = PhaseContext(
@@ -41,8 +41,8 @@ async def test_strategy_handler_collects_strategy_id_and_transitions() -> None:
     assert any(tool.get("server_label") == "strategy" for tool in (prompt.tools or []))
 
     result = await handler.post_process(ctx, [{"strategy_id": strategy_id}], object())
-    assert result.completed is True
-    assert result.next_phase == Phase.STRESS_TEST.value
+    assert result.completed is False
+    assert result.next_phase is None
     assert result.missing_fields == []
 
 

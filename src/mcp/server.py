@@ -14,14 +14,11 @@ from src.mcp.market_data import TOOL_NAMES as MARKET_DATA_TOOL_NAMES
 from src.mcp.market_data import register_market_data_tools
 from src.mcp.strategy import TOOL_NAMES as STRATEGY_TOOL_NAMES
 from src.mcp.strategy import register_strategy_tools
-from src.mcp.yfinance import TOOL_NAMES as YFINANCE_TOOL_NAMES
-from src.mcp.yfinance import register_yfinance_tools
 
 ALL_REGISTERED_TOOL_NAMES: tuple[str, ...] = (
     *MARKET_DATA_TOOL_NAMES,
     *BACKTEST_TOOL_NAMES,
     *STRATEGY_TOOL_NAMES,
-    *YFINANCE_TOOL_NAMES,
 )
 
 
@@ -52,7 +49,6 @@ def create_mcp_server(
     register_market_data_tools(mcp)
     register_backtest_tools(mcp)
     register_strategy_tools(mcp)
-    register_yfinance_tools(mcp)
     return mcp
 
 

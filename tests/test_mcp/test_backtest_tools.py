@@ -137,6 +137,77 @@ async def test_backtest_tools_create_run_and_fetch_result(
     assert isinstance(job_payload["result"], dict)
     assert "summary" in job_payload["result"]
     assert "performance" in job_payload["result"]
+    performance = job_payload["result"]["performance"]
+    assert isinstance(performance, dict)
+    assert "series" not in performance
+    assert "metrics" in performance
+    assert "meta" in performance
+
+    hour_call = await mcp.call_tool(
+        "backtest_entry_hour_pnl_heatmap",
+        {"job_id": job_id},
+    )
+    hour_payload = _extract_payload(hour_call)
+    assert hour_payload["ok"] is True
+    assert len(hour_payload["heatmap"]) == 24
+
+    weekday_call = await mcp.call_tool(
+        "backtest_entry_weekday_pnl",
+        {"job_id": job_id},
+    )
+    weekday_payload = _extract_payload(weekday_call)
+    assert weekday_payload["ok"] is True
+    assert len(weekday_payload["weekday_stats"]) == 7
+
+    monthly_call = await mcp.call_tool(
+        "backtest_monthly_return_table",
+        {"job_id": job_id},
+    )
+    monthly_payload = _extract_payload(monthly_call)
+    assert monthly_payload["ok"] is True
+    assert monthly_payload["month_count"] >= 1
+
+    holding_call = await mcp.call_tool(
+        "backtest_holding_period_pnl_bins",
+        {"job_id": job_id},
+    )
+    holding_payload = _extract_payload(holding_call)
+    assert holding_payload["ok"] is True
+    assert len(holding_payload["holding_bins"]) >= 1
+
+    side_call = await mcp.call_tool(
+        "backtest_long_short_breakdown",
+        {"job_id": job_id},
+    )
+    side_payload = _extract_payload(side_call)
+    assert side_payload["ok"] is True
+    assert len(side_payload["side_stats"]) == 2
+
+    exit_call = await mcp.call_tool(
+        "backtest_exit_reason_breakdown",
+        {"job_id": job_id},
+    )
+    exit_payload = _extract_payload(exit_call)
+    assert exit_payload["ok"] is True
+    assert isinstance(exit_payload["exit_reason_stats"], list)
+
+    underwater_call = await mcp.call_tool(
+        "backtest_underwater_curve",
+        {"job_id": job_id, "max_points": 32},
+    )
+    underwater_payload = _extract_payload(underwater_call)
+    assert underwater_payload["ok"] is True
+    assert underwater_payload["point_count"] <= 32
+    assert underwater_payload["point_count_total"] >= underwater_payload["point_count"]
+
+    rolling_call = await mcp.call_tool(
+        "backtest_rolling_metrics",
+        {"job_id": job_id, "max_points": 30},
+    )
+    rolling_payload = _extract_payload(rolling_call)
+    assert rolling_payload["ok"] is True
+    assert len(rolling_payload["sharpe_curve_points"]) <= 30
+    assert len(rolling_payload["win_rate_curve_points"]) <= 30
 
 
 @pytest.mark.asyncio

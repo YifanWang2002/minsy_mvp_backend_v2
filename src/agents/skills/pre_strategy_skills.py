@@ -157,12 +157,12 @@ def format_instrument_label(
     return symbol
 
 
-def get_yfinance_symbol_for_market_instrument(
+def get_market_data_symbol_for_market_instrument(
     *,
     market: str | None,
     instrument: str | None,
 ) -> str:
-    """Convert local symbol into yfinance-oriented symbol by market rules."""
+    """Convert local symbol into market-data tool symbol by market rules."""
     if not isinstance(instrument, str) or not instrument.strip():
         return "none - select target_instrument first"
 
@@ -338,7 +338,7 @@ def build_pre_strategy_dynamic_state(
         if allowed_instruments
         else "none - select target_market first"
     )
-    mapped_yf_symbol = get_yfinance_symbol_for_market_instrument(
+    mapped_market_data_symbol = get_market_data_symbol_for_market_instrument(
         market=selected_market,
         instrument=selected_instrument,
     )
@@ -371,7 +371,7 @@ def build_pre_strategy_dynamic_state(
         f"- selected_target_market: {selected_market or 'none'}\n"
         f"- selected_target_instrument: {selected_instrument or 'none'}\n"
         f"- allowed_instruments_for_selected_market: {allowed_instruments_str}\n"
-        f"- mapped_yfinance_symbol_for_selected_instrument: {mapped_yf_symbol}\n"
+        f"- mapped_market_data_symbol_for_selected_instrument: {mapped_market_data_symbol}\n"
         f"- mapped_tradingview_symbol_for_selected_instrument: {mapped_tradingview_symbol}\n"
         f"- symbol_newly_provided_this_turn_hint: {str(symbol_newly_provided_this_turn_hint).lower()}\n"
         f"- inferred_instrument_from_user_message: "

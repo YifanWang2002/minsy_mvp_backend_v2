@@ -31,21 +31,9 @@ class Settings(BaseSettings):
     auth_rate_limit: int = Field(default=30, alias="AUTH_RATE_LIMIT")
     auth_rate_window: int = Field(default=60, alias="AUTH_RATE_WINDOW")
     openai_response_model: str = Field(default="gpt-5", alias="OPENAI_RESPONSE_MODEL")
-    dice_mcp_server_url: str = Field(
-        default="https://mcp-on-vercel.vercel.app/mcp",
-        alias="DICE_MCP_SERVER_URL",
-    )
-    yfinance_mcp_server_url: str = Field(
-        default="https://mcp.minsyai.com/yfinance/mcp",
-        alias="YFINANCE_MCP_SERVER_URL",
-    )
-    strategy_mcp_server_url: str = Field(
+    mcp_server_url: str = Field(
         default="http://127.0.0.1:8111/mcp",
-        alias="STRATEGY_MCP_SERVER_URL",
-    )
-    backtest_mcp_server_url: str = Field(
-        default="http://127.0.0.1:8111/mcp",
-        alias="BACKTEST_MCP_SERVER_URL",
+        alias="MCP_SERVER_URL",
     )
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
@@ -140,6 +128,24 @@ class Settings(BaseSettings):
         if isinstance(self.celery_result_backend, str) and self.celery_result_backend.strip():
             return self.celery_result_backend.strip()
         return self.redis_url
+
+    @property
+    def strategy_mcp_server_url(self) -> str:
+        """Backward-compatible alias for strategy MCP URL."""
+        return self.mcp_server_url
+
+    @strategy_mcp_server_url.setter
+    def strategy_mcp_server_url(self, value: str) -> None:
+        self.mcp_server_url = value
+
+    @property
+    def backtest_mcp_server_url(self) -> str:
+        """Backward-compatible alias for backtest MCP URL."""
+        return self.mcp_server_url
+
+    @backtest_mcp_server_url.setter
+    def backtest_mcp_server_url(self, value: str) -> None:
+        self.mcp_server_url = value
 
 
 @lru_cache

@@ -1,6 +1,6 @@
 [STAGE_MARKER_STRATEGY_ARTIFACT_OPS]
 Stage objective:
-- Assume a strategy artifact already exists and focus on artifact operations.
+- Assume a confirmed strategy artifact already exists and stay in strategy phase.
 - For update-by-id, prefer:
   1) `strategy_get_dsl` (latest payload + version)
   2) `strategy_patch_dsl` with minimal patch ops and `expected_version`
@@ -12,5 +12,5 @@ Stage objective:
 - If patch path is not suitable for the requested change, fallback to:
   1) `strategy_validate_dsl` on edited JSON
   2) `strategy_upsert_dsl` with existing `strategy_id`
-- Do not call backtest tools in strategy phase.
+- You may call backtest tools in this stage (`backtest_create_job`, `backtest_get_job`, and analytics tools like `backtest_entry_hour_pnl_heatmap`, `backtest_exit_reason_breakdown`, `backtest_rolling_metrics`) to evaluate and iterate.
 - Do not re-collect already finalized schema fields unless user requests changes.

@@ -38,10 +38,10 @@ When selected instrument is known and market snapshot is requested, you may emit
 
 ## MCP + Market Snapshot Rule (MUST)
 - Use `symbol_newly_provided_this_turn_hint` from `[SESSION STATE]` as the primary switch.
-- Call MCP `check_symbol_available` + `get_quote` only when `symbol_newly_provided_this_turn_hint=true`.
+- Call MCP `check_symbol_available` + `get_symbol_quote` only when `symbol_newly_provided_this_turn_hint=true`.
 - Do not trigger these MCP calls in later turns only because `target_instrument` already exists in `[SESSION STATE]`.
-- In that symbol-provided turn, call `check_symbol_available` first using `mapped_yfinance_symbol_for_selected_instrument`.
-- If available=true, call `get_quote` for the same symbol in the same turn and report latest price briefly.
+- In that symbol-provided turn, call `check_symbol_available` first using `mapped_market_data_symbol_for_selected_instrument`.
+- If available=true, call `get_symbol_quote` for the same symbol in the same turn and report latest price briefly.
 - In that same turn, if fields remain missing, emit TWO `<AGENT_UI_JSON>` blocks in this order:
   1) `tradingview_chart` for `mapped_tradingview_symbol_for_selected_instrument`
   2) `choice_prompt` for `next_missing_field`
@@ -53,10 +53,10 @@ When selected instrument is known and market snapshot is requested, you may emit
 
 ## Symbol Format Rule for Tools vs Chart (MUST)
 When local symbol format and chart format differ, follow `[SESSION STATE]` mapped symbols:
-- Use `mapped_yfinance_symbol_for_selected_instrument` for MCP `check_symbol_available` and `get_quote`.
+- Use `mapped_market_data_symbol_for_selected_instrument` for MCP `check_symbol_available` and `get_symbol_quote`.
 - Use `mapped_tradingview_symbol_for_selected_instrument` for `tradingview_chart`.
 - Conversion rules (do not invent ad-hoc mapping tables):
-  - yfinance tools: stock=`TICKER`, crypto=`BASE-USD`, forex=`PAIR=X`, futures=`SYMBOL=F`
+  - market_data MCP tools: stock=`TICKER`, crypto=`BASE-USD`, forex=`PAIR=X`, futures=`SYMBOL=F`
   - tradingview chart: stock=`TICKER`, crypto=`BINANCE:BASEUSDT`, forex=`FX:PAIR`, futures=`SYMBOL1!`
 
 ## Mandatory Presentation Rule

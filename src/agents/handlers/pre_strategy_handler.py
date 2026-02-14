@@ -19,10 +19,10 @@ from src.agents.skills.pre_strategy_skills import (
     build_pre_strategy_static_instructions,
     format_instrument_label,
     get_instruments_for_market,
+    get_market_data_symbol_for_market_instrument,
     get_market_for_instrument,
     get_pre_strategy_market_instrument_map,
     get_pre_strategy_valid_values,
-    get_yfinance_symbol_for_market_instrument,
     normalize_instrument_value,
     normalize_market_value,
 )
@@ -278,9 +278,9 @@ def _build_pre_strategy_tools() -> list[dict[str, Any]]:
     return [
         {
             "type": "mcp",
-            "server_label": "yfinance",
-            "server_url": settings.yfinance_mcp_server_url,
-            "allowed_tools": ["check_symbol_available", "get_quote"],
+            "server_label": "market_data",
+            "server_url": settings.mcp_server_url,
+            "allowed_tools": ["check_symbol_available", "get_symbol_quote"],
             "require_approval": "never",
         }
     ]
@@ -289,7 +289,7 @@ def _build_pre_strategy_tools() -> list[dict[str, Any]]:
 def _build_pre_strategy_tool_choice() -> dict[str, str]:
     return {
         "type": "mcp",
-        "server_label": "yfinance",
+        "server_label": "market_data",
         "name": "check_symbol_available",
     }
 
@@ -326,11 +326,11 @@ def _infer_instrument_from_message(
             if _message_contains_alias(user_message=user_message, alias=alias):
                 return instrument
 
-        yf_symbol = get_yfinance_symbol_for_market_instrument(
+        market_data_symbol = get_market_data_symbol_for_market_instrument(
             market=market,
             instrument=instrument,
         )
-        if _message_contains_alias(user_message=user_message, alias=yf_symbol):
+        if _message_contains_alias(user_message=user_message, alias=market_data_symbol):
             return instrument
 
     return None

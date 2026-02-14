@@ -354,7 +354,7 @@ def test_pre_strategy_phase_uses_pre_strategy_instructions() -> None:
     assert "Minsy KYC Agent" in captured_instructions[2]
     assert "Minsy Pre-Strategy Agent" in captured_instructions[3]
     assert "TradingView Knowledge" in captured_instructions[3]
-    # Non-symbol turn should not inject yfinance MCP tools.
+    # Non-symbol turn should not inject market-data MCP tools.
     assert captured_tools[3] is None
 
 

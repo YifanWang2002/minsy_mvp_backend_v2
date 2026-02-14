@@ -254,6 +254,18 @@ async def test_strategy_get_and_patch_tools_happy_path(
     assert get_payload["metadata"]["version"] == 1
     assert get_payload["dsl_json"]["strategy"]["name"] == payload["strategy"]["name"]
 
+    tunable_call = await mcp.call_tool(
+        "strategy_list_tunable_params",
+        {"session_id": str(session.id), "strategy_id": strategy_id},
+    )
+    tunable_payload = _extract_payload(tunable_call)
+    assert tunable_payload["ok"] is True
+    assert tunable_payload["count"] > 0
+    first_param = tunable_payload["params"][0]
+    assert "factor_id" in first_param
+    assert "json_path" in first_param
+    assert first_param["json_path"].startswith("/factors/")
+
     patch_call = await mcp.call_tool(
         "strategy_patch_dsl",
         {

@@ -56,7 +56,8 @@ class StrategyConfirmRequest(BaseModel):
     session_id: UUID
     dsl_json: dict[str, Any] | str
     strategy_id: UUID | None = None
-    auto_start_backtest: bool = True
+    auto_start_backtest: bool = False
+    advance_to_stress_test: bool = False
     language: str = Field(default="en", min_length=2, max_length=16)
     auto_message: str | None = Field(default=None, max_length=4000)
 

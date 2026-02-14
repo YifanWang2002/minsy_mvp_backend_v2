@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.backtest.engine import EventDrivenBacktestEngine
+from src.engine.backtest.analytics import build_compact_performance_payload
 from src.engine.backtest.types import BacktestConfig
 from src.engine.data import DataLoader
 from src.engine.strategy import parse_strategy_payload
@@ -294,7 +295,7 @@ def _serialize_backtest_result(
     symbol: str,
     timeframe: str,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "market": market,
         "symbol": symbol,
         "timeframe": timeframe,
@@ -342,6 +343,8 @@ def _serialize_backtest_result(
         "started_at": result.started_at.isoformat(),
         "finished_at": result.finished_at.isoformat(),
     }
+    payload["performance"] = build_compact_performance_payload(payload)
+    return payload
 
 
 def _resolve_timerange(

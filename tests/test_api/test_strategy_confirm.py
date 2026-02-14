@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload
 from src.main import app
 
-
 _TURN1_RESPONSE = (
     "经验已记录。"
     '<AGENT_STATE_PATCH>{"trading_years_bucket":"years_5_plus"}</AGENT_STATE_PATCH>'
@@ -71,7 +70,7 @@ def _make_mock_response_event(text: str, response_id: str) -> dict:
     }
 
 
-def test_strategy_confirm_persists_and_auto_starts_backtest_turn() -> None:
+def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_phase() -> None:
     mock_responses = [
         _TURN1_RESPONSE,
         _TURN2_RESPONSE,
@@ -161,10 +160,10 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn() -> None:
             body = confirm.json()
 
             assert body["strategy_id"]
-            assert body["phase"] == "stress_test"
+            assert body["phase"] == "strategy"
             assert body["auto_started"] is True
             assert body["auto_done_payload"] is not None
-            assert body["auto_done_payload"]["phase"] == "stress_test"
+            assert body["auto_done_payload"]["phase"] == "strategy"
 
             detail = client.get(f"/api/v1/sessions/{session_id}", headers=headers)
             assert detail.status_code == 200
@@ -172,7 +171,8 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn() -> None:
             assert artifacts["strategy"]["profile"]["strategy_id"] == body["strategy_id"]
             assert artifacts["stress_test"]["profile"]["strategy_id"] == body["strategy_id"]
 
-    # Last call is auto backtest bootstrap turn, it must only expose backtest server.
+    # Last call is auto backtest bootstrap turn in strategy phase:
+    # strategy + backtest tools should be available together.
     assert captured_tools
     last_tools = captured_tools[-1]
     assert isinstance(last_tools, list) and last_tools
@@ -181,4 +181,44 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn() -> None:
         for item in last_tools
         if isinstance(item, dict)
     }
-    assert labels == {"backtest"}
+    assert labels == {"strategy", "backtest"}
+
+
+def test_get_strategy_detail_by_id() -> None:
+    with patch(
+        "src.services.openai_stream_service.OpenAIResponsesEventStreamer.stream_events",
+        side_effect=Exception("stream not expected"),
+    ):
+        with TestClient(app) as client:
+            token = _register_and_get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            create = client.post(
+                "/api/v1/chat/new-thread",
+                headers=headers,
+                json={"metadata": {}},
+            )
+            assert create.status_code == 201
+            session_id = create.json()["session_id"]
+
+            strategy_payload = load_strategy_payload(EXAMPLE_PATH)
+            confirm = client.post(
+                "/api/v1/strategies/confirm",
+                headers=headers,
+                json={
+                    "session_id": session_id,
+                    "dsl_json": strategy_payload,
+                    "auto_start_backtest": False,
+                    "language": "en",
+                },
+            )
+            assert confirm.status_code == 200
+            strategy_id = confirm.json()["strategy_id"]
+
+            detail = client.get(f"/api/v1/strategies/{strategy_id}", headers=headers)
+            assert detail.status_code == 200
+            body = detail.json()
+            assert body["strategy_id"] == strategy_id
+            assert body["session_id"] == session_id
+            assert isinstance(body.get("dsl_json"), dict)
+            assert body.get("dsl_json", {}).get("strategy")

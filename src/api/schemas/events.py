@@ -64,3 +64,14 @@ class StrategyConfirmResponse(BaseModel):
     auto_assistant_text: str | None = None
     auto_done_payload: dict[str, Any] | None = None
     auto_error: str | None = None
+
+
+class StrategyDetailResponse(BaseModel):
+    """Strategy detail payload for frontend rendering/query by id."""
+
+    strategy_id: UUID
+    session_id: UUID
+    version: int
+    status: str
+    dsl_json: dict[str, Any]
+    metadata: dict[str, Any]

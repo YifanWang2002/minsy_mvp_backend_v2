@@ -51,18 +51,13 @@ def test_openai_stream_emits_text_and_done() -> None:
     assert done["phase"] in {"kyc", "pre_strategy", "strategy"}
 
 
-def test_openai_stream_detects_mcp_dice_events_and_forwards_them() -> None:
+def test_openai_stream_forwards_openai_events() -> None:
     with TestClient(app) as client:
         token = _register_and_get_token(client)
         response = client.post(
             "/api/v1/chat/send-openai-stream?language=en",
             headers={"Authorization": f"Bearer {token}"},
-            json={
-                "message": (
-                    "Please roll one six-sided dice using MCP tool roll_dice. "
-                    "You must call the tool before answering."
-                )
-            },
+            json={"message": "Summarize in one sentence what this platform does."},
         )
 
     assert response.status_code == 200
@@ -76,16 +71,8 @@ def test_openai_stream_detects_mcp_dice_events_and_forwards_them() -> None:
     assert "response.in_progress" in openai_types
     assert "response.completed" in openai_types
 
-    # MCP lifecycle coverage (at least core call events)
-    assert any(t == "response.mcp_call.in_progress" for t in openai_types)
-    assert any(t == "response.mcp_call_arguments.done" for t in openai_types)
-    assert any(t == "response.mcp_call.completed" for t in openai_types)
-
-    mcp_events = [item for item in payloads if item.get("type") == "mcp_event"]
-    assert mcp_events, "No frontend mcp_event emitted"
-
     done = next(item for item in payloads if item.get("type") == "done")
     assert "usage" in done
 
     text = "".join(item.get("delta", "") for item in payloads if item.get("type") == "text_delta")
-    assert text.strip(), "No text response after MCP call"
+    assert text.strip(), "No text response content"
