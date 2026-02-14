@@ -36,6 +36,9 @@ class MessageItem(BaseModel):
     content: str
     phase: str
     created_at: datetime
+    # Mixed payloads persisted with assistant messages:
+    # - GenUI blocks (e.g. choice_prompt/tradingview_chart/strategy_card)
+    # - MCP tool-call final results (type=mcp_call, status in {success,failure})
     tool_calls: list[dict[str, Any]] | None = None
 
 

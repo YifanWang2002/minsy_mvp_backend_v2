@@ -31,8 +31,17 @@ class Settings(BaseSettings):
     auth_rate_limit: int = Field(default=30, alias="AUTH_RATE_LIMIT")
     auth_rate_window: int = Field(default=60, alias="AUTH_RATE_WINDOW")
     openai_response_model: str = Field(default="gpt-5", alias="OPENAI_RESPONSE_MODEL")
-    mcp_server_url: str = Field(
+    mcp_env: str = Field(default="prod", alias="MCP_ENV")
+    mcp_server_url_dev: str = Field(
+        default="https://dev.minsyai.com/mcp",
+        alias="MCP_SERVER_URL_DEV",
+    )
+    mcp_server_url_prod: str = Field(
         default="https://mcp.minsyai.com/mcp",
+        alias="MCP_SERVER_URL_PROD",
+    )
+    mcp_server_url_override: str | None = Field(
+        default=None,
         alias="MCP_SERVER_URL",
     )
 
@@ -128,6 +137,23 @@ class Settings(BaseSettings):
         if isinstance(self.celery_result_backend, str) and self.celery_result_backend.strip():
             return self.celery_result_backend.strip()
         return self.redis_url
+
+    @property
+    def mcp_server_url(self) -> str:
+        if (
+            isinstance(self.mcp_server_url_override, str)
+            and self.mcp_server_url_override.strip()
+        ):
+            return self.mcp_server_url_override.strip()
+
+        mode = self.mcp_env.strip().lower()
+        if mode in {"dev", "development", "local"}:
+            return self.mcp_server_url_dev
+        return self.mcp_server_url_prod
+
+    @mcp_server_url.setter
+    def mcp_server_url(self, value: str) -> None:
+        self.mcp_server_url_override = value
 
     @property
     def strategy_mcp_server_url(self) -> str:
