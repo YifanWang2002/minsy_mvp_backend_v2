@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import os
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -14,6 +14,7 @@ from src.mcp.market_data import TOOL_NAMES as MARKET_DATA_TOOL_NAMES
 from src.mcp.market_data import register_market_data_tools
 from src.mcp.strategy import TOOL_NAMES as STRATEGY_TOOL_NAMES
 from src.mcp.strategy import register_strategy_tools
+from src.util.logger import configure_logging, logger
 
 ALL_REGISTERED_TOOL_NAMES: tuple[str, ...] = (
     *MARKET_DATA_TOOL_NAMES,
@@ -72,16 +73,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _build_parser().parse_args()
+    configure_logging(level=os.getenv("LOG_LEVEL", "INFO"), show_sql=False)
     mcp = create_mcp_server(host=args.host, port=args.port, mount_path=args.mount_path)
-    print(
-        f"[mcp] starting modular server transport={args.transport} "
-        f"host={args.host} port={args.port} mount_path={args.mount_path}",
-        file=sys.stderr,
+    logger.info(
+        "mcp server starting transport=%s host=%s port=%s mount_path=%s",
+        args.transport,
+        args.host,
+        args.port,
+        args.mount_path,
     )
-    print(
-        "[mcp] registered tools: " + ", ".join(ALL_REGISTERED_TOOL_NAMES),
-        file=sys.stderr,
-    )
+    logger.info("mcp server registered tools: %s", ", ".join(ALL_REGISTERED_TOOL_NAMES))
     mcp.run(transport=args.transport)
     return 0
 

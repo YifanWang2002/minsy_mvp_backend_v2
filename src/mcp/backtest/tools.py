@@ -25,7 +25,7 @@ from src.engine.backtest.analytics import (
     compute_rolling_metrics,
     compute_underwater_curve,
 )
-from src.mcp._utils import to_json, utc_now_iso
+from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
 from src.models import database as db_module
 
 TOOL_NAMES: tuple[str, ...] = (
@@ -60,13 +60,24 @@ def _payload(
         "ok": ok,
         "timestamp_utc": utc_now_iso(),
     }
+    resolved_error_code: str | None = None
+    resolved_error_message: str | None = None
     if data:
         body.update(data)
     if not ok:
+        resolved_error_code = error_code or "UNKNOWN_ERROR"
+        resolved_error_message = error_message or "Unknown error"
         body["error"] = {
-            "code": error_code or "UNKNOWN_ERROR",
-            "message": error_message or "Unknown error",
+            "code": resolved_error_code,
+            "message": resolved_error_message,
         }
+    log_mcp_tool_result(
+        category="backtest",
+        tool=tool,
+        ok=ok,
+        error_code=resolved_error_code,
+        error_message=resolved_error_message,
+    )
     return to_json(body)
 
 

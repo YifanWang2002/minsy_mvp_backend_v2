@@ -10,7 +10,7 @@ import yfinance as yf
 from mcp.server.fastmcp import FastMCP
 
 from src.engine import DataLoader
-from src.mcp._utils import to_json, utc_now_iso
+from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
 
 TOOL_NAMES: tuple[str, ...] = (
     "check_symbol_available",
@@ -101,6 +101,7 @@ def _build_success_payload(tool: str, data: dict[str, Any]) -> str:
         **data,
         "timestamp_utc": utc_now_iso(),
     }
+    log_mcp_tool_result(category="market_data", tool=tool, ok=True)
     return to_json(payload)
 
 
@@ -119,6 +120,13 @@ def _build_error_payload(
     }
     if context:
         payload["context"] = context
+    log_mcp_tool_result(
+        category="market_data",
+        tool=tool,
+        ok=False,
+        error_code="TOOL_ERROR",
+        error_message=error,
+    )
     return to_json(payload)
 
 

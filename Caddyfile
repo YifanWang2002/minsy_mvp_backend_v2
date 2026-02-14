@@ -1,0 +1,20 @@
+# Minsy Backend — Caddy reverse-proxy config
+
+# ── FastAPI backend (api.minsyai.com) ──
+api.minsyai.com {
+	reverse_proxy 127.0.0.1:8000
+
+	# Enable streaming for SSE / chat endpoints
+	handle /api/v1/chat/* {
+		reverse_proxy 127.0.0.1:8000 {
+			flush_interval -1
+		}
+	}
+}
+
+# ── MCP Server (mcp.minsyai.com) ──
+mcp.minsyai.com {
+	reverse_proxy 127.0.0.1:8111 {
+		flush_interval -1
+	}
+}
