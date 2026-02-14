@@ -42,8 +42,8 @@ def test_example_strategy_passes_schema_and_semantic_validation(example_payload:
 
     parsed = parse_strategy_payload(example_payload)
     assert parsed.strategy.name == "EMA Cross + RSI Filter + ATR Risk (Demo)"
-    assert parsed.universe.market == "crypto"
-    assert parsed.universe.timeframe == "4h"
+    assert parsed.universe.market == example_payload["universe"]["market"]
+    assert parsed.universe.timeframe == example_payload["timeframe"]
     assert "macd_12_26_9" in parsed.factors
 
 
@@ -74,6 +74,16 @@ def test_schema_error_for_type_mismatch(example_payload: dict[str, Any]) -> None
     result = validate_strategy_payload(payload)
     assert result.is_valid is False
     assert "TYPE_MISMATCH" in _codes(result)
+
+
+def test_schema_error_for_unsupported_timeframe_value(example_payload: dict[str, Any]) -> None:
+    payload = deepcopy(example_payload)
+    payload["timeframe"] = "1w"
+
+    result = validate_strategy_payload(payload)
+    assert result.is_valid is False
+    assert "SCHEMA_VALIDATION_ERROR" in _codes(result)
+    assert any(item.path == "$.timeframe" for item in result.errors)
 
 
 def test_schema_error_for_missing_trade_side(example_payload: dict[str, Any]) -> None:
@@ -182,6 +192,16 @@ def test_semantic_error_for_known_multi_output_ref_without_dot_even_with_single_
     assert result.is_valid is False
     assert "INVALID_OUTPUT_NAME" in _codes(result)
     assert any("multi-output" in item.message for item in result.errors)
+
+
+def test_semantic_allows_single_output_factor_alias_ref(example_payload: dict[str, Any]) -> None:
+    payload = deepcopy(example_payload)
+    payload["factors"]["ema_9"]["outputs"] = ["alias"]
+    payload = _replace_value(payload, "ema_9", "ema_9.alias")
+
+    result = validate_strategy_payload(payload)
+    assert result.is_valid is True
+    assert result.errors == ()
 
 
 def test_semantic_error_for_factor_id_mismatch(example_payload: dict[str, Any]) -> None:

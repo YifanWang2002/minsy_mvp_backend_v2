@@ -6,6 +6,7 @@ from src.models.deployment import Deployment
 from src.models.phase_transition import PhaseTransition
 from src.models.session import Message, Session
 from src.models.strategy import Strategy
+from src.models.strategy_revision import StrategyRevision
 from src.models.user import User, UserProfile
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "PhaseTransition",
     "Session",
     "Strategy",
+    "StrategyRevision",
     "User",
     "UserProfile",
 ]

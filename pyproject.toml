@@ -30,6 +30,9 @@ dependencies = [
     "yfinance>=0.2.40",
     "mcp[cli]>=1.0.0",
     "pyyaml>=6.0",
+    "jsonpatch>=1.33",
+    "celery>=5.4.0",
+    "flower>=2.0.1",
 ]
 
 [tool.uv]

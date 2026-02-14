@@ -13,10 +13,12 @@ Reply in **{{LANG_NAME}}**.
 - Present concise pass/fail diagnostics for the strategy.
 
 ## Hard Output Contract (MUST)
-- If `backtest_job_id` is missing, call `backtest_create_job`.
+- If `backtest_job_id` is missing, call `backtest_create_job` with `run_now=false`.
+- For first run, keep `start_date` and `end_date` empty unless user explicitly asks.
 - After create, emit:
   `<AGENT_STATE_PATCH>{"backtest_job_id":"<uuid>","backtest_status":"pending"}</AGENT_STATE_PATCH>`
-- When polling, use `backtest_get_job`.
+- If create already returns terminal state (`done` or `failed`), emit terminal patch immediately.
+- If create returns `pending` or `running`, then poll with `backtest_get_job` until terminal state.
 - In this phase, only use:
   - `backtest_create_job`
   - `backtest_get_job`

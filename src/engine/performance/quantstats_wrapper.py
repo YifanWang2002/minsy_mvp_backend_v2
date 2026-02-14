@@ -11,6 +11,9 @@ import numpy as np
 import pandas as pd
 import quantstats as qs
 
+_DEFAULT_PERIODS_PER_YEAR = 252
+_SECONDS_PER_YEAR = 365.25 * 24 * 60 * 60
+
 
 def build_quantstats_performance(
     *,
@@ -31,12 +34,40 @@ def build_quantstats_performance(
             },
         }
 
+    periods_per_year = _infer_periods_per_year(aligned.index)
     metrics = {
-        "cagr": _safe_metric(lambda: qs.stats.cagr(aligned)),
-        "sharpe": _safe_metric(lambda: qs.stats.sharpe(aligned, rf=risk_free_rate)),
-        "sortino": _safe_metric(lambda: qs.stats.sortino(aligned, rf=risk_free_rate)),
-        "calmar": _safe_metric(lambda: qs.stats.calmar(aligned)),
-        "volatility": _safe_metric(lambda: qs.stats.volatility(aligned)),
+        "cagr": _safe_metric(
+            lambda: qs.stats.cagr(
+                aligned,
+                periods=periods_per_year,
+            )
+        ),
+        "sharpe": _safe_metric(
+            lambda: qs.stats.sharpe(
+                aligned,
+                rf=risk_free_rate,
+                periods=periods_per_year,
+            )
+        ),
+        "sortino": _safe_metric(
+            lambda: qs.stats.sortino(
+                aligned,
+                rf=risk_free_rate,
+                periods=periods_per_year,
+            )
+        ),
+        "calmar": _safe_metric(
+            lambda: qs.stats.calmar(
+                aligned,
+                periods=periods_per_year,
+            )
+        ),
+        "volatility": _safe_metric(
+            lambda: qs.stats.volatility(
+                aligned,
+                periods=periods_per_year,
+            )
+        ),
         "max_drawdown": _safe_metric(lambda: qs.stats.max_drawdown(aligned)),
         "win_rate": _safe_metric(lambda: qs.stats.win_rate(aligned)),
         "profit_factor": _safe_metric(lambda: qs.stats.profit_factor(aligned)),
@@ -70,6 +101,24 @@ def _build_returns_series(
     series = pd.Series(returns, index=pd.DatetimeIndex(timestamps))
     series = pd.to_numeric(series, errors="coerce").dropna()
     return series.astype(float)
+
+
+def _infer_periods_per_year(index: pd.DatetimeIndex) -> int:
+    if len(index) < 2:
+        return _DEFAULT_PERIODS_PER_YEAR
+
+    unique_sorted = pd.DatetimeIndex(index.unique()).sort_values()
+    if len(unique_sorted) < 2:
+        return _DEFAULT_PERIODS_PER_YEAR
+
+    total_seconds = (unique_sorted[-1] - unique_sorted[0]).total_seconds()
+    if total_seconds <= 0:
+        return _DEFAULT_PERIODS_PER_YEAR
+
+    periods = (len(unique_sorted) - 1) * (_SECONDS_PER_YEAR / total_seconds)
+    if not np.isfinite(periods) or periods <= 0:
+        return _DEFAULT_PERIODS_PER_YEAR
+    return max(1, int(round(periods)))
 
 
 def _safe_metric(getter: Callable[[], Any]) -> float | None:

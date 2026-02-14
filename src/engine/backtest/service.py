@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -15,11 +14,10 @@ from src.engine.backtest.engine import EventDrivenBacktestEngine
 from src.engine.backtest.types import BacktestConfig
 from src.engine.data import DataLoader
 from src.engine.strategy import parse_strategy_payload
+from src.models import database as db_module
 from src.models.backtest import BacktestJob
-from src.models.database import AsyncSessionLocal, init_postgres
 from src.models.strategy import Strategy
-
-_BACKGROUND_TASKS: dict[UUID, asyncio.Task[None]] = {}
+from src.util.logger import logger
 
 _INTERNAL_TO_EXTERNAL_STATUS: dict[str, str] = {
     "queued": "pending",
@@ -125,24 +123,30 @@ async def create_backtest_job(
     )
 
 
-async def schedule_backtest_job(job_id: UUID) -> None:
-    """Schedule a background run for a queued job."""
+async def execute_backtest_job_with_fresh_session(job_id: UUID) -> BacktestJobView:
+    """Execute one job with a dedicated database session."""
+    if db_module.AsyncSessionLocal is None:
+        # Worker tasks may run concurrently across multiple processes.
+        # Avoid DDL/schema-migration steps here to prevent lock contention;
+        # schema should already be managed by service startup/migrations.
+        await db_module.init_postgres(ensure_schema=False)
+    assert db_module.AsyncSessionLocal is not None
 
-    existing = _BACKGROUND_TASKS.get(job_id)
-    if existing is not None and not existing.done():
-        return
-
-    task = asyncio.create_task(_run_job_in_background(job_id))
-    _BACKGROUND_TASKS[job_id] = task
+    async with db_module.AsyncSessionLocal() as session:
+        return await execute_backtest_job(session, job_id=job_id, auto_commit=True)
 
 
-async def _run_job_in_background(job_id: UUID) -> None:
-    if AsyncSessionLocal is None:
-        await init_postgres()
-    assert AsyncSessionLocal is not None
+def _enqueue_backtest_job(job_id: UUID) -> str:
+    from src.workers.backtest_tasks import enqueue_backtest_job
 
-    async with AsyncSessionLocal() as session:
-        await execute_backtest_job(session, job_id=job_id, auto_commit=True)
+    return enqueue_backtest_job(job_id)
+
+
+async def schedule_backtest_job(job_id: UUID) -> str:
+    """Enqueue a backtest job for worker-side execution."""
+    task_id = _enqueue_backtest_job(job_id)
+    logger.info("[backtest] enqueued job_id=%s celery_task_id=%s", job_id, task_id)
+    return task_id
 
 
 async def execute_backtest_job(

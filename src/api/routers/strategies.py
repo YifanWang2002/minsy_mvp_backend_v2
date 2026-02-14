@@ -122,6 +122,8 @@ async def confirm_strategy(
 
         from_phase = session.current_phase
         session.current_phase = Phase.STRESS_TEST.value
+        # Break previous Responses API thread when moving into stress_test.
+        session.previous_response_id = None
 
         next_meta = dict(session.metadata_ or {})
         next_meta.update(

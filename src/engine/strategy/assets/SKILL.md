@@ -167,7 +167,13 @@ Modes: `fixed_qty` (+ `qty`), `fixed_cash` (+ `cash`), `pct_equity` (+ `pct` as 
 3. Backend returns `strategy_id`.
 4. User provides `strategy_id` → you call MCP tools:
    - `strategy_validate_dsl(dsl_json=...)` → validate edits before persistence
-   - `strategy_upsert_dsl(session_id=..., strategy_id=..., dsl_json=...)` → persist revised DSL
+   - `strategy_get_dsl(session_id=..., strategy_id=...)` → fetch latest payload + version
+   - `strategy_patch_dsl(session_id=..., strategy_id=..., patch_json=..., expected_version=...)` → persist minimal changes
+   - `strategy_list_versions(session_id=..., strategy_id=..., limit=...)` → inspect revision history
+   - `strategy_diff_versions(session_id=..., strategy_id=..., from_version=..., to_version=...)` → compare changes
+   - `strategy_get_version_dsl(session_id=..., strategy_id=..., version=...)` → fetch historical snapshot
+   - `strategy_rollback_dsl(session_id=..., strategy_id=..., target_version=..., expected_version=...)` → rollback by creating a new latest version
+   - `strategy_upsert_dsl(session_id=..., strategy_id=..., dsl_json=...)` → fallback full-payload persistence
    - `backtest_create_job(strategy_id=..., ...)` and `backtest_get_job(job_id=...)` → run and review stress test
 5. Iterate based on results.
 

@@ -216,3 +216,255 @@ async def test_strategy_upsert_tool_reports_input_errors(
 
     assert payload["ok"] is False
     assert payload["error"]["code"] == "INVALID_INPUT"
+
+
+@pytest.mark.asyncio
+async def test_strategy_get_and_patch_tools_happy_path(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_patch_a@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+
+    mcp = FastMCP("test-strategy-tools-get-patch")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    upsert_call = await mcp.call_tool(
+        "strategy_upsert_dsl",
+        {
+            "session_id": str(session.id),
+            "dsl_json": json.dumps(payload),
+        },
+    )
+    upsert_payload = _extract_payload(upsert_call)
+    assert upsert_payload["ok"] is True
+    strategy_id = upsert_payload["strategy_id"]
+
+    get_call = await mcp.call_tool(
+        "strategy_get_dsl",
+        {"session_id": str(session.id), "strategy_id": strategy_id},
+    )
+    get_payload = _extract_payload(get_call)
+    assert get_payload["ok"] is True
+    assert get_payload["metadata"]["version"] == 1
+    assert get_payload["dsl_json"]["strategy"]["name"] == payload["strategy"]["name"]
+
+    patch_call = await mcp.call_tool(
+        "strategy_patch_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "expected_version": 1,
+            "patch_json": json.dumps(
+                [
+                    {"op": "replace", "path": "/strategy/name", "value": "Patched by MCP"},
+                ]
+            ),
+        },
+    )
+    patch_payload = _extract_payload(patch_call)
+    assert patch_payload["ok"] is True
+    assert patch_payload["metadata"]["version"] == 2
+    assert patch_payload["patch_op_count"] == 1
+
+    get_after_patch_call = await mcp.call_tool(
+        "strategy_get_dsl",
+        {"session_id": str(session.id), "strategy_id": strategy_id},
+    )
+    get_after_patch_payload = _extract_payload(get_after_patch_call)
+    assert get_after_patch_payload["ok"] is True
+    assert get_after_patch_payload["metadata"]["version"] == 2
+    assert get_after_patch_payload["dsl_json"]["strategy"]["name"] == "Patched by MCP"
+
+
+@pytest.mark.asyncio
+async def test_strategy_patch_tool_reports_conflict_and_apply_errors(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_patch_b@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+
+    mcp = FastMCP("test-strategy-tools-patch-errors")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    upsert_call = await mcp.call_tool(
+        "strategy_upsert_dsl",
+        {
+            "session_id": str(session.id),
+            "dsl_json": json.dumps(payload),
+        },
+    )
+    upsert_payload = _extract_payload(upsert_call)
+    strategy_id = upsert_payload["strategy_id"]
+
+    version_conflict_call = await mcp.call_tool(
+        "strategy_patch_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "expected_version": 999,
+            "patch_json": json.dumps(
+                [
+                    {"op": "replace", "path": "/strategy/name", "value": "never"},
+                ]
+            ),
+        },
+    )
+    version_conflict_payload = _extract_payload(version_conflict_call)
+    assert version_conflict_payload["ok"] is False
+    assert version_conflict_payload["error"]["code"] == "STRATEGY_VERSION_CONFLICT"
+
+    apply_error_call = await mcp.call_tool(
+        "strategy_patch_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "patch_json": json.dumps(
+                [
+                    {"op": "replace", "path": "/trade/long/exits/99/name", "value": "bad-index"},
+                ]
+            ),
+        },
+    )
+    apply_error_payload = _extract_payload(apply_error_call)
+    assert apply_error_payload["ok"] is False
+    assert apply_error_payload["error"]["code"] == "STRATEGY_PATCH_APPLY_FAILED"
+
+    invalid_input_call = await mcp.call_tool(
+        "strategy_patch_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "patch_json": "{bad-json",
+        },
+    )
+    invalid_input_payload = _extract_payload(invalid_input_call)
+    assert invalid_input_payload["ok"] is False
+    assert invalid_input_payload["error"]["code"] == "INVALID_INPUT"
+
+
+@pytest.mark.asyncio
+async def test_strategy_version_history_tools_cover_list_diff_get_and_rollback(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_history_a@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+
+    mcp = FastMCP("test-strategy-tools-history")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    upsert_call = await mcp.call_tool(
+        "strategy_upsert_dsl",
+        {
+            "session_id": str(session.id),
+            "dsl_json": json.dumps(payload),
+        },
+    )
+    upsert_payload = _extract_payload(upsert_call)
+    strategy_id = upsert_payload["strategy_id"]
+
+    patch_call = await mcp.call_tool(
+        "strategy_patch_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "expected_version": 1,
+            "patch_json": json.dumps(
+                [
+                    {"op": "replace", "path": "/strategy/name", "value": "Versioned Name"},
+                ]
+            ),
+        },
+    )
+    patch_payload = _extract_payload(patch_call)
+    assert patch_payload["ok"] is True
+    assert patch_payload["metadata"]["version"] == 2
+
+    list_call = await mcp.call_tool(
+        "strategy_list_versions",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "limit": 10,
+        },
+    )
+    list_payload = _extract_payload(list_call)
+    assert list_payload["ok"] is True
+    assert [item["version"] for item in list_payload["versions"]] == [2, 1]
+
+    get_v1_call = await mcp.call_tool(
+        "strategy_get_version_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "version": 1,
+        },
+    )
+    get_v1_payload = _extract_payload(get_v1_call)
+    assert get_v1_payload["ok"] is True
+    assert get_v1_payload["dsl_json"]["strategy"]["name"] == payload["strategy"]["name"]
+
+    diff_call = await mcp.call_tool(
+        "strategy_diff_versions",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "from_version": 1,
+            "to_version": 2,
+        },
+    )
+    diff_payload = _extract_payload(diff_call)
+    assert diff_payload["ok"] is True
+    assert diff_payload["patch_op_count"] >= 1
+    assert any(item["path"] == "/strategy/name" for item in diff_payload["patch_ops"])
+
+    rollback_call = await mcp.call_tool(
+        "strategy_rollback_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "target_version": 1,
+            "expected_version": 2,
+        },
+    )
+    rollback_payload = _extract_payload(rollback_call)
+    assert rollback_payload["ok"] is True
+    assert rollback_payload["metadata"]["version"] == 3
+
+    get_latest_call = await mcp.call_tool(
+        "strategy_get_dsl",
+        {"session_id": str(session.id), "strategy_id": strategy_id},
+    )
+    get_latest_payload = _extract_payload(get_latest_call)
+    assert get_latest_payload["ok"] is True
+    assert get_latest_payload["metadata"]["version"] == 3
+    assert get_latest_payload["dsl_json"]["strategy"]["name"] == payload["strategy"]["name"]
+
+    missing_revision_call = await mcp.call_tool(
+        "strategy_get_version_dsl",
+        {
+            "session_id": str(session.id),
+            "strategy_id": strategy_id,
+            "version": 999,
+        },
+    )
+    missing_revision_payload = _extract_payload(missing_revision_call)
+    assert missing_revision_payload["ok"] is False
+    assert missing_revision_payload["error"]["code"] == "STRATEGY_REVISION_NOT_FOUND"

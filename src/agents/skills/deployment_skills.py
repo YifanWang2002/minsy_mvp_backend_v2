@@ -38,7 +38,8 @@ def _language_display(code: str) -> str:
     return _LANGUAGE_NAMES.get(code, code)
 
 
-def build_deployment_static_instructions(*, language: str = "en") -> str:
+@lru_cache(maxsize=16)
+def _build_deployment_static_instructions_cached(*, language: str) -> str:
     template = _load_md(_DEPLOYMENT_SKILLS_MD)
     ui_knowledge = _load_md(_UTILS_SKILLS_MD)
     return _render_template(
@@ -48,6 +49,11 @@ def build_deployment_static_instructions(*, language: str = "en") -> str:
             "GENUI_KNOWLEDGE": ui_knowledge,
         },
     )
+
+
+def build_deployment_static_instructions(*, language: str = "en") -> str:
+    normalized_language = language.strip().lower() if isinstance(language, str) else "en"
+    return _build_deployment_static_instructions_cached(language=normalized_language or "en")
 
 
 def build_deployment_dynamic_state(

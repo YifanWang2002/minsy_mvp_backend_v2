@@ -59,10 +59,12 @@ class StressTestHandler:
             phase_stage=ctx.runtime_policy.phase_stage,
         )
         state_block = build_stress_test_dynamic_state(collected_fields=profile)
+        tool_choice = _build_stress_test_tool_choice(profile=profile)
         return PromptPieces(
             instructions=instructions,
             enriched_input=state_block + user_message,
             tools=_build_backtest_tools(),
+            tool_choice=tool_choice,
             model=settings.openai_response_model,
             reasoning={"effort": "low"},
         )
@@ -200,3 +202,31 @@ def _build_backtest_tools() -> list[dict[str, Any]]:
             "require_approval": "never",
         }
     ]
+
+
+def _build_stress_test_tool_choice(*, profile: dict[str, Any]) -> dict[str, str] | None:
+    raw_status = profile.get("backtest_status")
+    status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
+
+    has_strategy_id = isinstance(profile.get("strategy_id"), str) and bool(
+        str(profile.get("strategy_id")).strip()
+    )
+    has_job_id = isinstance(profile.get("backtest_job_id"), str) and bool(
+        str(profile.get("backtest_job_id")).strip()
+    )
+
+    if has_job_id and status in {"pending", "running"}:
+        return {
+            "type": "mcp",
+            "server_label": "backtest",
+            "name": "backtest_get_job",
+        }
+
+    if not has_job_id and has_strategy_id:
+        return {
+            "type": "mcp",
+            "server_label": "backtest",
+            "name": "backtest_create_job",
+        }
+
+    return None

@@ -249,12 +249,14 @@ def _load_optional_stage_addendum(stage: str | None) -> str:
     return _load_md(stage_path)
 
 
-def build_pre_strategy_static_instructions(
-    *,
-    language: str = "en",
-    phase_stage: str | None = None,
-) -> str:
-    """Return static instructions for pre-strategy collection."""
+def _normalize_phase_stage(stage: str | None) -> str:
+    if not isinstance(stage, str):
+        return ""
+    return stage.strip()
+
+
+@lru_cache(maxsize=32)
+def _build_pre_strategy_static_instructions_cached(*, language: str, phase_stage: str) -> str:
     template = _load_md(_PRE_STRATEGY_SKILLS_MD)
     genui_knowledge = _load_md(_UTILS_SKILLS_MD)
     tradingview_knowledge = _load_md(_TRADINGVIEW_SKILLS_MD)
@@ -271,6 +273,20 @@ def build_pre_strategy_static_instructions(
     if stage_addendum:
         rendered = rendered.rstrip() + "\n\n" + stage_addendum.strip() + "\n"
     return rendered
+
+
+def build_pre_strategy_static_instructions(
+    *,
+    language: str = "en",
+    phase_stage: str | None = None,
+) -> str:
+    """Return static instructions for pre-strategy collection."""
+    normalized_language = language.strip().lower() if isinstance(language, str) else "en"
+    normalized_stage = _normalize_phase_stage(phase_stage)
+    return _build_pre_strategy_static_instructions_cached(
+        language=normalized_language or "en",
+        phase_stage=normalized_stage,
+    )
 
 
 def build_pre_strategy_dynamic_state(
@@ -336,24 +352,11 @@ def build_pre_strategy_dynamic_state(
         if market_catalog
         else "none - no local market parquet data found"
     )
-    market_symbol_catalog_str = (
-        "; ".join(
-            f"{market}=[{', '.join(instruments)}]"
-            for market, instruments in market_catalog.items()
-        )
-        if market_catalog
-        else "none"
-    )
-
-    instrument_mappings_str = (
-        ", ".join(
-            f"{instrument}:{get_yfinance_symbol_for_market_instrument(market=market, instrument=instrument)}"
-            f"|{get_tradingview_symbol_for_market_instrument(market=market, instrument=instrument)}"
-            for market, instruments in market_catalog.items()
-            for instrument in instruments
-        )
-        if market_catalog
-        else "none"
+    should_include_market_list = next_missing in {"target_market", "target_instrument"}
+    available_markets_line = (
+        market_list_str
+        if should_include_market_list
+        else "omitted - not required for current next_missing_field"
     )
 
     return (
@@ -364,8 +367,7 @@ def build_pre_strategy_dynamic_state(
         f"- still_missing: {missing_str}\n"
         f"- has_missing_fields: {str(has_missing).lower()}\n"
         f"- next_missing_field: {next_missing}\n"
-        f"- available_markets: {market_list_str}\n"
-        f"- market_symbol_catalog: {market_symbol_catalog_str}\n"
+        f"- available_markets: {available_markets_line}\n"
         f"- selected_target_market: {selected_market or 'none'}\n"
         f"- selected_target_instrument: {selected_instrument or 'none'}\n"
         f"- allowed_instruments_for_selected_market: {allowed_instruments_str}\n"
@@ -374,11 +376,5 @@ def build_pre_strategy_dynamic_state(
         f"- symbol_newly_provided_this_turn_hint: {str(symbol_newly_provided_this_turn_hint).lower()}\n"
         f"- inferred_instrument_from_user_message: "
         f"{normalize_instrument_value(inferred_instrument_from_user_message) if inferred_instrument_from_user_message else 'none'}\n"
-        f"- instrument_symbol_map (instrument:yfinance|tradingview): {instrument_mappings_str}\n"
-        "- symbol_format_rules: "
-        "for check_symbol_available/get_quote use yfinance-style conversion "
-        "(stock=TICKER, crypto=BASE-USD, forex=PAIR=X, futures=SYMBOL=F); "
-        "for tradingview_chart use (stock=TICKER, crypto=BINANCE:BASEUSDT, "
-        "forex=FX:PAIR, futures=SYMBOL1!).\n"
         "[/SESSION STATE]\n\n"
     )

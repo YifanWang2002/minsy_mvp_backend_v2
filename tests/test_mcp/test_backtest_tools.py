@@ -10,6 +10,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.engine.backtest.service import execute_backtest_job
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
 from src.mcp.backtest import tools as backtest_tools
 from src.models.session import Session as AgentSession
@@ -84,7 +85,7 @@ async def test_backtest_tools_create_run_and_fetch_result(
         return _SessionContext(db_session)
 
     async def _fake_schedule(job_id):  # noqa: ANN001
-        return None
+        await execute_backtest_job(db_session, job_id=job_id, auto_commit=True)
 
     def _fake_load(
         self,  # noqa: ANN001
@@ -116,7 +117,7 @@ async def test_backtest_tools_create_run_and_fetch_result(
         "backtest_create_job",
         {
             "strategy_id": str(strategy.id),
-            "run_now": True,
+            "run_now": False,
         },
     )
     create_payload = _extract_payload(create_call)
@@ -206,7 +207,7 @@ async def test_backtest_tools_failed_run_returns_error_payload(
         return _SessionContext(db_session)
 
     async def _fake_schedule(job_id):  # noqa: ANN001
-        return None
+        await execute_backtest_job(db_session, job_id=job_id, auto_commit=True)
 
     def _fake_load(
         self,  # noqa: ANN001
@@ -238,7 +239,7 @@ async def test_backtest_tools_failed_run_returns_error_payload(
         "backtest_create_job",
         {
             "strategy_id": str(strategy.id),
-            "run_now": True,
+            "run_now": False,
         },
     )
     create_payload = _extract_payload(create_call)

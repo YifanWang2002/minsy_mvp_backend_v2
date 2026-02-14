@@ -11,7 +11,6 @@ from src.engine.backtest import (
     BacktestJobNotFoundError,
     BacktestStrategyNotFoundError,
     create_backtest_job,
-    execute_backtest_job,
     get_backtest_job_view,
     schedule_backtest_job,
 )
@@ -22,6 +21,9 @@ TOOL_NAMES: tuple[str, ...] = (
     "backtest_create_job",
     "backtest_get_job",
 )
+
+_MAX_SAMPLE_TRADES = 5
+_MAX_SAMPLE_EVENTS = 5
 
 
 def _payload(
@@ -77,7 +79,7 @@ def _view_payload(view: Any) -> dict[str, Any]:
     }
 
     if view.status == "done":
-        data["result"] = view.result
+        data["result"] = _summarize_result_payload(view.result)
     elif view.status == "failed":
         data["result"] = {
             "error": view.error or {"code": "BACKTEST_FAILED", "message": "Backtest failed"}
@@ -85,6 +87,57 @@ def _view_payload(view: Any) -> dict[str, Any]:
     else:
         data["result"] = None
     return data
+
+
+def _summarize_result_payload(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {
+            "summary": {},
+            "performance": {},
+            "counts": {"trades": 0, "equity_points": 0, "events": 0},
+            "sample_trades": [],
+            "sample_events": [],
+            "result_truncated": True,
+        }
+
+    summary = result.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+
+    performance = result.get("performance")
+    if not isinstance(performance, dict):
+        performance = {}
+
+    trades = result.get("trades")
+    if not isinstance(trades, list):
+        trades = []
+
+    events = result.get("events")
+    if not isinstance(events, list):
+        events = []
+
+    equity_curve = result.get("equity_curve")
+    if not isinstance(equity_curve, list):
+        equity_curve = []
+
+    output: dict[str, Any] = {
+        "market": result.get("market"),
+        "symbol": result.get("symbol"),
+        "timeframe": result.get("timeframe"),
+        "summary": summary,
+        "performance": performance,
+        "counts": {
+            "trades": len(trades),
+            "equity_points": len(equity_curve),
+            "events": len(events),
+        },
+        "sample_trades": trades[:_MAX_SAMPLE_TRADES],
+        "sample_events": events[:_MAX_SAMPLE_EVENTS],
+        "started_at": result.get("started_at"),
+        "finished_at": result.get("finished_at"),
+        "result_truncated": True,
+    }
+    return output
 
 
 def register_backtest_tools(mcp: FastMCP) -> None:
@@ -122,11 +175,9 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                     slippage_bps=slippage_bps,
                     auto_commit=True,
                 )
-                if run_now:
-                    view = await execute_backtest_job(db, job_id=receipt.job_id, auto_commit=True)
-                else:
-                    await schedule_backtest_job(receipt.job_id)
-                    view = await get_backtest_job_view(db, job_id=receipt.job_id)
+                # Keep accepting run_now for backward compatibility, but execution is always queued.
+                await schedule_backtest_job(receipt.job_id)
+                view = await get_backtest_job_view(db, job_id=receipt.job_id)
         except BacktestStrategyNotFoundError as exc:
             return _payload(
                 tool="backtest_create_job",

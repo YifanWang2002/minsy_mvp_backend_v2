@@ -76,8 +76,8 @@
 
     "timeframe": {
       "type": "string",
-      "description": "Bar interval. Examples: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w",
-      "pattern": "^[1-9][0-9]*(s|m|h|d|w)$"
+      "description": "Bar interval supported by runtime data loader.",
+      "enum": ["1m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"]
     },
 
     "price_source": {

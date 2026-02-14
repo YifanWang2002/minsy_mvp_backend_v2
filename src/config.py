@@ -62,6 +62,23 @@ class Settings(BaseSettings):
     redis_db: int = Field(default=0, alias="REDIS_DB")
     redis_password: str | None = Field(default=None, alias="REDIS_PASSWORD")
     redis_max_connections: int = Field(default=50, alias="REDIS_MAX_CONNECTIONS")
+    celery_broker_url: str | None = Field(default=None, alias="CELERY_BROKER_URL")
+    celery_result_backend: str | None = Field(default=None, alias="CELERY_RESULT_BACKEND")
+    celery_task_default_queue: str = Field(default="backtest", alias="CELERY_TASK_DEFAULT_QUEUE")
+    celery_task_time_limit_seconds: int = Field(
+        default=1800,
+        alias="CELERY_TASK_TIME_LIMIT_SECONDS",
+    )
+    celery_task_soft_time_limit_seconds: int = Field(
+        default=1740,
+        alias="CELERY_TASK_SOFT_TIME_LIMIT_SECONDS",
+    )
+    celery_worker_prefetch_multiplier: int = Field(
+        default=1,
+        alias="CELERY_WORKER_PREFETCH_MULTIPLIER",
+    )
+    celery_task_acks_late: bool = Field(default=True, alias="CELERY_TASK_ACKS_LATE")
+    celery_task_always_eager: bool = Field(default=False, alias="CELERY_TASK_ALWAYS_EAGER")
 
     cors_origins: list[str] = Field(
         default_factory=lambda: [
@@ -111,6 +128,18 @@ class Settings(BaseSettings):
                 f"redis://:{password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
             )
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+    @property
+    def effective_celery_broker_url(self) -> str:
+        if isinstance(self.celery_broker_url, str) and self.celery_broker_url.strip():
+            return self.celery_broker_url.strip()
+        return self.redis_url
+
+    @property
+    def effective_celery_result_backend(self) -> str:
+        if isinstance(self.celery_result_backend, str) and self.celery_result_backend.strip():
+            return self.celery_result_backend.strip()
+        return self.redis_url
 
 
 @lru_cache

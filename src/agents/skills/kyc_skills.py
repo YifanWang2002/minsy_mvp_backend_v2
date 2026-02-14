@@ -59,8 +59,14 @@ def _load_optional_stage_addendum(stage: str | None) -> str:
     return _load_md(stage_path)
 
 
-def build_kyc_static_instructions(*, language: str = "en", phase_stage: str | None = None) -> str:
-    """Return static KYC instructions from markdown templates."""
+def _normalize_phase_stage(stage: str | None) -> str:
+    if not isinstance(stage, str):
+        return ""
+    return stage.strip()
+
+
+@lru_cache(maxsize=32)
+def _build_kyc_static_instructions_cached(*, language: str, phase_stage: str) -> str:
     template = _load_md(_KYC_SKILLS_MD)
     genui_knowledge = _load_md(_UTILS_SKILLS_MD)
     stage_addendum = _load_optional_stage_addendum(phase_stage)
@@ -75,6 +81,16 @@ def build_kyc_static_instructions(*, language: str = "en", phase_stage: str | No
     if stage_addendum:
         rendered = rendered.rstrip() + "\n\n" + stage_addendum.strip() + "\n"
     return rendered
+
+
+def build_kyc_static_instructions(*, language: str = "en", phase_stage: str | None = None) -> str:
+    """Return static KYC instructions from markdown templates."""
+    normalized_language = language.strip().lower() if isinstance(language, str) else "en"
+    normalized_stage = _normalize_phase_stage(phase_stage)
+    return _build_kyc_static_instructions_cached(
+        language=normalized_language or "en",
+        phase_stage=normalized_stage,
+    )
 
 
 def build_kyc_dynamic_state(

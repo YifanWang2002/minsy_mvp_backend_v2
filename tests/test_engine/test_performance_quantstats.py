@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.engine.backtest import EventDrivenBacktestEngine
 from src.engine.performance import build_quantstats_performance
 from src.engine.strategy import parse_strategy_payload
@@ -96,3 +98,24 @@ def test_backtest_engine_result_contains_performance_block() -> None:
     assert result.performance["library"] == "quantstats"
     assert "metrics" in result.performance
     assert "series" in result.performance
+
+
+def test_quantstats_metrics_change_with_timestamp_frequency() -> None:
+    returns = [0.01, -0.005, 0.003, 0.008, -0.002, 0.004]
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    hourly_timestamps = [start + timedelta(hours=index) for index in range(len(returns))]
+    daily_timestamps = [start + timedelta(days=index) for index in range(len(returns))]
+
+    hourly = build_quantstats_performance(
+        returns=returns,
+        timestamps=hourly_timestamps,
+    )
+    daily = build_quantstats_performance(
+        returns=returns,
+        timestamps=daily_timestamps,
+    )
+
+    for metric in ("cagr", "sharpe", "sortino", "calmar", "volatility"):
+        assert hourly["metrics"][metric] is not None
+        assert daily["metrics"][metric] is not None
+        assert hourly["metrics"][metric] != pytest.approx(daily["metrics"][metric], rel=1e-6)

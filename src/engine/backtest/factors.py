@@ -106,7 +106,13 @@ def _attach_factor_result(
     result: pd.Series | pd.DataFrame,
 ) -> None:
     if isinstance(result, pd.Series):
-        frame[factor_id] = pd.to_numeric(result, errors="coerce")
+        numeric_series = pd.to_numeric(result, errors="coerce")
+        frame[factor_id] = numeric_series
+        for output in requested_outputs:
+            alias = output.strip()
+            if not alias:
+                continue
+            frame[f"{factor_id}.{alias}"] = numeric_series
         return
 
     columns = list(result.columns)

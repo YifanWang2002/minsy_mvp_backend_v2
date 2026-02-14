@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pandas as pd
 import pytest
@@ -10,9 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.backtest import (
     BacktestJobNotFoundError,
+    BacktestJobView,
     create_backtest_job,
     execute_backtest_job,
+    execute_backtest_job_with_fresh_session,
     get_backtest_job_view,
+    schedule_backtest_job,
 )
 from src.engine.data import DataLoader
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
@@ -306,3 +309,75 @@ async def test_backtest_job_uses_metadata_start_with_explicit_end(
     assert view.status == "done"
     assert captured["start_date"] == datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
     assert captured["end_date"] == datetime(2024, 2, 10, 0, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_schedule_backtest_job_enqueues_worker_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, UUID | str] = {}
+    job_id = uuid4()
+
+    def _fake_enqueue(target_job_id: UUID) -> str:
+        captured["job_id"] = target_job_id
+        return "celery-task-123"
+
+    monkeypatch.setattr("src.engine.backtest.service._enqueue_backtest_job", _fake_enqueue)
+
+    task_id = await schedule_backtest_job(job_id)
+    assert task_id == "celery-task-123"
+    assert captured["job_id"] == job_id
+
+
+@pytest.mark.asyncio
+async def test_execute_backtest_job_with_fresh_session_initializes_db_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = uuid4()
+    observed: dict[str, object] = {}
+
+    class _FakeSessionContext:
+        async def __aenter__(self) -> str:
+            return "fake-session"
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
+            return False
+
+    class _FakeSessionFactory:
+        def __call__(self) -> _FakeSessionContext:
+            return _FakeSessionContext()
+
+    async def _fake_init_postgres(*, ensure_schema: bool = True) -> None:
+        from src.engine.backtest import service as service_module
+
+        observed["ensure_schema"] = ensure_schema
+        service_module.db_module.AsyncSessionLocal = _FakeSessionFactory()
+
+    async def _fake_execute_backtest_job(session, *, job_id: UUID, auto_commit: bool):  # noqa: ANN001
+        observed["session"] = session
+        observed["job_id"] = job_id
+        observed["auto_commit"] = auto_commit
+        return BacktestJobView(
+            job_id=job_id,
+            strategy_id=uuid4(),
+            status="done",
+            progress=100,
+            current_step="done",
+            result={},
+            error=None,
+            submitted_at=datetime(2024, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2024, 1, 2, tzinfo=UTC),
+        )
+
+    monkeypatch.setattr("src.engine.backtest.service.db_module.AsyncSessionLocal", None)
+    monkeypatch.setattr("src.engine.backtest.service.db_module.init_postgres", _fake_init_postgres)
+    monkeypatch.setattr("src.engine.backtest.service.execute_backtest_job", _fake_execute_backtest_job)
+
+    view = await execute_backtest_job_with_fresh_session(job_id)
+    assert view.status == "done"
+    assert observed == {
+        "ensure_schema": False,
+        "session": "fake-session",
+        "job_id": job_id,
+        "auto_commit": True,
+    }

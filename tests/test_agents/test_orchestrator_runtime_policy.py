@@ -48,6 +48,47 @@ class _CaptureStreamer:
         }
 
 
+class _SequencedStreamer:
+    def __init__(self, outputs: list[str]) -> None:
+        self.outputs = list(outputs)
+        self.calls: list[dict[str, object]] = []
+        self.turn = 0
+
+    async def stream_events(
+        self,
+        *,
+        model: str,
+        input_text: str,
+        instructions: str | None = None,
+        previous_response_id: str | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        reasoning: dict[str, object] | None = None,
+    ) -> AsyncIterator[dict[str, object]]:
+        self.calls.append(
+            {
+                "model": model,
+                "input_text": input_text,
+                "instructions": instructions,
+                "previous_response_id": previous_response_id,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "reasoning": reasoning,
+            }
+        )
+        index = min(self.turn, len(self.outputs) - 1)
+        self.turn += 1
+        output = self.outputs[index]
+        yield {"type": "response.output_text.delta", "delta": output, "sequence_number": 1}
+        yield {
+            "type": "response.completed",
+            "response": {
+                "id": f"resp_{uuid4().hex}",
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            },
+        }
+
+
 def _parse_sse_payload(chunk: str) -> dict[str, object] | None:
     data_lines = [
         line.removeprefix("data:").lstrip()
@@ -181,3 +222,99 @@ async def test_stop_criteria_placeholder_emits_hint_after_ten_turns(db_session) 
     assert seen_stop_hint is True
     assert isinstance(stop_meta, dict)
     assert stop_meta.get("enabled") is True
+
+
+@pytest.mark.asyncio
+async def test_phase_transition_resets_previous_response_id(db_session) -> None:
+    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="kyc",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+        previous_response_id="resp_should_be_cleared",
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    orchestrator = ChatOrchestrator(db_session)
+    await orchestrator._transition_phase(
+        session=session,
+        to_phase="pre_strategy",
+        trigger="test",
+        metadata={"reason": "test_transition"},
+    )
+
+    assert session.current_phase == "pre_strategy"
+    assert session.previous_response_id is None
+
+
+@pytest.mark.asyncio
+async def test_phase_carryover_memory_is_injected_once_after_transition(db_session) -> None:
+    user = User(email=f"orchestrator_carry_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="kyc",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    streamer = _SequencedStreamer(
+        outputs=[
+            (
+                "已记录。"
+                "<AGENT_STATE_PATCH>"
+                '{"trading_years_bucket":"years_5_plus","risk_tolerance":"aggressive","return_expectation":"high_growth"}'
+                "</AGENT_STATE_PATCH>"
+            ),
+            "继续告诉我你的交易市场。",
+            "继续告诉我你的交易标的。",
+        ]
+    )
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload1 = ChatSendRequest(
+        session_id=session.id,
+        message="我的经验 years_5_plus，风险 aggressive，收益 high_growth。",
+    )
+    async for _ in orchestrator.handle_message_stream(user, payload1, streamer, language="zh"):
+        pass
+
+    await db_session.refresh(session)
+    assert session.current_phase == "pre_strategy"
+    meta_after_transition = dict(session.metadata_ or {})
+    carryover_meta = meta_after_transition.get("phase_carryover_memory")
+    assert isinstance(carryover_meta, dict)
+    assert carryover_meta.get("target_phase") == "pre_strategy"
+
+    payload2 = ChatSendRequest(session_id=session.id, message="目标市场 target_market=us_stocks。")
+    async for _ in orchestrator.handle_message_stream(user, payload2, streamer, language="zh"):
+        pass
+
+    assert len(streamer.calls) >= 2
+    second_input_text = str(streamer.calls[1].get("input_text", ""))
+    assert "[PHASE CARRYOVER MEMORY]" in second_input_text
+    assert "from_phase: kyc" in second_input_text
+    assert "我的经验 years_5_plus" in second_input_text
+
+    await db_session.refresh(session)
+    meta_after_consume = dict(session.metadata_ or {})
+    assert "phase_carryover_memory" not in meta_after_consume
+
+    payload3 = ChatSendRequest(session_id=session.id, message="继续。")
+    async for _ in orchestrator.handle_message_stream(user, payload3, streamer, language="zh"):
+        pass
+
+    assert len(streamer.calls) >= 3
+    third_input_text = str(streamer.calls[2].get("input_text", ""))
+    assert "[PHASE CARRYOVER MEMORY]" not in third_input_text

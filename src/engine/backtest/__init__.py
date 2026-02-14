@@ -8,6 +8,7 @@ from src.engine.backtest.service import (
     BacktestStrategyNotFoundError,
     create_backtest_job,
     execute_backtest_job,
+    execute_backtest_job_with_fresh_session,
     get_backtest_job_view,
     schedule_backtest_job,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "PositionSide",
     "create_backtest_job",
     "execute_backtest_job",
+    "execute_backtest_job_with_fresh_session",
     "get_backtest_job_view",
     "schedule_backtest_job",
 ]

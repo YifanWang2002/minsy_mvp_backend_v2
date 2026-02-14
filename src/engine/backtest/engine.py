@@ -355,7 +355,11 @@ class EventDrivenBacktestEngine:
     def _record_equity(self, bar_index: int) -> None:
         timestamp = self._timestamp_at(bar_index)
         equity = max(0.0, self._equity_value(bar_index))
-        self._equity_curve.append(EquityPoint(timestamp=timestamp, equity=equity))
+        point = EquityPoint(timestamp=timestamp, equity=equity)
+        if self._equity_curve and self._equity_curve[-1].timestamp == timestamp:
+            self._equity_curve[-1] = point
+            return
+        self._equity_curve.append(point)
 
     def _resolve_quantity(self, *, side_payload: dict[str, Any], entry_price: float) -> float:
         sizing = side_payload.get("position_sizing", {"mode": "fixed_qty", "qty": 1.0})

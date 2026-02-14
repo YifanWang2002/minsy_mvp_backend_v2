@@ -54,11 +54,14 @@ def _load_optional_stage_addendum(stage: str | None) -> str:
     return _load_md(stage_path)
 
 
-def build_stress_test_static_instructions(
-    *,
-    language: str = "en",
-    phase_stage: str | None = None,
-) -> str:
+def _normalize_phase_stage(stage: str | None) -> str:
+    if not isinstance(stage, str):
+        return ""
+    return stage.strip()
+
+
+@lru_cache(maxsize=32)
+def _build_stress_test_static_instructions_cached(*, language: str, phase_stage: str) -> str:
     template = _load_md(_STRESS_SKILLS_MD)
     ui_knowledge = _load_md(_UTILS_SKILLS_MD)
     rendered = _render_template(
@@ -72,6 +75,19 @@ def build_stress_test_static_instructions(
     if stage_addendum:
         rendered = rendered.rstrip() + "\n\n" + stage_addendum.strip() + "\n"
     return rendered
+
+
+def build_stress_test_static_instructions(
+    *,
+    language: str = "en",
+    phase_stage: str | None = None,
+) -> str:
+    normalized_language = language.strip().lower() if isinstance(language, str) else "en"
+    normalized_stage = _normalize_phase_stage(phase_stage)
+    return _build_stress_test_static_instructions_cached(
+        language=normalized_language or "en",
+        phase_stage=normalized_stage,
+    )
 
 
 def build_stress_test_dynamic_state(

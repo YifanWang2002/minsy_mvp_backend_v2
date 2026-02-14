@@ -146,6 +146,12 @@ def _build_strategy_tools() -> list[dict[str, Any]]:
             "allowed_tools": [
                 "strategy_validate_dsl",
                 "strategy_upsert_dsl",
+                "strategy_get_dsl",
+                "strategy_patch_dsl",
+                "strategy_list_versions",
+                "strategy_get_version_dsl",
+                "strategy_diff_versions",
+                "strategy_rollback_dsl",
                 "get_indicator_detail",
                 "get_indicator_catalog",
             ],

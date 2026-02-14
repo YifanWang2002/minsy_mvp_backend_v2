@@ -90,7 +90,8 @@ def test_dynamic_state_uses_catalog_and_normalized_values(monkeypatch) -> None:
     assert "- mapped_yfinance_symbol_for_selected_instrument: SPY" in state
     assert "- mapped_tradingview_symbol_for_selected_instrument: SPY" in state
     assert "- symbol_newly_provided_this_turn_hint: true" in state
-    assert "market_symbol_catalog: us_stocks=[SPY, QQQ, AAPL]" in state
+    assert "market_symbol_catalog:" not in state
+    assert "instrument_symbol_map (instrument:yfinance|tradingview):" not in state
 
 
 def test_sanitize_profile_infers_market_and_drops_cross_market_instrument(monkeypatch) -> None:
@@ -227,5 +228,5 @@ def test_dynamic_state_handles_empty_market_catalog(monkeypatch) -> None:
     )
 
     assert "available_markets: none - no local market parquet data found" in state
-    assert "market_symbol_catalog: none" in state
-    assert "instrument_symbol_map (instrument:yfinance|tradingview): none" in state
+    assert "market_symbol_catalog:" not in state
+    assert "instrument_symbol_map (instrument:yfinance|tradingview):" not in state

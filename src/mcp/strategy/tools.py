@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -12,7 +14,17 @@ from mcp.server.fastmcp import FastMCP
 from src.engine.feature.indicators import IndicatorCategory, IndicatorRegistry
 from src.engine.strategy import (
     StrategyDslValidationException,
+    StrategyPatchApplyError,
+    StrategyRevisionNotFoundError,
     StrategyStorageNotFoundError,
+    StrategyVersionConflictError,
+    diff_strategy_versions,
+    get_session_user_id,
+    get_strategy_or_raise,
+    get_strategy_version_payload,
+    list_strategy_versions,
+    patch_strategy_dsl,
+    rollback_strategy_dsl,
     upsert_strategy_dsl,
     validate_strategy_payload,
 )
@@ -22,6 +34,12 @@ from src.models import database as db_module
 TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
     "strategy_upsert_dsl",
+    "strategy_get_dsl",
+    "strategy_patch_dsl",
+    "strategy_list_versions",
+    "strategy_get_version_dsl",
+    "strategy_diff_versions",
+    "strategy_rollback_dsl",
     "get_indicator_detail",
     "get_indicator_catalog",
 )
@@ -71,6 +89,21 @@ def _parse_payload(raw: str) -> dict[str, Any]:
     return parsed
 
 
+def _parse_patch_ops(raw: str) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON patch payload: {exc}") from exc
+    if not isinstance(parsed, list):
+        raise ValueError("Patch payload must be a JSON array of operations")
+    operations: list[dict[str, Any]] = []
+    for index, item in enumerate(parsed):
+        if not isinstance(item, dict):
+            raise ValueError(f"Patch operation at index {index} must be a JSON object")
+        operations.append(dict(item))
+    return operations
+
+
 def _parse_uuid(value: str, field_name: str) -> UUID:
     try:
         return UUID(value)
@@ -88,6 +121,65 @@ def _validation_errors_to_dict(errors: tuple[Any, ...]) -> list[dict[str, Any]]:
         }
         for item in errors
     ]
+
+
+def _payload_hash(payload: dict[str, Any]) -> str:
+    normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _as_utc(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(UTC)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _strategy_metadata_snapshot(strategy: Any) -> dict[str, Any]:
+    raw_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    updated_at = strategy.updated_at if strategy.updated_at else strategy.created_at
+    return {
+        "user_id": str(strategy.user_id),
+        "session_id": str(strategy.session_id),
+        "strategy_name": strategy.name,
+        "dsl_version": strategy.dsl_version or "",
+        "version": int(strategy.version),
+        "status": strategy.status,
+        "timeframe": strategy.timeframe,
+        "symbol_count": len(strategy.symbols or []),
+        "payload_hash": _payload_hash(raw_payload),
+        "last_updated_at": _as_utc(updated_at).isoformat(),
+    }
+
+
+def _strategy_metadata_from_receipt(receipt: Any) -> dict[str, Any]:
+    return {
+        "user_id": str(receipt.user_id),
+        "session_id": str(receipt.session_id),
+        "strategy_name": receipt.strategy_name,
+        "dsl_version": receipt.dsl_version,
+        "version": receipt.version,
+        "status": receipt.status,
+        "timeframe": receipt.timeframe,
+        "symbol_count": receipt.symbol_count,
+        "payload_hash": receipt.payload_hash,
+        "last_updated_at": receipt.last_updated_at.isoformat(),
+    }
+
+
+def _revision_snapshot(revision: Any) -> dict[str, Any]:
+    return {
+        "strategy_id": str(revision.strategy_id),
+        "session_id": str(revision.session_id) if revision.session_id else None,
+        "version": int(revision.version),
+        "dsl_version": revision.dsl_version,
+        "payload_hash": revision.payload_hash,
+        "change_type": revision.change_type,
+        "source_version": revision.source_version,
+        "patch_op_count": int(revision.patch_op_count),
+        "created_at": revision.created_at.isoformat(),
+    }
 
 
 def _read_indicator_skill(indicator: str) -> dict[str, Any] | None:
@@ -450,17 +542,417 @@ def register_strategy_tools(mcp: FastMCP) -> None:
             ok=True,
             data={
                 "strategy_id": str(receipt.strategy_id),
-                "metadata": {
-                    "user_id": str(receipt.user_id),
-                    "session_id": str(receipt.session_id),
-                    "strategy_name": receipt.strategy_name,
-                    "dsl_version": receipt.dsl_version,
-                    "version": receipt.version,
-                    "status": receipt.status,
-                    "timeframe": receipt.timeframe,
-                    "symbol_count": receipt.symbol_count,
-                    "payload_hash": receipt.payload_hash,
-                    "last_updated_at": receipt.last_updated_at.isoformat(),
-                },
+                "metadata": _strategy_metadata_from_receipt(receipt),
+            },
+        )
+
+    @mcp.tool()
+    async def strategy_get_dsl(
+        session_id: str,
+        strategy_id: str,
+    ) -> str:
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_get_dsl",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                session_user_id = await get_session_user_id(db, session_id=session_uuid)
+                strategy = await get_strategy_or_raise(db, strategy_id=strategy_uuid)
+                if strategy.user_id != session_user_id:
+                    raise StrategyStorageNotFoundError(
+                        "Strategy ownership mismatch for the provided session/user context.",
+                    )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_get_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_get_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+        return _payload(
+            tool="strategy_get_dsl",
+            ok=True,
+            data={
+                "strategy_id": str(strategy.id),
+                "dsl_json": dsl_payload,
+                "metadata": _strategy_metadata_snapshot(strategy),
+            },
+        )
+
+    @mcp.tool()
+    async def strategy_patch_dsl(
+        session_id: str,
+        strategy_id: str,
+        patch_json: str,
+        expected_version: int = 0,
+    ) -> str:
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+            patch_ops = _parse_patch_ops(patch_json)
+            parsed_expected_version: int | None = None
+            if not isinstance(expected_version, int):
+                raise ValueError("expected_version must be an integer")
+            if expected_version > 0:
+                parsed_expected_version = expected_version
+            elif expected_version < 0:
+                raise ValueError("expected_version must be >= 0")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_patch_dsl",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                result = await patch_strategy_dsl(
+                    db,
+                    session_id=session_uuid,
+                    strategy_id=strategy_uuid,
+                    patch_ops=patch_ops,
+                    expected_version=parsed_expected_version,
+                    auto_commit=True,
+                )
+        except StrategyPatchApplyError as exc:
+            return _payload(
+                tool="strategy_patch_dsl",
+                ok=False,
+                error_code="STRATEGY_PATCH_APPLY_FAILED",
+                error_message=str(exc),
+            )
+        except StrategyVersionConflictError as exc:
+            return _payload(
+                tool="strategy_patch_dsl",
+                ok=False,
+                error_code="STRATEGY_VERSION_CONFLICT",
+                error_message=str(exc),
+            )
+        except StrategyDslValidationException as exc:
+            return _payload(
+                tool="strategy_patch_dsl",
+                ok=False,
+                data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+                error_code="STRATEGY_VALIDATION_FAILED",
+                error_message="Strategy DSL validation failed.",
+            )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_patch_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_patch_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        receipt = result.receipt
+        return _payload(
+            tool="strategy_patch_dsl",
+            ok=True,
+            data={
+                "strategy_id": str(receipt.strategy_id),
+                "patch_op_count": len(patch_ops),
+                "metadata": _strategy_metadata_from_receipt(receipt),
+            },
+        )
+
+    @mcp.tool()
+    async def strategy_list_versions(
+        session_id: str,
+        strategy_id: str,
+        limit: int = 20,
+    ) -> str:
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+            if not isinstance(limit, int):
+                raise ValueError("limit must be an integer")
+            if limit <= 0 or limit > 200:
+                raise ValueError("limit must be between 1 and 200")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_list_versions",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                versions = await list_strategy_versions(
+                    db,
+                    session_id=session_uuid,
+                    strategy_id=strategy_uuid,
+                    limit=limit,
+                )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_list_versions",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_list_versions",
+                ok=False,
+                error_code="STRATEGY_STORAGE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        return _payload(
+            tool="strategy_list_versions",
+            ok=True,
+            data={
+                "strategy_id": str(strategy_uuid),
+                "count": len(versions),
+                "versions": [_revision_snapshot(item) for item in versions],
+            },
+        )
+
+    @mcp.tool()
+    async def strategy_get_version_dsl(
+        session_id: str,
+        strategy_id: str,
+        version: int,
+    ) -> str:
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+            if not isinstance(version, int):
+                raise ValueError("version must be an integer")
+            if version <= 0:
+                raise ValueError("version must be >= 1")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_get_version_dsl",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                resolved = await get_strategy_version_payload(
+                    db,
+                    session_id=session_uuid,
+                    strategy_id=strategy_uuid,
+                    version=version,
+                )
+        except StrategyRevisionNotFoundError as exc:
+            return _payload(
+                tool="strategy_get_version_dsl",
+                ok=False,
+                error_code="STRATEGY_REVISION_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_get_version_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_get_version_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        return _payload(
+            tool="strategy_get_version_dsl",
+            ok=True,
+            data={
+                "strategy_id": str(resolved.strategy_id),
+                "version": resolved.version,
+                "dsl_json": resolved.dsl_payload,
+                "revision": _revision_snapshot(resolved.receipt),
+            },
+        )
+
+    @mcp.tool()
+    async def strategy_diff_versions(
+        session_id: str,
+        strategy_id: str,
+        from_version: int,
+        to_version: int,
+    ) -> str:
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+            if not isinstance(from_version, int) or not isinstance(to_version, int):
+                raise ValueError("from_version and to_version must be integers")
+            if from_version <= 0 or to_version <= 0:
+                raise ValueError("from_version and to_version must be >= 1")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_diff_versions",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                diff_result = await diff_strategy_versions(
+                    db,
+                    session_id=session_uuid,
+                    strategy_id=strategy_uuid,
+                    from_version=from_version,
+                    to_version=to_version,
+                )
+        except StrategyRevisionNotFoundError as exc:
+            return _payload(
+                tool="strategy_diff_versions",
+                ok=False,
+                error_code="STRATEGY_REVISION_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_diff_versions",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_diff_versions",
+                ok=False,
+                error_code="STRATEGY_STORAGE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        return _payload(
+            tool="strategy_diff_versions",
+            ok=True,
+            data={
+                "strategy_id": str(diff_result.strategy_id),
+                "from_version": diff_result.from_version,
+                "to_version": diff_result.to_version,
+                "patch_op_count": diff_result.op_count,
+                "patch_ops": diff_result.patch_ops,
+                "from_payload_hash": diff_result.from_payload_hash,
+                "to_payload_hash": diff_result.to_payload_hash,
+            },
+        )
+
+    @mcp.tool()
+    async def strategy_rollback_dsl(
+        session_id: str,
+        strategy_id: str,
+        target_version: int,
+        expected_version: int = 0,
+    ) -> str:
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+            if not isinstance(target_version, int):
+                raise ValueError("target_version must be an integer")
+            if target_version <= 0:
+                raise ValueError("target_version must be >= 1")
+            parsed_expected_version: int | None = None
+            if not isinstance(expected_version, int):
+                raise ValueError("expected_version must be an integer")
+            if expected_version > 0:
+                parsed_expected_version = expected_version
+            elif expected_version < 0:
+                raise ValueError("expected_version must be >= 0")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_rollback_dsl",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                result = await rollback_strategy_dsl(
+                    db,
+                    session_id=session_uuid,
+                    strategy_id=strategy_uuid,
+                    target_version=target_version,
+                    expected_version=parsed_expected_version,
+                    auto_commit=True,
+                )
+        except StrategyRevisionNotFoundError as exc:
+            return _payload(
+                tool="strategy_rollback_dsl",
+                ok=False,
+                error_code="STRATEGY_REVISION_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except StrategyPatchApplyError as exc:
+            return _payload(
+                tool="strategy_rollback_dsl",
+                ok=False,
+                error_code="STRATEGY_PATCH_APPLY_FAILED",
+                error_message=str(exc),
+            )
+        except StrategyVersionConflictError as exc:
+            return _payload(
+                tool="strategy_rollback_dsl",
+                ok=False,
+                error_code="STRATEGY_VERSION_CONFLICT",
+                error_message=str(exc),
+            )
+        except StrategyDslValidationException as exc:
+            return _payload(
+                tool="strategy_rollback_dsl",
+                ok=False,
+                data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+                error_code="STRATEGY_VALIDATION_FAILED",
+                error_message="Strategy DSL validation failed.",
+            )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_rollback_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_rollback_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        receipt = result.receipt
+        return _payload(
+            tool="strategy_rollback_dsl",
+            ok=True,
+            data={
+                "strategy_id": str(receipt.strategy_id),
+                "target_version": target_version,
+                "metadata": _strategy_metadata_from_receipt(receipt),
             },
         )

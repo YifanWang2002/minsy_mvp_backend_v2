@@ -308,6 +308,42 @@ def test_multi_output_factor_refs_macd_are_resolved() -> None:
     assert len(result.events) > 0
 
 
+def test_single_output_factor_alias_ref_is_materialized_and_tradeable() -> None:
+    payload = _single_side_payload(
+        exits=[
+            {
+                "type": "signal_exit",
+                "name": "always_exit_next_bar",
+                "order": {"type": "market"},
+                "condition": {
+                    "cmp": {
+                        "left": {"ref": "price.close"},
+                        "op": "gt",
+                        "right": -1,
+                    }
+                },
+            },
+        ],
+        entry_condition={
+            "cmp": {
+                "left": {"ref": "ema_2.alias"},
+                "op": "gt",
+                "right": 0,
+            }
+        },
+    )
+    payload["factors"]["ema_2"]["outputs"] = ["alias"]
+
+    strategy = parse_strategy_payload(payload)
+    data = _ohlcv_from_close([100.0] * 24)
+    engine = EventDrivenBacktestEngine(strategy=strategy, data=data)
+
+    assert "ema_2.alias" in engine.frame.columns
+
+    result = engine.run()
+    assert result.summary.total_trades >= 1
+
+
 def test_engine_skips_entries_when_price_is_non_positive() -> None:
     payload = _zero_price_dual_side_payload()
     strategy = parse_strategy_payload(payload)
@@ -443,6 +479,9 @@ def test_end_of_data_auto_closes_open_position() -> None:
     assert result.summary.total_trades == 1
     assert result.trades[0].exit_reason == "end_of_data"
     assert result.trades[0].exit_time == data.index[-1].to_pydatetime()
+    last_ts = data.index[-1].to_pydatetime()
+    equity_timestamps = [point.timestamp for point in result.equity_curve]
+    assert equity_timestamps.count(last_ts) == 1
 
 
 def test_slippage_and_commission_are_applied_to_trade_pnl() -> None:

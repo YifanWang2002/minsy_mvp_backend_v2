@@ -7,11 +7,11 @@
   },
 
   "universe": {
-    "market": "crypto",
-    "tickers": ["BTCUSDT"]
+    "market": "us_stocks",
+    "tickers": ["SPY"]
   },
 
-  "timeframe": "4h",
+  "timeframe": "1d",
 
   "factors": {
     "ema_9": {
