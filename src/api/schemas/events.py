@@ -78,3 +78,13 @@ class StrategyDetailResponse(BaseModel):
     status: str
     dsl_json: dict[str, Any]
     metadata: dict[str, Any]
+
+
+class StrategyDraftDetailResponse(BaseModel):
+    """Temporary strategy draft payload for pre-confirmation rendering."""
+
+    strategy_draft_id: UUID
+    session_id: UUID
+    dsl_json: dict[str, Any]
+    expires_at: datetime
+    metadata: dict[str, Any]

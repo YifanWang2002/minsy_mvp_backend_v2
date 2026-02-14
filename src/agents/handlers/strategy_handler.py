@@ -43,6 +43,10 @@ class StrategyHandler:
     ) -> PromptPieces:
         phase_data = ctx.session_artifacts.get(Phase.STRATEGY.value, {})
         profile = dict(phase_data.get("profile", {}))
+        stress_data = ctx.session_artifacts.get(Phase.STRESS_TEST.value, {})
+        stress_profile = dict(stress_data.get("profile", {}))
+        if "strategy_id" not in profile and isinstance(stress_profile.get("strategy_id"), str):
+            profile["strategy_id"] = stress_profile["strategy_id"]
         pre_strategy_data = ctx.session_artifacts.get(Phase.PRE_STRATEGY.value, {})
         pre_profile = dict(pre_strategy_data.get("profile", {}))
         missing = self._compute_missing(profile)
@@ -55,6 +59,7 @@ class StrategyHandler:
             missing_fields=missing,
             collected_fields=profile,
             pre_strategy_fields=pre_profile,
+            session_id=str(ctx.session_id) if ctx.session_id is not None else None,
         )
         return PromptPieces(
             instructions=instructions,
@@ -77,6 +82,10 @@ class StrategyHandler:
             {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)},
         )
         profile = dict(phase_data.get("profile", {}))
+        stress_data = artifacts.get(Phase.STRESS_TEST.value, {})
+        stress_profile = dict(stress_data.get("profile", {})) if isinstance(stress_data, dict) else {}
+        if "strategy_id" not in profile and isinstance(stress_profile.get("strategy_id"), str):
+            profile["strategy_id"] = stress_profile["strategy_id"]
 
         for patch in raw_patches:
             validated = self._validate_patch(patch)
@@ -105,10 +114,10 @@ class StrategyHandler:
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
         if ctx.language == "zh":
-            return "进入策略阶段：先产出完整 DSL 供前端确认，确认保存后再基于 strategy_id 做回测与迭代。"
+            return "进入策略阶段：先验证 DSL 并生成 strategy_draft_id 供前端渲染确认，确认保存后继续在本阶段完成回测与迭代。"
         return (
-            "Entering strategy phase: draft a full DSL for frontend confirmation first, "
-            "then use strategy_id for backtesting and iteration."
+            "Entering strategy phase: validate a full DSL and hand off strategy_draft_id "
+            "for frontend confirmation first, then keep backtesting and iteration in this same phase with strategy_id."
         )
 
     def _compute_missing(self, profile: dict[str, Any]) -> list[str]:

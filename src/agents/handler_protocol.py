@@ -37,6 +37,7 @@ class PhaseContext:
 
     user_id: UUID
     session_artifacts: dict[str, Any]
+    session_id: UUID | None = None
     language: str = "en"
     runtime_policy: RuntimePolicy = field(default_factory=RuntimePolicy)
 

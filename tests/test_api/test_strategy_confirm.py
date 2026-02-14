@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from copy import deepcopy
 from unittest.mock import patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
+from src.engine.strategy.draft_store import StrategyDraftRecord
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload
 from src.main import app
 
@@ -153,6 +155,7 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
                     "session_id": session_id,
                     "dsl_json": strategy_payload,
                     "auto_start_backtest": True,
+                    "advance_to_stress_test": True,
                     "language": "en",
                 },
             )
@@ -167,9 +170,13 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
 
             detail = client.get(f"/api/v1/sessions/{session_id}", headers=headers)
             assert detail.status_code == 200
-            artifacts = detail.json()["artifacts"]
+            detail_body = detail.json()
+            artifacts = detail_body["artifacts"]
             assert artifacts["strategy"]["profile"]["strategy_id"] == body["strategy_id"]
             assert artifacts["stress_test"]["profile"]["strategy_id"] == body["strategy_id"]
+            metadata = detail_body.get("metadata", {})
+            assert metadata.get("advance_to_stress_test_ignored") is True
+            assert isinstance(metadata.get("advance_to_stress_test_ignored_at"), str)
 
     # Last call is auto backtest bootstrap turn in strategy phase:
     # strategy + backtest tools should be available together.
@@ -222,3 +229,60 @@ def test_get_strategy_detail_by_id() -> None:
             assert body["session_id"] == session_id
             assert isinstance(body.get("dsl_json"), dict)
             assert body.get("dsl_json", {}).get("strategy")
+
+
+def test_get_strategy_draft_detail_by_id() -> None:
+    with patch(
+        "src.services.openai_stream_service.OpenAIResponsesEventStreamer.stream_events",
+        side_effect=Exception("stream not expected"),
+    ):
+        with TestClient(app) as client:
+            token = _register_and_get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            me_resp = client.get("/api/v1/auth/me", headers=headers)
+            assert me_resp.status_code == 200
+            user_id = me_resp.json().get("user_id")
+            assert isinstance(user_id, str) and user_id
+
+            create = client.post(
+                "/api/v1/chat/new-thread",
+                headers=headers,
+                json={"metadata": {}},
+            )
+            assert create.status_code == 201
+            session_id = create.json()["session_id"]
+
+            strategy_payload = load_strategy_payload(EXAMPLE_PATH)
+            strategy_draft_id = uuid4()
+            now = datetime.now(UTC)
+            draft = StrategyDraftRecord(
+                strategy_draft_id=strategy_draft_id,
+                user_id=UUID(user_id),
+                session_id=UUID(session_id),
+                dsl_json=strategy_payload,
+                payload_hash="abc123",
+                created_at=now,
+                expires_at=now + timedelta(hours=1),
+                ttl_seconds=3600,
+            )
+
+            async def _mock_get_strategy_draft(_strategy_draft_id: UUID):
+                if _strategy_draft_id != strategy_draft_id:
+                    return None
+                return draft
+
+            with patch(
+                "src.api.routers.strategies.get_strategy_draft",
+                side_effect=_mock_get_strategy_draft,
+            ):
+                detail = client.get(
+                    f"/api/v1/strategies/drafts/{strategy_draft_id}",
+                    headers=headers,
+                )
+
+            assert detail.status_code == 200
+            body = detail.json()
+            assert body["strategy_draft_id"] == str(strategy_draft_id)
+            assert body["session_id"] == session_id
+            assert isinstance(body.get("dsl_json"), dict)

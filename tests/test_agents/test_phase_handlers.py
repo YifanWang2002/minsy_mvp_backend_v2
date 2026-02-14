@@ -47,7 +47,7 @@ async def test_strategy_handler_collects_strategy_id_without_forcing_transition(
 
 
 @pytest.mark.asyncio
-async def test_stress_test_handler_done_and_failed_transitions() -> None:
+async def test_stress_test_handler_done_and_failed_return_to_strategy() -> None:
     handler = StressTestHandler()
     strategy_id = str(uuid4())
     job_id = str(uuid4())
@@ -66,24 +66,9 @@ async def test_stress_test_handler_done_and_failed_transitions() -> None:
         [{"backtest_job_id": job_id, "backtest_status": "done"}],
         object(),
     )
-    assert done_result.completed is False
-    assert done_result.next_phase is None
-
-    deploy_result = await handler.post_process(
-        ctx_done,
-        [{"stress_test_decision": "deploy"}],
-        object(),
-    )
-    assert deploy_result.completed is True
-    assert deploy_result.next_phase == Phase.DEPLOYMENT.value
-
-    iterate_result = await handler.post_process(
-        ctx_done,
-        [{"stress_test_decision": "iterate"}],
-        object(),
-    )
-    assert iterate_result.completed is True
-    assert iterate_result.next_phase == Phase.STRATEGY.value
+    assert done_result.completed is True
+    assert done_result.next_phase == Phase.STRATEGY.value
+    assert done_result.phase_status.get("stress_test_decision") == "hold"
 
     ctx_failed = PhaseContext(
         user_id=uuid4(),

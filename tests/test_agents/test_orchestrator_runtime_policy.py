@@ -9,7 +9,7 @@ import pytest
 from src.agents.handler_registry import init_all_artifacts
 from src.agents.orchestrator import ChatOrchestrator
 from src.api.schemas.requests import ChatSendRequest
-from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload
+from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
 from src.models.session import Session
 from src.models.user import User
 
@@ -182,7 +182,119 @@ async def test_strategy_phase_with_strategy_id_exposes_strategy_and_backtest_too
 
 
 @pytest.mark.asyncio
-async def test_stress_test_feedback_stage_exposes_strategy_and_backtest_tools(db_session) -> None:
+async def test_strategy_phase_message_strategy_id_unlocks_artifact_tools(db_session) -> None:
+    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    dsl_payload = load_strategy_payload(EXAMPLE_PATH)
+    created = await upsert_strategy_dsl(
+        db_session,
+        session_id=session.id,
+        dsl_payload=dsl_payload,
+        auto_commit=False,
+    )
+    await db_session.commit()
+    await db_session.refresh(session)
+    strategy_id = str(created.strategy.id)
+
+    streamer = _CaptureStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(
+        session_id=session.id,
+        message=f"Please update strategy_id {strategy_id} and rerun backtest.",
+    )
+    async for _ in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+        pass
+
+    assert streamer.calls
+    tools = streamer.calls[0]["tools"]
+    assert isinstance(tools, list) and tools
+    labels = {
+        tool.get("server_label")
+        for tool in tools
+        if isinstance(tool, dict)
+    }
+    assert "strategy" in labels
+    assert "backtest" in labels
+
+    await db_session.refresh(session)
+    strategy_profile = (
+        (session.artifacts or {})
+        .get("strategy", {})
+        .get("profile", {})
+    )
+    assert strategy_profile.get("strategy_id") == strategy_id
+
+
+@pytest.mark.asyncio
+async def test_strategy_phase_ignores_foreign_strategy_id_in_message(db_session) -> None:
+    user_a = User(email=f"orchestrator_rt_a_{uuid4().hex}@example.com", password_hash="hash", name="rt-a")
+    user_b = User(email=f"orchestrator_rt_b_{uuid4().hex}@example.com", password_hash="hash", name="rt-b")
+    db_session.add_all([user_a, user_b])
+    await db_session.flush()
+
+    session_a = Session(
+        user_id=user_a.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    session_b = Session(
+        user_id=user_b.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add_all([session_a, session_b])
+    await db_session.flush()
+
+    dsl_payload = load_strategy_payload(EXAMPLE_PATH)
+    created = await upsert_strategy_dsl(
+        db_session,
+        session_id=session_b.id,
+        dsl_payload=dsl_payload,
+        auto_commit=False,
+    )
+    await db_session.commit()
+    foreign_strategy_id = str(created.strategy.id)
+
+    streamer = _CaptureStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(
+        session_id=session_a.id,
+        message=f"Please patch strategy_id {foreign_strategy_id}.",
+    )
+    async for _ in orchestrator.handle_message_stream(user_a, payload, streamer, language="en"):
+        pass
+
+    assert streamer.calls
+    tools = streamer.calls[0]["tools"]
+    assert isinstance(tools, list) and tools
+    strategy_tools = next(
+        tool
+        for tool in tools
+        if isinstance(tool, dict) and tool.get("server_label") == "strategy"
+    )
+    assert strategy_tools["allowed_tools"] == ["strategy_validate_dsl"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_stress_test_session_is_redirected_to_strategy_phase(db_session) -> None:
     user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
     db_session.add(user)
     await db_session.flush()
@@ -209,8 +321,13 @@ async def test_stress_test_feedback_stage_exposes_strategy_and_backtest_tools(db
     orchestrator = ChatOrchestrator(db_session)
 
     payload = ChatSendRequest(session_id=session.id, message="analyze result and improve")
-    async for _ in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
-        pass
+    done_payload: dict[str, object] | None = None
+    async for chunk in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") == "done":
+            done_payload = envelope
 
     assert streamer.calls
     tools = streamer.calls[0]["tools"]
@@ -223,6 +340,12 @@ async def test_stress_test_feedback_stage_exposes_strategy_and_backtest_tools(db
     }
     assert "strategy" in labels
     assert "backtest" in labels
+    assert isinstance(done_payload, dict)
+    assert done_payload.get("phase") == "strategy"
+    await db_session.refresh(session)
+    assert session.current_phase == "strategy"
+    strategy_profile = ((session.artifacts or {}).get("strategy", {}) or {}).get("profile", {})
+    assert strategy_profile.get("strategy_id") == artifacts["stress_test"]["profile"]["strategy_id"]
 
 
 @pytest.mark.asyncio
@@ -264,6 +387,88 @@ async def test_strategy_phase_auto_wraps_first_full_dsl_into_strategy_genui(db_s
     )
     assert isinstance(strategy_card.get("dsl_json"), dict)
     assert strategy_card.get("source") == "auto_detected_first_dsl"
+
+
+@pytest.mark.asyncio
+async def test_strategy_phase_auto_wraps_validate_draft_id_into_strategy_ref_genui(db_session) -> None:
+    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    strategy_draft_id = str(uuid4())
+
+    class _McpOnlyStreamer:
+        async def stream_events(
+            self,
+            *,
+            model: str,
+            input_text: str,
+            instructions: str | None = None,
+            previous_response_id: str | None = None,
+            tools: list[dict[str, object]] | None = None,
+            tool_choice: dict[str, object] | None = None,
+            reasoning: dict[str, object] | None = None,
+        ) -> AsyncIterator[dict[str, object]]:
+            del model, input_text, instructions, previous_response_id, tools, tool_choice, reasoning
+            validate_output = {
+                "category": "strategy",
+                "tool": "strategy_validate_dsl",
+                "ok": True,
+                "errors": [],
+                "dsl_version": "1.0.0",
+                "strategy_draft_id": strategy_draft_id,
+            }
+            yield {
+                "type": "response.output_item.done",
+                "sequence_number": 1,
+                "item": {
+                    "type": "mcp_call",
+                    "id": "call_strategy_validate",
+                    "name": "strategy_validate_dsl",
+                    "status": "completed",
+                    "arguments": {"session_id": str(session.id)},
+                    "output": json.dumps(validate_output),
+                },
+            }
+            yield {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp_{uuid4().hex}",
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+
+    streamer = _McpOnlyStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="draft strategy dsl")
+    genui_payloads: list[dict[str, object]] = []
+    async for chunk in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") != "genui":
+            continue
+        candidate = envelope.get("payload")
+        if isinstance(candidate, dict):
+            genui_payloads.append(candidate)
+
+    assert genui_payloads
+    strategy_ref = next(
+        item for item in genui_payloads if item.get("type") == "strategy_ref"
+    )
+    assert strategy_ref.get("strategy_draft_id") == strategy_draft_id
+    assert strategy_ref.get("source") == "strategy_validate_dsl"
 
 
 @pytest.mark.asyncio

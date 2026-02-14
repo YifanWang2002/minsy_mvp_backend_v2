@@ -37,6 +37,7 @@ from src.config import settings
 from src.engine.strategy import validate_strategy_payload
 from src.models.phase_transition import PhaseTransition
 from src.models.session import Message, Session
+from src.models.strategy import Strategy
 from src.models.user import User, UserProfile
 from src.services.openai_stream_service import ResponsesEventStreamer
 from src.util.logger import log_agent
@@ -50,6 +51,9 @@ _PHASE_CARRYOVER_TAG = "PHASE CARRYOVER MEMORY"
 _PHASE_CARRYOVER_MAX_TURNS = 4
 _PHASE_CARRYOVER_MAX_CHARS_PER_UTTERANCE = 220
 _PHASE_CARRYOVER_META_KEY = "phase_carryover_memory"
+_UUID_CANDIDATE_PATTERN = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
 
 # Singleton for KYC-specific helpers (profile loading from UserProfile)
 _kyc_handler = KYCHandler()
@@ -130,6 +134,7 @@ class ChatOrchestrator:
         7. Persists the assistant message and updates session/profile state.
         """
         session = await self._resolve_session(user_id=user.id, session_id=payload.session_id)
+        await self._enforce_strategy_only_boundary(session=session)
         phase_before = session.current_phase
         user_runtime_policy = self._build_runtime_policy(payload)
         carryover_block = self._consume_phase_carryover_memory(session=session, phase=phase_before)
@@ -191,6 +196,13 @@ class ChatOrchestrator:
         # -- migrate artifacts if needed ---------------------------------
         artifacts = copy.deepcopy(session.artifacts or {})
         artifacts = self._ensure_phase_keyed(artifacts)
+        await self._hydrate_strategy_context(
+            session=session,
+            user_id=user.id,
+            phase=phase_before,
+            artifacts=artifacts,
+            user_message=payload.message,
+        )
         pre_strategy_instrument_before: str | None = None
         if phase_before == Phase.PRE_STRATEGY.value:
             pre_data = artifacts.get(Phase.PRE_STRATEGY.value)
@@ -211,6 +223,7 @@ class ChatOrchestrator:
         ctx = PhaseContext(
             user_id=user.id,
             session_artifacts=artifacts,
+            session_id=session.id,
             language=language,
             runtime_policy=runtime_policy,
         )
@@ -225,6 +238,7 @@ class ChatOrchestrator:
         full_text = ""
         completed_usage: dict[str, Any] = {}
         stream_error_message: str | None = None
+        stream_error_detail: dict[str, Any] | None = None
         mcp_call_records: dict[str, dict[str, Any]] = {}
         mcp_call_order: list[str] = []
         mcp_fallback_counter = 0
@@ -260,9 +274,19 @@ class ChatOrchestrator:
                 if event_type == "response.stream_error":
                     err = event.get("error")
                     if isinstance(err, dict):
+                        stream_error_detail = copy.deepcopy(err)
                         msg = err.get("message")
                         if isinstance(msg, str) and msg.strip():
                             stream_error_message = msg.strip()
+                        if not stream_error_message:
+                            diagnostics = err.get("diagnostics")
+                            if isinstance(diagnostics, dict):
+                                fallback_message = diagnostics.get("upstream_message")
+                                if (
+                                    isinstance(fallback_message, str)
+                                    and fallback_message.strip()
+                                ):
+                                    stream_error_message = fallback_message.strip()
                     if not stream_error_message:
                         stream_error_message = "Upstream stream interrupted."
                     continue
@@ -299,6 +323,11 @@ class ChatOrchestrator:
                             session.previous_response_id = resp_id
         except Exception as exc:  # noqa: BLE001
             stream_error_message = f"{type(exc).__name__}: {exc}"
+            stream_error_detail = {
+                "class": type(exc).__name__,
+                "message": str(exc),
+                "diagnostics": {"category": "orchestrator_stream_runtime_error"},
+            }
 
         # -- post-processing: extract patches / genui ---------------------
         cleaned_text, genui_payloads, raw_patches = self._extract_wrapped_payloads(full_text)
@@ -306,9 +335,13 @@ class ChatOrchestrator:
         if stream_error_message and not assistant_text:
             assistant_text = (
                 "The upstream AI stream was interrupted before completion. "
-                "Please retry this step."
+                f"Reason: {stream_error_message}. Please retry this step."
             )
 
+        final_mcp_tool_calls = self._build_persistable_mcp_tool_calls(
+            records=mcp_call_records,
+            order=mcp_call_order,
+        )
         selected_genui_payloads = normalize_genui_payloads(
             genui_payloads,
             allow_passthrough_unregistered=True,
@@ -318,6 +351,7 @@ class ChatOrchestrator:
             artifacts=artifacts,
             assistant_text=assistant_text,
             existing_genui=selected_genui_payloads,
+            mcp_tool_calls=final_mcp_tool_calls,
         )
 
         # -- delegate post-processing to handler --------------------------
@@ -341,10 +375,6 @@ class ChatOrchestrator:
             artifacts=result.artifacts,
             genui_payloads=filtered_genui_payloads,
             instrument_before=pre_strategy_instrument_before,
-        )
-        final_mcp_tool_calls = self._build_persistable_mcp_tool_calls(
-            records=mcp_call_records,
-            order=mcp_call_order,
         )
         persisted_tool_calls = [*filtered_genui_payloads, *final_mcp_tool_calls]
 
@@ -442,6 +472,7 @@ class ChatOrchestrator:
             "missing_fields": result.missing_fields,
             "usage": completed_usage,
             "stream_error": stream_error_message,
+            "stream_error_detail": stream_error_detail,
         })
 
         log_agent("orchestrator", f"session={session.id} phase={session.current_phase}")
@@ -572,6 +603,7 @@ class ChatOrchestrator:
         artifacts: dict[str, Any],
         assistant_text: str,
         existing_genui: list[dict[str, Any]],
+        mcp_tool_calls: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         if phase != Phase.STRATEGY.value:
             return existing_genui
@@ -586,24 +618,83 @@ class ChatOrchestrator:
         if isinstance(strategy_id, str) and strategy_id.strip():
             return existing_genui
 
+        strategy_draft_id = self._extract_strategy_draft_id_from_mcp_calls(mcp_tool_calls)
+        if strategy_draft_id is not None:
+            wrapped_ref = {
+                "type": _STRATEGY_REF_GENUI_TYPE,
+                "strategy_draft_id": strategy_draft_id,
+                "source": "strategy_validate_dsl",
+                "display_mode": "draft",
+            }
+            return self._append_genui_if_new(existing_genui=existing_genui, candidate=wrapped_ref)
+
         dsl_payload = self._try_extract_strategy_dsl_from_text(assistant_text)
         if not isinstance(dsl_payload, dict):
             return existing_genui
-
         wrapped = {
             "type": _STRATEGY_CARD_GENUI_TYPE,
             "dsl_json": dsl_payload,
             "source": "auto_detected_first_dsl",
             "display_mode": "draft",
         }
-        dedupe_key = json.dumps(wrapped, ensure_ascii=False, sort_keys=True)
+        return self._append_genui_if_new(existing_genui=existing_genui, candidate=wrapped)
+
+    @staticmethod
+    def _append_genui_if_new(
+        *,
+        existing_genui: list[dict[str, Any]],
+        candidate: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        dedupe_key = json.dumps(candidate, ensure_ascii=False, sort_keys=True)
         existing_keys = {
             json.dumps(item, ensure_ascii=False, sort_keys=True)
             for item in existing_genui
         }
         if dedupe_key in existing_keys:
             return existing_genui
-        return [*existing_genui, wrapped]
+        return [*existing_genui, candidate]
+
+    def _extract_strategy_draft_id_from_mcp_calls(
+        self,
+        mcp_tool_calls: list[dict[str, Any]],
+    ) -> str | None:
+        for item in reversed(mcp_tool_calls):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type", "")).strip().lower() != "mcp_call":
+                continue
+            if str(item.get("name", "")).strip() != "strategy_validate_dsl":
+                continue
+            if str(item.get("status", "")).strip().lower() != "success":
+                continue
+
+            output_payload = self._coerce_json_object(item.get("output"))
+            if not isinstance(output_payload, dict):
+                continue
+            if output_payload.get("ok") is not True:
+                continue
+            draft_id = self._coerce_uuid_text(output_payload.get("strategy_draft_id"))
+            if draft_id is None:
+                continue
+            return draft_id
+        return None
+
+    @staticmethod
+    def _coerce_json_object(value: Any) -> dict[str, Any] | None:
+        if isinstance(value, dict):
+            return dict(value)
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+        return None
 
     @staticmethod
     def _contains_strategy_genui(payloads: list[dict[str, Any]]) -> bool:
@@ -1044,6 +1135,186 @@ class ChatOrchestrator:
     # Private helpers – misc
     # ------------------------------------------------------------------
 
+    async def _enforce_strategy_only_boundary(self, *, session: Session) -> None:
+        """Redirect legacy stress-test sessions back into strategy phase.
+
+        Product boundary today keeps performance iteration inside strategy.
+        If an old session is still parked in ``stress_test``, we migrate it
+        before prompt/tool selection so the model never executes stress phase
+        instructions.
+        """
+        if session.current_phase != Phase.STRESS_TEST.value:
+            return
+
+        artifacts = self._ensure_phase_keyed(copy.deepcopy(session.artifacts or {}))
+        strategy_block = artifacts.setdefault(
+            Phase.STRATEGY.value,
+            {"profile": {}, "missing_fields": ["strategy_id"]},
+        )
+        stress_block = artifacts.setdefault(
+            Phase.STRESS_TEST.value,
+            {"profile": {}, "missing_fields": ["strategy_id", "backtest_job_id", "backtest_status"]},
+        )
+
+        strategy_profile_raw = strategy_block.get("profile")
+        strategy_profile = (
+            dict(strategy_profile_raw)
+            if isinstance(strategy_profile_raw, dict)
+            else {}
+        )
+        stress_profile_raw = stress_block.get("profile")
+        stress_profile = (
+            dict(stress_profile_raw)
+            if isinstance(stress_profile_raw, dict)
+            else {}
+        )
+
+        resolved_strategy_id = self._coerce_uuid_text(strategy_profile.get("strategy_id"))
+        if resolved_strategy_id is None:
+            resolved_strategy_id = self._coerce_uuid_text(stress_profile.get("strategy_id"))
+        if resolved_strategy_id is not None:
+            strategy_profile["strategy_id"] = resolved_strategy_id
+            raw_missing = strategy_block.get("missing_fields")
+            if isinstance(raw_missing, list):
+                strategy_block["missing_fields"] = [
+                    normalized
+                    for item in raw_missing
+                    if (normalized := str(item).strip()) and normalized != "strategy_id"
+                ]
+            else:
+                strategy_block["missing_fields"] = []
+
+        strategy_block["profile"] = strategy_profile
+        stress_block["profile"] = stress_profile
+        session.artifacts = artifacts
+
+        await self._transition_phase(
+            session=session,
+            to_phase=Phase.STRATEGY.value,
+            trigger="system",
+            metadata={"reason": "stress_test_disabled_redirect_to_strategy"},
+        )
+
+    async def _hydrate_strategy_context(
+        self,
+        *,
+        session: Session,
+        user_id: UUID,
+        phase: str,
+        artifacts: dict[str, Any],
+        user_message: str,
+    ) -> None:
+        if phase not in {Phase.STRATEGY.value, Phase.STRESS_TEST.value}:
+            return
+
+        strategy_block = artifacts.setdefault(
+            Phase.STRATEGY.value,
+            {"profile": {}, "missing_fields": ["strategy_id"]},
+        )
+        strategy_profile_raw = strategy_block.get("profile")
+        strategy_profile = (
+            dict(strategy_profile_raw)
+            if isinstance(strategy_profile_raw, dict)
+            else {}
+        )
+
+        stress_block = artifacts.setdefault(
+            Phase.STRESS_TEST.value,
+            {"profile": {}, "missing_fields": ["strategy_id", "backtest_job_id", "backtest_status"]},
+        )
+        stress_profile_raw = stress_block.get("profile")
+        stress_profile = (
+            dict(stress_profile_raw)
+            if isinstance(stress_profile_raw, dict)
+            else {}
+        )
+
+        resolved_strategy_id = self._coerce_uuid_text(strategy_profile.get("strategy_id"))
+        if resolved_strategy_id is None:
+            resolved_strategy_id = self._coerce_uuid_text(stress_profile.get("strategy_id"))
+        if resolved_strategy_id is None:
+            metadata = dict(session.metadata_ or {})
+            resolved_strategy_id = self._coerce_uuid_text(metadata.get("strategy_id"))
+
+        if resolved_strategy_id is None:
+            for candidate in self._extract_uuid_candidates(text=user_message):
+                if await self._strategy_belongs_to_user(user_id=user_id, strategy_id=candidate):
+                    resolved_strategy_id = candidate
+                    break
+
+        strategy_block["profile"] = strategy_profile
+        stress_block["profile"] = stress_profile
+        if resolved_strategy_id is None:
+            return
+
+        strategy_profile["strategy_id"] = resolved_strategy_id
+        if "strategy_id" not in stress_profile:
+            stress_profile["strategy_id"] = resolved_strategy_id
+
+        raw_strategy_missing = strategy_block.get("missing_fields")
+        if isinstance(raw_strategy_missing, list):
+            strategy_block["missing_fields"] = [
+                normalized
+                for item in raw_strategy_missing
+                if (normalized := str(item).strip()) and normalized != "strategy_id"
+            ]
+        else:
+            strategy_block["missing_fields"] = []
+
+        raw_stress_missing = stress_block.get("missing_fields")
+        if isinstance(raw_stress_missing, list):
+            stress_block["missing_fields"] = [
+                normalized
+                for item in raw_stress_missing
+                if (normalized := str(item).strip()) and normalized != "strategy_id"
+            ]
+
+    async def _strategy_belongs_to_user(
+        self,
+        *,
+        user_id: UUID,
+        strategy_id: str,
+    ) -> bool:
+        try:
+            strategy_uuid = UUID(strategy_id)
+        except ValueError:
+            return False
+
+        owned = await self.db.scalar(
+            select(Strategy.id).where(
+                Strategy.id == strategy_uuid,
+                Strategy.user_id == user_id,
+            )
+        )
+        return owned is not None
+
+    @staticmethod
+    def _coerce_uuid_text(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return str(UUID(text))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _extract_uuid_candidates(*, text: str) -> list[str]:
+        if not isinstance(text, str):
+            return []
+
+        output: list[str] = []
+        seen: set[str] = set()
+        for candidate in _UUID_CANDIDATE_PATTERN.findall(text):
+            normalized = ChatOrchestrator._coerce_uuid_text(candidate)
+            if normalized is None or normalized in seen:
+                continue
+            seen.add(normalized)
+            output.append(normalized)
+        return output
+
     def _resolve_runtime_policy(
         self,
         *,
@@ -1075,9 +1346,15 @@ class ChatOrchestrator:
         artifacts: dict[str, Any],
     ) -> HandlerRuntimePolicy:
         profile = self._extract_phase_profile(artifacts=artifacts, phase=Phase.STRATEGY.value)
-        strategy_id = profile.get("strategy_id")
+        strategy_id = self._coerce_uuid_text(profile.get("strategy_id"))
+        if strategy_id is None:
+            stress_profile = self._extract_phase_profile(
+                artifacts=artifacts,
+                phase=Phase.STRESS_TEST.value,
+            )
+            strategy_id = self._coerce_uuid_text(stress_profile.get("strategy_id"))
 
-        if isinstance(strategy_id, str) and strategy_id.strip():
+        if strategy_id is not None:
             return HandlerRuntimePolicy(
                 phase_stage="artifact_ops",
                 tool_mode="replace",

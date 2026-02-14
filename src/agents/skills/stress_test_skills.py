@@ -17,7 +17,7 @@ REQUIRED_FIELDS: list[str] = [
 ]
 
 VALID_STATUS_VALUES: set[str] = {"pending", "running", "done", "failed"}
-VALID_DECISION_VALUES: set[str] = {"hold", "iterate", "deploy"}
+VALID_DECISION_VALUES: set[str] = {"hold"}
 
 _LANGUAGE_NAMES: dict[str, str] = {
     "en": "English",
@@ -93,6 +93,7 @@ def build_stress_test_static_instructions(
 def build_stress_test_dynamic_state(
     *,
     collected_fields: dict[str, str] | None = None,
+    session_id: str | None = None,
 ) -> str:
     fields = dict(collected_fields or {})
     missing = [field for field in REQUIRED_FIELDS if not fields.get(field)]
@@ -101,14 +102,20 @@ def build_stress_test_dynamic_state(
     missing_str = ", ".join(missing) if missing else "none - all collected"
     collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
     decision = str(fields.get("stress_test_decision", "")).strip().lower() or "hold"
+    session_id_str = (
+        session_id.strip()
+        if isinstance(session_id, str) and session_id.strip()
+        else "unknown"
+    )
 
     return (
         "[SESSION STATE]\n"
+        f"- session_id_for_tool_calls: {session_id_str}\n"
         f"- already_collected: {collected}\n"
         f"- still_missing: {missing_str}\n"
         f"- has_missing_fields: {str(has_missing).lower()}\n"
         f"- next_missing_field: {next_missing}\n"
         f"- stress_test_decision: {decision}\n"
-        "- stress_test_decision_options: hold, iterate, deploy\n"
+        "- stress_test_decision_options: hold\n"
         "[/SESSION STATE]\n\n"
     )

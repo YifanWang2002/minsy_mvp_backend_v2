@@ -14,8 +14,8 @@ from src.agents.handler_protocol import (
 )
 from src.agents.phases import Phase
 from src.agents.skills.stress_test_skills import (
-    VALID_DECISION_VALUES,
     REQUIRED_FIELDS,
+    VALID_DECISION_VALUES,
     VALID_STATUS_VALUES,
     build_stress_test_dynamic_state,
     build_stress_test_static_instructions,
@@ -24,7 +24,11 @@ from src.config import settings
 
 
 class StressTestHandler:
-    """Implements backtest orchestration phase."""
+    """Legacy stress-test phase handler.
+
+    Current product boundary keeps all performance iteration in strategy.
+    Legacy sessions may still carry this phase in persisted rows.
+    """
 
     @property
     def phase_name(self) -> str:
@@ -58,7 +62,10 @@ class StressTestHandler:
             language=ctx.language,
             phase_stage=ctx.runtime_policy.phase_stage,
         )
-        state_block = build_stress_test_dynamic_state(collected_fields=profile)
+        state_block = build_stress_test_dynamic_state(
+            collected_fields=profile,
+            session_id=str(ctx.session_id) if ctx.session_id is not None else None,
+        )
         tool_choice = _build_stress_test_tool_choice(profile=profile)
         return PromptPieces(
             instructions=instructions,
@@ -102,18 +109,13 @@ class StressTestHandler:
         reason: str | None = None
 
         if status == "done" and not missing:
-            if decision == "deploy":
-                completed = True
-                next_phase = Phase.DEPLOYMENT.value
-                reason = "stress_test_done_to_deployment"
-            elif decision == "iterate":
-                completed = True
-                next_phase = Phase.STRATEGY.value
-                reason = "stress_test_done_back_to_strategy_for_iteration"
+            completed = True
+            next_phase = Phase.STRATEGY.value
+            reason = "stress_test_legacy_done_back_to_strategy"
         elif status == "failed":
             completed = True
             next_phase = Phase.STRATEGY.value
-            reason = "stress_test_failed_back_to_strategy"
+            reason = "stress_test_legacy_failed_back_to_strategy"
             missing = []
 
         phase_data["profile"] = profile
@@ -144,8 +146,11 @@ class StressTestHandler:
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
         if ctx.language == "zh":
-            return "进入回测阶段：创建 backtest job 并跟踪状态，完成后给出结果摘要。"
-        return "Entering stress-test phase: create a backtest job and track status to completion."
+            return "当前版本不启用 stress_test 阶段：将回到策略阶段继续回测与迭代。"
+        return (
+            "Stress-test phase is currently disabled in this version: "
+            "the flow returns to strategy for backtest iteration."
+        )
 
     def _compute_missing(self, profile: dict[str, Any]) -> list[str]:
         return [field for field in REQUIRED_FIELDS if not _has_value(profile.get(field))]

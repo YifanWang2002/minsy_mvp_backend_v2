@@ -113,16 +113,33 @@ async def test_indicator_catalog_and_detail_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_strategy_validate_dsl_tool_covers_pass_and_fail() -> None:
+async def test_strategy_validate_dsl_tool_covers_pass_and_fail(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_validate@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+
     mcp = FastMCP("test-strategy-tools-validate")
     strategy_tools.register_strategy_tools(mcp)
 
     payload = load_strategy_payload(EXAMPLE_PATH)
-    valid_call = await mcp.call_tool("strategy_validate_dsl", {"dsl_json": json.dumps(payload)})
+    valid_call = await mcp.call_tool(
+        "strategy_validate_dsl",
+        {
+            "dsl_json": json.dumps(payload),
+            "session_id": str(session.id),
+        },
+    )
     valid_payload = _extract_payload(valid_call)
 
     assert valid_payload["ok"] is True
     assert valid_payload["errors"] == []
+    assert isinstance(valid_payload.get("strategy_draft_id"), str)
 
     invalid_payload = deepcopy(payload)
     invalid_payload.pop("timeframe", None)

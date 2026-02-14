@@ -13,23 +13,58 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.orchestrator import ChatOrchestrator
-from src.agents.phases import Phase, can_transition
+from src.agents.phases import Phase
 from src.api.middleware.auth import get_current_user
-from src.api.schemas.events import StrategyConfirmResponse, StrategyDetailResponse
+from src.api.schemas.events import (
+    StrategyConfirmResponse,
+    StrategyDetailResponse,
+    StrategyDraftDetailResponse,
+)
 from src.api.schemas.requests import ChatSendRequest, StrategyConfirmRequest
 from src.dependencies import get_db, get_responses_event_streamer
 from src.engine.strategy import (
     StrategyDslValidationException,
     StrategyStorageNotFoundError,
+    get_strategy_draft,
     get_strategy_or_raise,
     upsert_strategy_dsl,
 )
-from src.models.phase_transition import PhaseTransition
 from src.models.session import Session
 from src.models.user import User
 from src.services.openai_stream_service import ResponsesEventStreamer
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
+
+
+@router.get("/drafts/{strategy_draft_id}", response_model=StrategyDraftDetailResponse)
+async def get_strategy_draft_detail(
+    strategy_draft_id: UUID,
+    user: User = Depends(get_current_user),
+) -> StrategyDraftDetailResponse:
+    draft = await get_strategy_draft(strategy_draft_id)
+    if draft is None or draft.user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "STRATEGY_DRAFT_NOT_FOUND",
+                "message": "Strategy draft not found.",
+            },
+        )
+
+    return StrategyDraftDetailResponse(
+        strategy_draft_id=draft.strategy_draft_id,
+        session_id=draft.session_id,
+        dsl_json=draft.dsl_json,
+        expires_at=draft.expires_at,
+        metadata={
+            "user_id": str(draft.user_id),
+            "session_id": str(draft.session_id),
+            "payload_hash": draft.payload_hash,
+            "created_at": draft.created_at.isoformat(),
+            "expires_at": draft.expires_at.isoformat(),
+            "ttl_seconds": draft.ttl_seconds,
+        },
+    )
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetailResponse)
@@ -160,43 +195,14 @@ async def confirm_strategy(
     session.artifacts = artifacts
     session.last_activity_at = datetime.now(UTC)
 
-    if payload.advance_to_stress_test and session.current_phase != Phase.STRESS_TEST.value:
-        if not can_transition(session.current_phase, Phase.STRESS_TEST.value):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Invalid phase transition for confirmation: "
-                    f"{session.current_phase} -> {Phase.STRESS_TEST.value}"
-                ),
-            )
-
-        from_phase = session.current_phase
-        session.current_phase = Phase.STRESS_TEST.value
-        # Break previous Responses API thread when moving into stress_test.
-        session.previous_response_id = None
-
+    # Keep the session in strategy phase for performance-driven iteration.
+    # `advance_to_stress_test` is currently ignored until dedicated stress-test
+    # tools are shipped.
+    if payload.advance_to_stress_test:
         next_meta = dict(session.metadata_ or {})
-        next_meta.update(
-            {
-                "reason": "strategy_confirmed_from_frontend",
-                "strategy_id": str(receipt.strategy_id),
-                "phase_transition_at": datetime.now(UTC).isoformat(),
-            },
-        )
+        next_meta["advance_to_stress_test_ignored"] = True
+        next_meta["advance_to_stress_test_ignored_at"] = datetime.now(UTC).isoformat()
         session.metadata_ = next_meta
-
-        db.add(
-            PhaseTransition(
-                session_id=session.id,
-                from_phase=from_phase,
-                to_phase=Phase.STRESS_TEST.value,
-                trigger="user_action",
-                metadata_={
-                    "reason": "strategy_confirmed_from_frontend",
-                    "strategy_id": str(receipt.strategy_id),
-                },
-            )
-        )
 
     await db.commit()
     await db.refresh(session)

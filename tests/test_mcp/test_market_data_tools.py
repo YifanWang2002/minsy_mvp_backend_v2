@@ -125,6 +125,25 @@ def _make_fake_yfinance_ticker_class() -> type:
     return FakeTicker
 
 
+def _make_empty_yfinance_ticker_class() -> type:
+    class EmptyTicker:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        @property
+        def info(self) -> dict[str, Any]:
+            return {}
+
+        @property
+        def fast_info(self) -> dict[str, Any]:
+            return {}
+
+        def history(self, **_: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    return EmptyTicker
+
+
 @pytest.mark.asyncio
 async def test_local_data_tools(loader_with_mock_parquet: DataLoader, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
@@ -208,3 +227,45 @@ async def test_yfinance_wrappers_cover_four_markets(
         assert metadata_payload["ok"] is True
         assert metadata_payload["yfinance_symbol"] == expected_yf_symbol
         assert metadata_payload["metadata"]["symbol"] == expected_yf_symbol
+
+
+@pytest.mark.asyncio
+async def test_market_data_tools_error_payload_shape(
+    loader_with_mock_parquet: DataLoader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
+    monkeypatch.setattr(market_tools, "_ticker_fast_info_summary", lambda *_args, **_kwargs: {})
+    empty_ticker = _make_empty_yfinance_ticker_class()
+    monkeypatch.setattr(market_tools.yf, "Ticker", empty_ticker)
+
+    mcp = FastMCP("test-market-data-errors")
+    market_tools.register_market_data_tools(mcp)
+
+    invalid_quote = await mcp.call_tool(
+        "get_symbol_quote",
+        {"market": "invalid_market", "symbol": "AAPL"},
+    )
+    invalid_quote_payload = _extract_payload(invalid_quote)
+    assert invalid_quote_payload["ok"] is False
+    assert isinstance(invalid_quote_payload["error"], dict)
+    assert invalid_quote_payload["error"]["code"] == "INVALID_INPUT"
+    assert "message" in invalid_quote_payload["error"]
+    assert isinstance(invalid_quote_payload.get("context"), dict)
+
+    no_quote = await mcp.call_tool(
+        "get_symbol_quote",
+        {"market": "stock", "symbol": "AAPL"},
+    )
+    no_quote_payload = _extract_payload(no_quote)
+    assert no_quote_payload["ok"] is False
+    assert no_quote_payload["error"]["code"] == "QUOTE_NOT_FOUND"
+    assert isinstance(no_quote_payload.get("context"), dict)
+
+    invalid_candles = await mcp.call_tool(
+        "get_symbol_candles",
+        {"market": "stock", "symbol": "AAPL", "interval": "bad"},
+    )
+    invalid_candles_payload = _extract_payload(invalid_candles)
+    assert invalid_candles_payload["ok"] is False
+    assert invalid_candles_payload["error"]["code"] == "INVALID_INPUT"

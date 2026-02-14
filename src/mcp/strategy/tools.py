@@ -15,6 +15,7 @@ from src.engine.feature.indicators import IndicatorCategory, IndicatorRegistry
 from src.engine.strategy import (
     StrategyDslValidationException,
     StrategyPatchApplyError,
+    create_strategy_draft,
     StrategyRevisionNotFoundError,
     StrategyStorageNotFoundError,
     StrategyVersionConflictError,
@@ -517,7 +518,10 @@ def register_strategy_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    def strategy_validate_dsl(dsl_json: str) -> str:
+    async def strategy_validate_dsl(
+        dsl_json: str,
+        session_id: str = "",
+    ) -> str:
         try:
             payload = _parse_payload(dsl_json)
         except ValueError as exc:
@@ -528,16 +532,68 @@ def register_strategy_tools(mcp: FastMCP) -> None:
                 error_message=str(exc),
             )
 
+        session_uuid: UUID | None = None
+        if session_id.strip():
+            try:
+                session_uuid = _parse_uuid(session_id, "session_id")
+            except ValueError as exc:
+                return _payload(
+                    tool="strategy_validate_dsl",
+                    ok=False,
+                    error_code="INVALID_INPUT",
+                    error_message=str(exc),
+                )
+
         validation = validate_strategy_payload(payload)
+        if not validation.is_valid:
+            return _payload(
+                tool="strategy_validate_dsl",
+                ok=False,
+                data={
+                    "errors": _validation_errors_to_dict(validation.errors),
+                    "dsl_version": payload.get("dsl_version", ""),
+                },
+                error_code="STRATEGY_VALIDATION_FAILED",
+                error_message="Strategy DSL validation failed.",
+            )
+
+        response_data: dict[str, Any] = {
+            "errors": [],
+            "dsl_version": payload.get("dsl_version", ""),
+        }
+
+        if session_uuid is not None:
+            try:
+                async with await _new_db_session() as db:
+                    session_user_id = await get_session_user_id(db, session_id=session_uuid)
+                draft = await create_strategy_draft(
+                    user_id=session_user_id,
+                    session_id=session_uuid,
+                    dsl_json=payload,
+                )
+            except StrategyStorageNotFoundError as exc:
+                return _payload(
+                    tool="strategy_validate_dsl",
+                    ok=False,
+                    error_code="STRATEGY_STORAGE_NOT_FOUND",
+                    error_message=str(exc),
+                )
+            except Exception as exc:  # noqa: BLE001
+                return _payload(
+                    tool="strategy_validate_dsl",
+                    ok=False,
+                    error_code="STRATEGY_DRAFT_STORE_ERROR",
+                    error_message=f"{type(exc).__name__}: {exc}",
+                )
+
+            response_data["strategy_draft_id"] = str(draft.strategy_draft_id)
+            response_data["draft_expires_at"] = draft.expires_at.isoformat()
+            response_data["draft_ttl_seconds"] = draft.ttl_seconds
+
         return _payload(
             tool="strategy_validate_dsl",
-            ok=validation.is_valid,
-            data={
-                "errors": _validation_errors_to_dict(validation.errors),
-                "dsl_version": payload.get("dsl_version", ""),
-            },
-            error_code="STRATEGY_VALIDATION_FAILED" if not validation.is_valid else None,
-            error_message="Strategy DSL validation failed." if not validation.is_valid else None,
+            ok=True,
+            data=response_data,
         )
 
     @mcp.tool()

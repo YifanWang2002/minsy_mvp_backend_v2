@@ -162,11 +162,13 @@ Modes: `fixed_qty` (+ `qty`), `fixed_cash` (+ `cash`), `pct_equity` (+ `pct` as 
 
 ## Workflow After Generation
 
-1. You output the JSON strategy.
-2. User reviews and confirms → frontend sends to backend.
-3. Backend returns `strategy_id`.
-4. User provides `strategy_id` → you call MCP tools:
-   - `strategy_validate_dsl(dsl_json=...)` → validate edits before persistence
+1. You build a complete JSON strategy draft.
+2. Call `strategy_validate_dsl(session_id=..., dsl_json=...)`.
+3. If valid, tool returns temporary `strategy_draft_id`; emit `strategy_ref` for frontend rendering.
+4. User reviews/edits and confirms → frontend sends DSL to backend confirm API.
+5. Backend returns formal `strategy_id`.
+6. User provides `strategy_id` → you call MCP tools:
+   - `strategy_validate_dsl(session_id=..., dsl_json=...)` → validate edits before persistence
    - `strategy_get_dsl(session_id=..., strategy_id=...)` → fetch latest payload + version
    - `strategy_patch_dsl(session_id=..., strategy_id=..., patch_json=..., expected_version=...)` → persist minimal changes
    - `strategy_list_versions(session_id=..., strategy_id=..., limit=...)` → inspect revision history
@@ -174,8 +176,8 @@ Modes: `fixed_qty` (+ `qty`), `fixed_cash` (+ `cash`), `pct_equity` (+ `pct` as 
    - `strategy_get_version_dsl(session_id=..., strategy_id=..., version=...)` → fetch historical snapshot
    - `strategy_rollback_dsl(session_id=..., strategy_id=..., target_version=..., expected_version=...)` → rollback by creating a new latest version
    - `strategy_upsert_dsl(session_id=..., strategy_id=..., dsl_json=...)` → fallback full-payload persistence
-   - `backtest_create_job(strategy_id=..., ...)` and `backtest_get_job(job_id=...)` → run and review stress test
-5. Iterate based on results.
+   - `backtest_create_job(strategy_id=..., ...)` and `backtest_get_job(job_id=...)` → run and review performance in the strategy iteration loop
+7. Iterate based on results.
 
 Use only the currently documented MCP tools in this file.
 

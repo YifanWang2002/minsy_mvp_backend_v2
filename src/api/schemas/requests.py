@@ -57,6 +57,8 @@ class StrategyConfirmRequest(BaseModel):
     dsl_json: dict[str, Any] | str
     strategy_id: UUID | None = None
     auto_start_backtest: bool = False
+    # Deprecated compatibility field. Currently ignored: strategy iteration
+    # remains in strategy phase until dedicated stress-test tools are available.
     advance_to_stress_test: bool = False
     language: str = Field(default="en", min_length=2, max_length=16)
     auto_message: str | None = Field(default=None, max_length=4000)

@@ -93,41 +93,64 @@ def _get_data_loader() -> DataLoader:
     return DataLoader()
 
 
-def _build_success_payload(tool: str, data: dict[str, Any]) -> str:
-    payload = {
-        "category": "market_data",
-        "tool": tool,
-        "ok": True,
-        **data,
-        "timestamp_utc": utc_now_iso(),
-    }
-    log_mcp_tool_result(category="market_data", tool=tool, ok=True)
-    return to_json(payload)
-
-
-def _build_error_payload(
+def _payload(
     *,
     tool: str,
-    error: str,
+    ok: bool,
+    data: dict[str, Any] | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
     context: dict[str, Any] | None = None,
 ) -> str:
     payload: dict[str, Any] = {
         "category": "market_data",
         "tool": tool,
-        "ok": False,
-        "error": error,
+        "ok": ok,
         "timestamp_utc": utc_now_iso(),
     }
+    resolved_error_code: str | None = None
+    resolved_error_message: str | None = None
+
+    if data:
+        payload.update(data)
     if context:
         payload["context"] = context
+    if not ok:
+        resolved_error_code = error_code or "UNKNOWN_ERROR"
+        resolved_error_message = error_message or "Unknown error"
+        payload["error"] = {
+            "code": resolved_error_code,
+            "message": resolved_error_message,
+        }
+
     log_mcp_tool_result(
         category="market_data",
         tool=tool,
-        ok=False,
-        error_code="TOOL_ERROR",
-        error_message=error,
+        ok=ok,
+        error_code=resolved_error_code,
+        error_message=resolved_error_message,
     )
     return to_json(payload)
+
+
+def _build_success_payload(tool: str, data: dict[str, Any]) -> str:
+    return _payload(tool=tool, ok=True, data=data)
+
+
+def _build_error_payload(
+    *,
+    tool: str,
+    error_code: str,
+    error_message: str,
+    context: dict[str, Any] | None = None,
+) -> str:
+    return _payload(
+        tool=tool,
+        ok=False,
+        error_code=error_code,
+        error_message=error_message,
+        context=context,
+    )
 
 
 def _normalize_market(market: str) -> str:
@@ -295,7 +318,8 @@ def check_symbol_available(symbol: str, market: str = "") -> str:
     if not symbol_key:
         return _build_error_payload(
             tool="check_symbol_available",
-            error="symbol cannot be empty",
+            error_code="INVALID_INPUT",
+            error_message="symbol cannot be empty",
             context={"symbol": symbol, "market": market},
         )
 
@@ -324,10 +348,18 @@ def check_symbol_available(symbol: str, market: str = "") -> str:
                 "matched_markets": matched_markets,
             },
         )
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="check_symbol_available",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context={"symbol": symbol, "market": market},
+        )
     except Exception as exc:  # noqa: BLE001
         return _build_error_payload(
             tool="check_symbol_available",
-            error=str(exc),
+            error_code="SYMBOL_LOOKUP_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
             context={"symbol": symbol, "market": market},
         )
 
@@ -337,7 +369,7 @@ def get_available_symbols(market: str) -> str:
     loader = _get_data_loader()
     try:
         market_key = loader.normalize_market(market)
-        symbols = loader.get_available_symbols(market)
+        symbols = loader.get_available_symbols(market_key)
         return _build_success_payload(
             tool="get_available_symbols",
             data={
@@ -346,10 +378,18 @@ def get_available_symbols(market: str) -> str:
                 "symbols": symbols,
             },
         )
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="get_available_symbols",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context={"market": market},
+        )
     except Exception as exc:  # noqa: BLE001
         return _build_error_payload(
             tool="get_available_symbols",
-            error=str(exc),
+            error_code="SYMBOL_LIST_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
             context={"market": market},
         )
 
@@ -371,10 +411,18 @@ def get_symbol_data_coverage(market: str, symbol: str) -> str:
                 "metadata": metadata,
             },
         )
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="get_symbol_data_coverage",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context={"market": market, "symbol": symbol},
+        )
     except Exception as exc:  # noqa: BLE001
         return _build_error_payload(
             tool="get_symbol_data_coverage",
-            error=str(exc),
+            error_code="COVERAGE_LOOKUP_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
             context={"market": market, "symbol": symbol},
         )
 
@@ -418,7 +466,8 @@ def get_symbol_quote(symbol: str, market: str) -> str:
         if not summary:
             return _build_error_payload(
                 tool="get_symbol_quote",
-                error=f"No quote data found for {symbol_key}",
+                error_code="QUOTE_NOT_FOUND",
+                error_message=f"No quote data found for {symbol_key}",
                 context={
                     "market": market_key,
                     "symbol": symbol_key,
@@ -435,10 +484,19 @@ def get_symbol_quote(symbol: str, market: str) -> str:
                 "quote": summary,
             },
         )
-    except Exception as exc:  # noqa: BLE001
+    except ValueError as exc:
         return _build_error_payload(
             tool="get_symbol_quote",
-            error=str(exc),
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context={"market": market, "symbol": symbol},
+        )
+    except Exception as exc:  # noqa: BLE001
+        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "QUOTE_FETCH_ERROR"
+        return _build_error_payload(
+            tool="get_symbol_quote",
+            error_code=code,
+            error_message=f"{type(exc).__name__}: {exc}",
             context={"market": market, "symbol": symbol},
         )
 
@@ -495,7 +553,8 @@ def get_symbol_candles(
         if not records:
             return _build_error_payload(
                 tool="get_symbol_candles",
-                error=f"No candles found for {symbol_key}",
+                error_code="CANDLES_NOT_FOUND",
+                error_message=f"No candles found for {symbol_key}",
                 context={
                     "market": market_key,
                     "symbol": symbol_key,
@@ -525,10 +584,26 @@ def get_symbol_candles(
                 "candles": records,
             },
         )
-    except Exception as exc:  # noqa: BLE001
+    except ValueError as exc:
         return _build_error_payload(
             tool="get_symbol_candles",
-            error=str(exc),
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context={
+                "market": market,
+                "symbol": symbol,
+                "period": period,
+                "interval": interval,
+                "start": start,
+                "end": end,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "CANDLES_FETCH_ERROR"
+        return _build_error_payload(
+            tool="get_symbol_candles",
+            error_code=code,
+            error_message=f"{type(exc).__name__}: {exc}",
             context={
                 "market": market,
                 "symbol": symbol,
@@ -562,7 +637,8 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
         if not info:
             return _build_error_payload(
                 tool="get_symbol_metadata",
-                error=f"No metadata found for {symbol_key}",
+                error_code="METADATA_NOT_FOUND",
+                error_message=f"No metadata found for {symbol_key}",
                 context={
                     "market": market_key,
                     "symbol": symbol_key,
@@ -580,10 +656,19 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
                 "metadata": info,
             },
         )
-    except Exception as exc:  # noqa: BLE001
+    except ValueError as exc:
         return _build_error_payload(
             tool="get_symbol_metadata",
-            error=str(exc),
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context={"market": market, "symbol": symbol},
+        )
+    except Exception as exc:  # noqa: BLE001
+        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "METADATA_FETCH_ERROR"
+        return _build_error_payload(
+            tool="get_symbol_metadata",
+            error_code=code,
+            error_message=f"{type(exc).__name__}: {exc}",
             context={"market": market, "symbol": symbol},
         )
 

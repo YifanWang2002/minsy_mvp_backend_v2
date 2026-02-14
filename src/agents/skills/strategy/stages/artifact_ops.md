@@ -1,6 +1,7 @@
 [STAGE_MARKER_STRATEGY_ARTIFACT_OPS]
 Stage objective:
 - Assume a confirmed strategy artifact already exists and stay in strategy phase.
+- Keep all performance/backtest analysis in this phase (do not hand off to `stress_test`).
 - For update-by-id, prefer:
   1) `strategy_get_dsl` (latest payload + version)
   2) `strategy_patch_dsl` with minimal patch ops and `expected_version`
