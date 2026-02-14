@@ -1,0 +1,185 @@
+{
+  "dsl_version": "1.0.0",
+
+  "strategy": {
+    "name": "EMA Cross + RSI Filter + ATR Risk (Demo)",
+    "description": "Demo strategy: deterministic factor IDs, cross/compare logic tree, first-hit exits with bracket risk-reward."
+  },
+
+  "universe": {
+    "market": "crypto",
+    "tickers": ["BTCUSDT"]
+  },
+
+  "timeframe": "4h",
+
+  "factors": {
+    "ema_9": {
+      "type": "ema",
+      "params": { "period": 9, "source": "close" }
+    },
+    "ema_21": {
+      "type": "ema",
+      "params": { "period": 21, "source": "close" }
+    },
+    "ema_21_typical": {
+      "type": "ema",
+      "params": { "period": 21, "source": "typical" }
+    },
+    "rsi_14": {
+      "type": "rsi",
+      "params": { "period": 14, "source": "close" }
+    },
+    "atr_14": {
+      "type": "atr",
+      "params": { "period": 14 }
+    },
+    "macd_12_26_9": {
+      "type": "macd",
+      "params": { "fast": 12, "slow": 26, "signal": 9, "source": "close" },
+      "outputs": ["macd_line", "signal", "histogram"]
+    }
+  },
+
+  "trade": {
+    "long": {
+      "position_sizing": {
+        "mode": "pct_equity",
+        "pct": 0.25
+      },
+      "entry": {
+        "order": { "type": "market" },
+        "condition": {
+          "all": [
+            {
+              "cross": {
+                "a": { "ref": "ema_9" },
+                "op": "cross_above",
+                "b": { "ref": "ema_21" }
+              }
+            },
+            {
+              "cmp": {
+                "left": { "ref": "rsi_14" },
+                "op": "lt",
+                "right": 70
+              }
+            },
+            {
+              "not": {
+                "cmp": {
+                  "left": { "ref": "rsi_14" },
+                  "op": "gt",
+                  "right": 85
+                }
+              }
+            },
+            {
+              "cmp": {
+                "left": { "ref": "macd_12_26_9.macd_line" },
+                "op": "gt",
+                "right": { "ref": "macd_12_26_9.signal" }
+              }
+            }
+          ]
+        }
+      },
+      "exits": [
+        {
+          "type": "signal_exit",
+          "name": "exit_on_cross_down",
+          "order": { "type": "market" },
+          "condition": {
+            "any": [
+              {
+                "cross": {
+                  "a": { "ref": "ema_9" },
+                  "op": "cross_below",
+                  "b": { "ref": "ema_21" }
+                }
+              },
+              {
+                "cmp": {
+                  "left": { "ref": "rsi_14" },
+                  "op": "gt",
+                  "right": 80
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "stop_loss",
+          "name": "sl_atr_2x",
+          "stop": { "kind": "atr_multiple", "atr_ref": "atr_14", "multiple": 2.0 }
+        },
+        {
+          "type": "bracket_rr",
+          "name": "tp_from_sl_rr2",
+          "stop": { "kind": "atr_multiple", "atr_ref": "atr_14", "multiple": 2.0 },
+          "risk_reward": 2.0
+        }
+      ]
+    },
+
+    "short": {
+      "position_sizing": {
+        "mode": "pct_equity",
+        "pct": 0.25
+      },
+      "entry": {
+        "order": { "type": "market" },
+        "condition": {
+          "all": [
+            {
+              "cross": {
+                "a": { "ref": "ema_9" },
+                "op": "cross_below",
+                "b": { "ref": "ema_21" }
+              }
+            },
+            {
+              "cmp": {
+                "left": { "ref": "rsi_14" },
+                "op": "gt",
+                "right": 30
+              }
+            },
+            {
+              "cmp": {
+                "left": { "ref": "macd_12_26_9.macd_line" },
+                "op": "lt",
+                "right": { "ref": "macd_12_26_9.signal" }
+              }
+            }
+          ]
+        }
+      },
+      "exits": [
+        {
+          "type": "signal_exit",
+          "name": "exit_on_cross_up",
+          "order": { "type": "market" },
+          "condition": {
+            "cross": {
+              "a": { "ref": "ema_9" },
+              "op": "cross_above",
+              "b": { "ref": "ema_21" }
+            }
+          }
+        },
+        {
+          "type": "stop_loss",
+          "name": "sl_atr_2x",
+          "stop": { "kind": "atr_multiple", "atr_ref": "atr_14", "multiple": 2.0 }
+        },
+        {
+          "type": "bracket_rr",
+          "name": "tp_from_sl_rr2",
+          "stop": { "kind": "atr_multiple", "atr_ref": "atr_14", "multiple": 2.0 },
+          "risk_reward": 2.0
+        }
+      ]
+    }
+  }
+}

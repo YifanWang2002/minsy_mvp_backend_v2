@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yourplatform.com/schemas/strategy-dsl/1.0.0/schema.json",
+  "title": "Quant Strategy DSL (v1.0.0)",
+  "description": "A strict, extensible, AI-generatable DSL for defining quantitative trading strategies. Backend-managed fields (strategy_id, author_id, version, updated_at) are injected by the platform and NOT part of the AI-generated payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dsl_version", "strategy", "universe", "timeframe", "factors", "trade"],
+  "properties": {
+
+    "dsl_version": { "$ref": "#/$defs/semver" },
+
+    "strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name":        { "type": "string", "minLength": 1, "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 2048 }
+      },
+      "patternProperties": { "^x-": {} }
+    },
+
+    "universe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["market", "tickers"],
+      "properties": {
+        "market": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "tickers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "uniqueItems": true
+        }
+      },
+      "patternProperties": { "^x-": {} }
+    },
+
+    "timeframe": { "$ref": "#/$defs/timeframe" },
+
+    "factors": {
+      "type": "object",
+      "description": "All factors (indicators, and in future: patterns, ML signals, etc.) required by this strategy. Keys are deterministic factor IDs.",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$": { "$ref": "#/$defs/factor_def" },
+        "^x-": {}
+      }
+    },
+
+    "trade": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Trading rules. At least one of long/short must be defined.",
+      "properties": {
+        "long":  { "$ref": "#/$defs/side_def" },
+        "short": { "$ref": "#/$defs/side_def" }
+      },
+      "patternProperties": { "^x-": {} },
+      "anyOf": [
+        { "required": ["long"] },
+        { "required": ["short"] }
+      ]
+    }
+  },
+
+  "$defs": {
+
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+
+    "timeframe": {
+      "type": "string",
+      "description": "Bar interval. Examples: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w",
+      "pattern": "^[1-9][0-9]*(s|m|h|d|w)$"
+    },
+
+    "price_source": {
+      "type": "string",
+      "enum": ["open", "high", "low", "close", "hl2", "hlc3", "ohlc4", "typical"]
+    },
+
+    "ref": {
+      "type": "string",
+      "description": "Reference to a data series. price.close, price.high, volume, or factor outputs like ema_20, macd_12_26_9.histogram",
+      "pattern": "^(price\\.(open|high|low|close|hl2|hlc3|ohlc4|typical)|volume|[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?:\\.[a-z][a-z0-9_]*)?)$"
+    },
+
+    "operand": {
+      "description": "A value in a condition: either a literal number, or a {ref} object pointing to a data series.",
+      "oneOf": [
+        { "type": "number" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "ref":    { "$ref": "#/$defs/ref" },
+            "offset": {
+              "type": "integer",
+              "maximum": 0,
+              "default": 0,
+              "description": "Bar offset. 0 = current, -1 = previous, -N = N bars ago."
+            }
+          }
+        }
+      ]
+    },
+
+    "factor_def": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "params"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Factor type from the platform catalogue. e.g. ema, rsi, atr, macd",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "params": {
+          "type": "object",
+          "description": "Factor-specific parameters. Primitives only; engine validates semantics.",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "number" },
+              { "type": "boolean" },
+              { "type": "string" },
+              { "type": "null" }
+            ]
+          },
+          "properties": {
+            "source": { "$ref": "#/$defs/price_source" }
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "description": "Explicit output names for multi-output factors. Engine may infer if omitted.",
+          "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "uniqueItems": true
+        }
+      },
+      "patternProperties": { "^x-": {} }
+    },
+
+    "condition": {
+      "description": "Recursive boolean condition tree. Leaf types: cmp, cross, ref (boolean factor). Branch types: all, any, not. Reserved: temporal.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["all"],
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/condition" }
+            }
+          },
+          "patternProperties": { "^x-": {} }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["any"],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/condition" }
+            }
+          },
+          "patternProperties": { "^x-": {} }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["not"],
+          "properties": {
+            "not": { "$ref": "#/$defs/condition" }
+          },
+          "patternProperties": { "^x-": {} }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmp"],
+          "properties": {
+            "cmp": { "$ref": "#/$defs/comparison" }
+          },
+          "patternProperties": { "^x-": {} }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cross"],
+          "properties": {
+            "cross": { "$ref": "#/$defs/cross" }
+          },
+          "patternProperties": { "^x-": {} }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ref"],
+          "properties": {
+            "ref": { "$ref": "#/$defs/ref" }
+          },
+          "patternProperties": { "^x-": {} }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["temporal"],
+          "properties": {
+            "temporal": { "$ref": "#/$defs/temporal" }
+          },
+          "patternProperties": { "^x-": {} }
+        }
+      ]
+    },
+
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["left", "op", "right"],
+      "properties": {
+        "left":  { "$ref": "#/$defs/operand" },
+        "op":    { "type": "string", "enum": ["gt", "gte", "lt", "lte", "eq", "neq"] },
+        "right": { "$ref": "#/$defs/operand" }
+      }
+    },
+
+    "cross": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["a", "op", "b"],
+      "properties": {
+        "a":  { "$ref": "#/$defs/operand" },
+        "op": { "type": "string", "enum": ["cross_above", "cross_below"] },
+        "b":  { "$ref": "#/$defs/operand" }
+      }
+    },
+
+    "temporal": {
+      "description": "RESERVED for future. Engines may reject in v1 runtime.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "bars", "condition"],
+          "properties": {
+            "type":      { "const": "within_bars" },
+            "bars":      { "type": "integer", "minimum": 1, "maximum": 10000 },
+            "condition": { "$ref": "#/$defs/condition" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "first", "then", "max_bars"],
+          "properties": {
+            "type":     { "const": "sequence" },
+            "first":    { "$ref": "#/$defs/condition" },
+            "then":     { "$ref": "#/$defs/condition" },
+            "max_bars": { "type": "integer", "minimum": 1, "maximum": 10000 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "condition", "op", "bars"],
+          "properties": {
+            "type":      { "const": "bars_since" },
+            "condition": { "$ref": "#/$defs/condition" },
+            "op":        { "type": "string", "enum": ["gt", "gte", "lt", "lte", "eq"] },
+            "bars":      { "type": "integer", "minimum": 0, "maximum": 1000000 }
+          }
+        }
+      ]
+    },
+
+    "order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["market"] }
+      },
+      "patternProperties": { "^x-": {} }
+    },
+
+    "stop_spec": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind":  { "const": "points" },
+            "value": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind":  { "const": "pct" },
+            "value": { "type": "number", "exclusiveMinimum": 0, "maximum": 1, "description": "Decimal fraction. 0.025 = 2.5%" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "atr_ref", "multiple"],
+          "properties": {
+            "kind":     { "const": "atr_multiple" },
+            "atr_ref":  { "$ref": "#/$defs/ref" },
+            "multiple": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      ]
+    },
+
+    "exit_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["signal_exit", "stop_loss", "take_profit", "bracket_rr"]
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "condition":    { "$ref": "#/$defs/condition" },
+        "stop":         { "$ref": "#/$defs/stop_spec" },
+        "take":         { "$ref": "#/$defs/stop_spec" },
+        "risk_reward":  { "type": "number", "exclusiveMinimum": 0 },
+        "order":        { "$ref": "#/$defs/order" }
+      },
+      "patternProperties": { "^x-": {} },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "signal_exit" } } },
+          "then": { "required": ["condition"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "stop_loss" } } },
+          "then": { "required": ["stop"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "take_profit" } } },
+          "then": { "required": ["take"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "bracket_rr" } } },
+          "then": {
+            "required": ["risk_reward"],
+            "oneOf": [
+              { "required": ["stop"], "not": { "required": ["take"] } },
+              { "required": ["take"], "not": { "required": ["stop"] } }
+            ]
+          }
+        }
+      ]
+    },
+
+    "position_sizing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["fixed_qty", "fixed_cash", "pct_equity"] },
+        "qty":  { "type": "number", "exclusiveMinimum": 0 },
+        "cash": { "type": "number", "exclusiveMinimum": 0 },
+        "pct":  { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      },
+      "patternProperties": { "^x-": {} },
+      "allOf": [
+        { "if": { "properties": { "mode": { "const": "fixed_qty" } } },  "then": { "required": ["qty"] } },
+        { "if": { "properties": { "mode": { "const": "fixed_cash" } } }, "then": { "required": ["cash"] } },
+        { "if": { "properties": { "mode": { "const": "pct_equity" } } }, "then": { "required": ["pct"] } }
+      ]
+    },
+
+    "entry_rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["condition"],
+      "properties": {
+        "condition": { "$ref": "#/$defs/condition" },
+        "order":     { "$ref": "#/$defs/order" }
+      },
+      "patternProperties": { "^x-": {} }
+    },
+
+    "side_def": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry", "exits"],
+      "properties": {
+        "entry":            { "$ref": "#/$defs/entry_rule" },
+        "exits":            {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/exit_rule" }
+        },
+        "position_sizing":  { "$ref": "#/$defs/position_sizing" }
+      },
+      "patternProperties": { "^x-": {} }
+    }
+  }
+}

@@ -21,6 +21,7 @@ ENV/
 
 # Testing
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
@@ -31,6 +32,8 @@ build/
 
 # Logs
 *.log
+logs/
+docs/*
 
 # OS
 .DS_Store
@@ -38,3 +41,9 @@ Thumbs.db
 
 # uv
 uv.lock
+
+# Market Data
+/data/
+*.csv
+*.parquet
+*.7z

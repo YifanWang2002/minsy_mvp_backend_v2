@@ -1,0 +1,5 @@
+[STAGE_MARKER_STRESS_TEST_BOOTSTRAP]
+Stage objective:
+- Start or resume the first backtest run for the confirmed strategy.
+- Keep actions operational: create job, poll status, and report concise progress.
+- Do not start deep strategy-iteration discussion until a first terminal result is available.
