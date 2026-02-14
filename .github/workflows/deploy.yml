@@ -20,6 +20,7 @@ jobs:
           port: 22
           script: |
             set -e
+            export PATH="$HOME/.local/bin:$PATH"
             cd /home/yifan/minsy_mvp_backend_v2
 
             # 强制与 main 对齐
