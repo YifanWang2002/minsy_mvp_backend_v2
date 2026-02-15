@@ -23,6 +23,42 @@ from src.agents.skills.kyc_skills import (
 from src.config import settings
 from src.models.user import UserProfile
 
+_KYC_FIELD_CHOICE_IDS: dict[str, str] = {
+    "trading_years_bucket": "kyc_trading_years_bucket",
+    "risk_tolerance": "kyc_risk_tolerance",
+    "return_expectation": "kyc_return_expectation",
+}
+_KYC_QUESTIONS: dict[str, str] = {
+    "trading_years_bucket": "How many years of trading experience do you have?",
+    "risk_tolerance": "What is your risk tolerance?",
+    "return_expectation": "What return expectation do you target?",
+}
+_KYC_SUBTITLES: dict[str, str] = {
+    "trading_years_bucket": "Pick the closest experience bucket.",
+    "risk_tolerance": "Choose the risk level that fits your style.",
+    "return_expectation": "Choose the return goal you are aiming for.",
+}
+_KYC_OPTION_META: dict[str, dict[str, tuple[str, str]]] = {
+    "trading_years_bucket": {
+        "years_0_1": ("0-1 years", "New or early-stage experience"),
+        "years_1_3": ("1-3 years", "Some market cycle exposure"),
+        "years_3_5": ("3-5 years", "Solid intermediate experience"),
+        "years_5_plus": ("5+ years", "Extensive market experience"),
+    },
+    "risk_tolerance": {
+        "conservative": ("Conservative", "Protect capital first"),
+        "moderate": ("Moderate", "Balanced risk and return"),
+        "aggressive": ("Aggressive", "Higher risk for higher return"),
+        "very_aggressive": ("Very aggressive", "Maximum risk tolerance"),
+    },
+    "return_expectation": {
+        "capital_preservation": ("Capital preservation", "Prioritize downside protection"),
+        "balanced_growth": ("Balanced growth", "Steady long-term compounding"),
+        "growth": ("Growth", "Target stronger account growth"),
+        "high_growth": ("High growth", "Pursue maximum growth potential"),
+    },
+}
+
 
 class KYCHandler:
     """Implements :class:`PhaseHandler` for the KYC phase."""
@@ -118,7 +154,73 @@ class KYCHandler:
         payload: dict[str, Any],
         ctx: PhaseContext,
     ) -> dict[str, Any] | None:
-        return payload  # No filtering needed for KYC
+        del ctx
+        if payload.get("type") != "choice_prompt":
+            return payload
+
+        choice_id_raw = payload.get("choice_id")
+        choice_id = choice_id_raw.strip() if isinstance(choice_id_raw, str) else ""
+        if not choice_id:
+            return payload
+
+        target_field = self._resolve_kyc_field_from_choice_id(choice_id)
+        if target_field is None:
+            return payload
+
+        allowed = set(VALID_VALUES.get(target_field, set()))
+        raw_options = payload.get("options")
+        option_list = raw_options if isinstance(raw_options, list) else []
+        filtered = [
+            option
+            for option in option_list
+            if isinstance(option, dict)
+            and isinstance(option.get("id"), str)
+            and option.get("id") in allowed
+        ]
+        if len(filtered) < 2:
+            filtered = self._build_options_for_field(target_field)
+
+        result = dict(payload)
+        result["options"] = filtered
+        if not isinstance(result.get("question"), str) or not result["question"].strip():
+            result["question"] = _KYC_QUESTIONS.get(
+                target_field,
+                "Please choose one option.",
+            )
+        if not isinstance(result.get("subtitle"), str) or not result["subtitle"].strip():
+            subtitle = _KYC_SUBTITLES.get(target_field)
+            if isinstance(subtitle, str) and subtitle.strip():
+                result["subtitle"] = subtitle
+        return result
+
+    def build_fallback_choice_prompt(
+        self,
+        *,
+        missing_fields: list[str],
+        ctx: PhaseContext,
+    ) -> dict[str, Any] | None:
+        del ctx
+        target_field = next(
+            (field for field in missing_fields if field in REQUIRED_FIELDS),
+            None,
+        )
+        if target_field is None:
+            return None
+
+        options = self._build_options_for_field(target_field)
+        if len(options) < 2:
+            return None
+
+        payload: dict[str, Any] = {
+            "type": "choice_prompt",
+            "choice_id": _KYC_FIELD_CHOICE_IDS.get(target_field, target_field),
+            "question": _KYC_QUESTIONS.get(target_field, "Please choose one option."),
+            "options": options,
+        }
+        subtitle = _KYC_SUBTITLES.get(target_field)
+        if isinstance(subtitle, str) and subtitle.strip():
+            payload["subtitle"] = subtitle
+        return payload
 
     # -- artifacts init ------------------------------------------------
 
@@ -196,6 +298,27 @@ class KYCHandler:
 
         profile.kyc_status = "complete" if completed else "incomplete"
         return profile.kyc_status
+
+    def _resolve_kyc_field_from_choice_id(self, choice_id: str) -> str | None:
+        normalized = choice_id.strip().lower()
+        if not normalized:
+            return None
+        if normalized in REQUIRED_FIELDS:
+            return normalized
+        if normalized.startswith("kyc_"):
+            normalized = normalized[4:]
+        if normalized in REQUIRED_FIELDS:
+            return normalized
+        return None
+
+    def _build_options_for_field(self, field: str) -> list[dict[str, str]]:
+        options = _KYC_OPTION_META.get(field)
+        if not isinstance(options, dict):
+            return []
+        return [
+            {"id": option_id, "label": label, "subtitle": subtitle}
+            for option_id, (label, subtitle) in options.items()
+        ]
 
 
 def _has_value(value: Any) -> bool:

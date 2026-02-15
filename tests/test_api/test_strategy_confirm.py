@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
-from src.engine.strategy.draft_store import StrategyDraftRecord
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload
+from src.engine.strategy.draft_store import StrategyDraftRecord
 from src.main import app
 
 _TURN1_RESPONSE = (
@@ -82,6 +82,7 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
     ]
     call_idx = {"i": 0}
     captured_tools: list[list[dict] | None] = []
+    captured_previous_response_ids: list[str | None] = []
 
     async def _mock_stream_events(
         *,
@@ -96,6 +97,7 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
         idx = call_idx["i"]
         call_idx["i"] += 1
         captured_tools.append(deepcopy(tools) if isinstance(tools, list) else None)
+        captured_previous_response_ids.append(previous_response_id)
         text = mock_responses[idx]
         yield {"type": "response.output_text.delta", "delta": text, "sequence_number": 1}
         yield _make_mock_response_event(text, f"resp_strategy_confirm_{idx}")
@@ -174,13 +176,56 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
             artifacts = detail_body["artifacts"]
             assert artifacts["strategy"]["profile"]["strategy_id"] == body["strategy_id"]
             assert artifacts["stress_test"]["profile"]["strategy_id"] == body["strategy_id"]
+            expected_market = (
+                strategy_payload.get("universe", {}).get("market")
+                if isinstance(strategy_payload.get("universe"), dict)
+                else None
+            )
+            expected_tickers = (
+                strategy_payload.get("universe", {}).get("tickers")
+                if isinstance(strategy_payload.get("universe"), dict)
+                else None
+            )
+            expected_timeframe = strategy_payload.get("timeframe")
+            if isinstance(expected_market, str) and expected_market:
+                assert (
+                    artifacts["strategy"]["profile"].get("strategy_market")
+                    == expected_market
+                )
+                assert (
+                    artifacts["stress_test"]["profile"].get("strategy_market")
+                    == expected_market
+                )
+            if isinstance(expected_tickers, list) and expected_tickers:
+                assert (
+                    artifacts["strategy"]["profile"].get("strategy_tickers")
+                    == expected_tickers
+                )
+                assert (
+                    artifacts["strategy"]["profile"].get("strategy_primary_symbol")
+                    == expected_tickers[0]
+                )
+            if isinstance(expected_timeframe, str) and expected_timeframe:
+                assert (
+                    artifacts["strategy"]["profile"].get("strategy_timeframe")
+                    == expected_timeframe
+                )
             metadata = detail_body.get("metadata", {})
             assert metadata.get("advance_to_stress_test_ignored") is True
             assert isinstance(metadata.get("advance_to_stress_test_ignored_at"), str)
+            assert metadata.get("strategy_id") == body["strategy_id"]
+            if isinstance(expected_market, str) and expected_market:
+                assert metadata.get("strategy_market") == expected_market
+            if isinstance(expected_tickers, list) and expected_tickers:
+                assert metadata.get("strategy_tickers") == expected_tickers
+            if isinstance(expected_timeframe, str) and expected_timeframe:
+                assert metadata.get("strategy_timeframe") == expected_timeframe
 
     # Last call is auto backtest bootstrap turn in strategy phase:
     # strategy + backtest tools should be available together.
     assert captured_tools
+    assert captured_previous_response_ids
+    assert captured_previous_response_ids[-1] is None
     last_tools = captured_tools[-1]
     assert isinstance(last_tools, list) and last_tools
     labels = {
@@ -188,7 +233,7 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
         for item in last_tools
         if isinstance(item, dict)
     }
-    assert labels == {"strategy", "backtest"}
+    assert labels == {"strategy", "backtest", "market_data"}
 
 
 def test_get_strategy_detail_by_id() -> None:

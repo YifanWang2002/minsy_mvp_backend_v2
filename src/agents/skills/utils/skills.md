@@ -20,6 +20,12 @@ When handing off a validated pre-confirm strategy draft, emit:
 <AGENT_UI_JSON>{"type":"strategy_ref","strategy_draft_id":"<uuid>","display_mode":"draft","source":"strategy_validate_dsl"}</AGENT_UI_JSON>
 ```
 
+When requesting frontend-rendered performance charts from a completed backtest, emit:
+
+```
+<AGENT_UI_JSON>{"type":"backtest_charts","job_id":"<uuid>","charts":["equity_curve","underwater_curve","monthly_return_table"],"sampling":"eod","max_points":365}</AGENT_UI_JSON>
+```
+
 ## Supported Fields
 
 ### `choice_prompt`
@@ -43,6 +49,20 @@ When handing off a validated pre-confirm strategy draft, emit:
 | `display_mode` | optional | Usually `"draft"` |
 | `source` | optional | Usually `"strategy_validate_dsl"` |
 
+### `backtest_charts`
+
+| Field | Required | Description |
+|---|---|---|
+| `type` | yes | Always `"backtest_charts"` |
+| `job_id` | yes | Completed backtest job UUID |
+| `charts` | optional | Requested chart list. If omitted, frontend uses defaults |
+| `sampling` | optional | Series sampling mode (`auto`, `eod`, `uniform`) |
+| `max_points` | optional | Per-series point cap for chart payload |
+| `window_bars` | optional | Rolling metric window bars (for rolling charts) |
+| `strategy_id` | optional | Saved strategy UUID for UI linking |
+| `title` | optional | Localized chart panel title |
+| `source` | optional | E.g. `"backtest_get_job"` |
+
 # Rules
 
 - `choice_id`, option `id` values, and all JSON keys must always be **English snake_case**.
@@ -51,5 +71,6 @@ When handing off a validated pre-confirm strategy draft, emit:
 - Do **not** wrap the JSON in markdown code fences.
 - Default to at most one `<AGENT_UI_JSON>` block per turn, unless the active phase/system instruction explicitly asks for multiple blocks in the same turn (e.g. chart + choice).
 - In strategy pre-confirm turns, when validate returns `strategy_draft_id`, emit `strategy_ref` and avoid repeating full DSL JSON in plain text.
+- In strategy post-backtest turns, prefer one `backtest_charts` payload with `job_id`; frontend will fetch chart data directly.
 - In KYC phase, if the system prompt says required fields are still missing, emitting one `<AGENT_UI_JSON>` in that turn is mandatory.
 - This mandatory rule applies to both the user's first message and all follow-up messages.

@@ -28,6 +28,7 @@ def create_mcp_server(
     host: str = "127.0.0.1",
     port: int = 8111,
     mount_path: str = "/",
+    stateless_http: bool = True,
 ) -> FastMCP:
     """Create the modular MCP server and register all tool groups."""
     mcp = FastMCP(
@@ -40,7 +41,7 @@ def create_mcp_server(
         port=port,
         mount_path=mount_path,
         streamable_http_path="/mcp",
-        stateless_http=True,
+        stateless_http=stateless_http,
         # Local development frequently uses reverse tunnels for remote MCP probes.
         # Disable host-header rebinding protection so tunneled hostnames are accepted.
         transport_security=TransportSecuritySettings(
@@ -68,13 +69,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default="/",
         help="Mount path for HTTP/SSE modes (default '/').",
     )
+    parser.add_argument(
+        "--stateful-http",
+        action="store_true",
+        help="Use stateful streamable HTTP mode (default is stateless).",
+    )
     return parser
 
 
 def main() -> int:
     args = _build_parser().parse_args()
     configure_logging(level=os.getenv("LOG_LEVEL", "INFO"), show_sql=False)
-    mcp = create_mcp_server(host=args.host, port=args.port, mount_path=args.mount_path)
+    mcp = create_mcp_server(
+        host=args.host,
+        port=args.port,
+        mount_path=args.mount_path,
+        stateless_http=not bool(args.stateful_http),
+    )
     logger.info(
         "mcp server starting transport=%s host=%s port=%s mount_path=%s",
         args.transport,

@@ -160,3 +160,91 @@ def test_session_history_persists_mcp_final_results_only() -> None:
             assert by_name["check_symbol_available"]["arguments"]["symbol"] == "SPY"
             assert by_name["get_quote"]["status"] == "failure"
             assert by_name["get_quote"]["error"] == "upstream timeout"
+
+
+def test_session_history_drops_retry_failures_when_later_call_succeeds() -> None:
+    async def _mock_stream_events(
+        *,
+        model: str,
+        input_text: str,
+        instructions: str | None = None,
+        previous_response_id: str | None = None,
+        tools: list | None = None,
+        tool_choice: dict | None = None,
+        reasoning: dict | None = None,
+    ):
+        yield {
+            "type": "response.output_text.delta",
+            "delta": "Retrying tool call.",
+            "sequence_number": 1,
+        }
+        yield {
+            "type": "response.output_item.done",
+            "sequence_number": 2,
+            "item": {
+                "type": "mcp_call",
+                "id": "call_retry_1",
+                "name": "check_symbol_available",
+                "status": "failed",
+                "arguments": {"symbol": "SPY"},
+                "error": "upstream timeout",
+            },
+        }
+        yield {
+            "type": "response.output_item.done",
+            "sequence_number": 3,
+            "item": {
+                "type": "mcp_call",
+                "id": "call_retry_2",
+                "name": "check_symbol_available",
+                "status": "completed",
+                "arguments": {"symbol": "SPY"},
+                "output": {"ok": True},
+            },
+        }
+        yield {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_mock_mcp_retry_filter",
+                "usage": {"input_tokens": 18, "output_tokens": 12},
+            },
+        }
+
+    with patch(
+        "src.services.openai_stream_service.OpenAIResponsesEventStreamer.stream_events",
+        side_effect=_mock_stream_events,
+    ):
+        with TestClient(app) as client:
+            token = _register_and_get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            response = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"message": "Please retry once."},
+            )
+            assert response.status_code == 200
+            payloads = _parse_sse_payloads(response.text)
+            done = next(item for item in payloads if item.get("type") == "done")
+            session_id = done["session_id"]
+
+            detail = client.get(f"/api/v1/sessions/{session_id}", headers=headers)
+            assert detail.status_code == 200
+            body = detail.json()
+
+            assistant_messages = [
+                message
+                for message in body["messages"]
+                if message.get("role") == "assistant"
+            ]
+            assert assistant_messages
+            tool_calls = assistant_messages[-1].get("tool_calls") or []
+            mcp_calls = [
+                item for item in tool_calls if isinstance(item, dict) and item.get("type") == "mcp_call"
+            ]
+
+            assert len(mcp_calls) == 1
+            call = mcp_calls[0]
+            assert call.get("name") == "check_symbol_available"
+            assert call.get("status") == "success"
+            assert call.get("arguments", {}).get("symbol") == "SPY"

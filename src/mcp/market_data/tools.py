@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import time
 from functools import lru_cache
 from typing import Any
@@ -205,8 +206,18 @@ def _to_yfinance_symbol(*, market: str, symbol: str) -> str:
     return _KNOWN_FUTURES_YF_MAP.get(symbol_key, f"{symbol_key}=F")
 
 
+def _coerce_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
 def _ticker_info_summary(ticker: yf.Ticker) -> dict[str, Any]:
-    info = ticker.info or {}
+    info = _coerce_mapping(ticker.info)
+    if not info:
+        return {}
     keys = [
         "shortName",
         "longName",
@@ -245,21 +256,29 @@ def _ticker_fast_info_summary(
         fast_info = ticker.fast_info
     except Exception:  # noqa: BLE001
         return {}
+    if fast_info is None:
+        return {}
+    if isinstance(fast_info, Mapping):
+        getter = fast_info.get
+    elif callable(getattr(fast_info, "get", None)):
+        getter = fast_info.get
+    else:
+        return {}
 
     summary = {
         "symbol": yfinance_symbol,
-        "currency": fast_info.get("currency"),
-        "exchange": fast_info.get("exchange"),
-        "marketCap": fast_info.get("marketCap"),
-        "regularMarketPrice": fast_info.get("lastPrice"),
-        "regularMarketOpen": fast_info.get("open"),
-        "regularMarketDayHigh": fast_info.get("dayHigh"),
-        "regularMarketDayLow": fast_info.get("dayLow"),
-        "regularMarketVolume": fast_info.get("lastVolume"),
-        "fiftyDayAverage": fast_info.get("fiftyDayAverage"),
-        "twoHundredDayAverage": fast_info.get("twoHundredDayAverage"),
-        "yearHigh": fast_info.get("yearHigh"),
-        "yearLow": fast_info.get("yearLow"),
+        "currency": getter("currency"),
+        "exchange": getter("exchange"),
+        "marketCap": getter("marketCap"),
+        "regularMarketPrice": getter("lastPrice"),
+        "regularMarketOpen": getter("open"),
+        "regularMarketDayHigh": getter("dayHigh"),
+        "regularMarketDayLow": getter("dayLow"),
+        "regularMarketVolume": getter("lastVolume"),
+        "fiftyDayAverage": getter("fiftyDayAverage"),
+        "twoHundredDayAverage": getter("twoHundredDayAverage"),
+        "yearHigh": getter("yearHigh"),
+        "yearLow": getter("yearLow"),
     }
     return {key: value for key, value in summary.items() if value is not None}
 
@@ -626,7 +645,7 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
         symbol_key = _normalize_symbol(symbol)
         yfinance_symbol = _to_yfinance_symbol(market=market_key, symbol=symbol_key)
         ticker = yf.Ticker(yfinance_symbol)
-        info = _retry_yfinance_call(lambda: ticker.info) or {}
+        info = _coerce_mapping(_retry_yfinance_call(lambda: ticker.info))
         metadata_source = "info"
         if not info:
             info = _ticker_fast_info_summary(

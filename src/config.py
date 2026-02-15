@@ -7,7 +7,11 @@ from functools import lru_cache
 from urllib.parse import quote_plus
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 
 class Settings(BaseSettings):
@@ -20,6 +24,10 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, alias="PORT")
     api_v1_prefix: str = Field(default="/api/v1", alias="API_V1_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    chat_debug_trace_enabled: bool = Field(
+        default=False,
+        alias="CHAT_DEBUG_TRACE_ENABLED",
+    )
     openai_api_key: str = Field(alias="OPENAI_API_KEY")
     secret_key: str = Field(alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
@@ -30,7 +38,7 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = Field(default=7, alias="REFRESH_TOKEN_EXPIRE_DAYS")
     auth_rate_limit: int = Field(default=30, alias="AUTH_RATE_LIMIT")
     auth_rate_window: int = Field(default=60, alias="AUTH_RATE_WINDOW")
-    openai_response_model: str = Field(default="gpt-5", alias="OPENAI_RESPONSE_MODEL")
+    openai_response_model: str = Field(default="gpt-5.2", alias="OPENAI_RESPONSE_MODEL")
     mcp_env: str = Field(default="prod", alias="MCP_ENV")
     mcp_server_url_dev: str = Field(
         default="https://dev.minsyai.com/mcp",
@@ -39,10 +47,6 @@ class Settings(BaseSettings):
     mcp_server_url_prod: str = Field(
         default="https://mcp.minsyai.com/mcp",
         alias="MCP_SERVER_URL_PROD",
-    )
-    mcp_server_url_override: str | None = Field(
-        default=None,
-        alias="MCP_SERVER_URL",
     )
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
@@ -96,6 +100,23 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Use `.env` as the primary source over process environment variables."""
+        return (
+            init_settings,
+            dotenv_settings,
+            env_settings,
+            file_secret_settings,
+        )
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _parse_cors_origins(cls, value: object) -> object:
@@ -140,38 +161,20 @@ class Settings(BaseSettings):
 
     @property
     def mcp_server_url(self) -> str:
-        if (
-            isinstance(self.mcp_server_url_override, str)
-            and self.mcp_server_url_override.strip()
-        ):
-            return self.mcp_server_url_override.strip()
-
         mode = self.mcp_env.strip().lower()
         if mode in {"dev", "development", "local"}:
             return self.mcp_server_url_dev
         return self.mcp_server_url_prod
-
-    @mcp_server_url.setter
-    def mcp_server_url(self, value: str) -> None:
-        self.mcp_server_url_override = value
 
     @property
     def strategy_mcp_server_url(self) -> str:
         """Backward-compatible alias for strategy MCP URL."""
         return self.mcp_server_url
 
-    @strategy_mcp_server_url.setter
-    def strategy_mcp_server_url(self, value: str) -> None:
-        self.mcp_server_url = value
-
     @property
     def backtest_mcp_server_url(self) -> str:
         """Backward-compatible alias for backtest MCP URL."""
         return self.mcp_server_url
-
-    @backtest_mcp_server_url.setter
-    def backtest_mcp_server_url(self, value: str) -> None:
-        self.mcp_server_url = value
 
 
 @lru_cache

@@ -29,3 +29,53 @@ def test_registered_genui_normalizer_is_used() -> None:
     )
 
     assert normalized == [{"type": "custom_metric", "label": "sharpe"}]
+
+
+def test_backtest_charts_payload_is_normalized() -> None:
+    normalized = normalize_genui_payloads(
+        [
+            {
+                "type": "backtest_charts",
+                "job_id": " 8f17881d-1fd3-4306-b6e9-70fa896f0fa6 ",
+                "charts": ["equity_curve", "", "monthly_return_table"],
+                "sampling": " EOD ",
+                "max_points": 99999,
+                "window_bars": 252.3,
+            }
+        ],
+        allow_passthrough_unregistered=False,
+    )
+
+    assert normalized == [
+        {
+            "type": "backtest_charts",
+            "job_id": "8f17881d-1fd3-4306-b6e9-70fa896f0fa6",
+            "charts": ["equity_curve", "monthly_return_table"],
+            "sampling": "eod",
+            "max_points": 5000,
+            "window_bars": 252,
+        }
+    ]
+
+
+def test_choice_prompt_payload_with_empty_options_is_preserved_for_handler_fill() -> None:
+    normalized = normalize_genui_payloads(
+        [
+            {
+                "type": "choice_prompt",
+                "choice_id": "target_instrument",
+                "question": "Which instrument?",
+                "options": [],
+            }
+        ],
+        allow_passthrough_unregistered=False,
+    )
+
+    assert normalized == [
+        {
+            "type": "choice_prompt",
+            "choice_id": "target_instrument",
+            "question": "Which instrument?",
+            "options": [],
+        }
+    ]

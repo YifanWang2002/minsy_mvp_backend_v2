@@ -13,7 +13,12 @@ ALL_SETTING_KEYS = [
     "PORT",
     "API_V1_PREFIX",
     "LOG_LEVEL",
+    "CHAT_DEBUG_TRACE_ENABLED",
     "OPENAI_API_KEY",
+    "MCP_ENV",
+    "MCP_SERVER_URL_DEV",
+    "MCP_SERVER_URL_PROD",
+    "MCP_SERVER_URL",
     "POSTGRES_HOST",
     "POSTGRES_PORT",
     "POSTGRES_USER",
@@ -107,3 +112,59 @@ def test_settings_missing_required_env_raises_validation_error(
 
     with pytest.raises(ValidationError):
         Settings(_env_file=env_file)
+
+
+def test_mcp_server_url_uses_env_file_values_over_process_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("MCP_ENV", "prod")
+    monkeypatch.setenv("MCP_SERVER_URL_DEV", "https://process.dev/mcp")
+    monkeypatch.setenv("MCP_SERVER_URL_PROD", "https://process.prod/mcp")
+    monkeypatch.setenv("MCP_SERVER_URL", "https://process.override/mcp")
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "MCP_ENV=dev",
+                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
+                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.mcp_env == "dev"
+    assert settings.mcp_server_url_dev == "https://dotenv.dev/mcp"
+    assert settings.mcp_server_url_prod == "https://dotenv.prod/mcp"
+    assert settings.mcp_server_url == "https://dotenv.dev/mcp"
+
+
+def test_mcp_server_url_ignores_legacy_override_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("MCP_SERVER_URL", "https://process.override/mcp")
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "MCP_ENV=prod",
+                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
+                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.mcp_server_url == "https://dotenv.prod/mcp"

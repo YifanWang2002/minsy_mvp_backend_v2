@@ -7,6 +7,7 @@ from src.engine.backtest.analytics import (
     build_compact_performance_payload,
     compute_entry_hour_pnl_heatmap,
     compute_entry_weekday_pnl,
+    compute_equity_curve,
     compute_exit_reason_breakdown,
     compute_holding_period_pnl_bins,
     compute_long_short_breakdown,
@@ -166,6 +167,29 @@ def test_compact_performance_and_analytics_outputs() -> None:
     assert len(rolling["win_rate_curve_points"]) <= 3
 
 
+def test_equity_curve_supports_sampling_and_downsampling() -> None:
+    result = _sample_result()
+
+    eod_curve = compute_equity_curve(
+        result,
+        sampling_mode="eod",
+        max_points=10,
+    )
+    assert eod_curve["sampling_mode"] == "eod"
+    assert eod_curve["point_count_total"] == len(result["equity_curve"])
+    assert eod_curve["point_count_after_sampling"] <= eod_curve["point_count_total"]
+    assert eod_curve["point_count"] <= 10
+
+    uniform_curve = compute_equity_curve(
+        result,
+        sampling_mode="uniform",
+        max_points=3,
+    )
+    assert uniform_curve["sampling_mode"] == "uniform"
+    assert uniform_curve["point_count"] <= 3
+    assert isinstance(uniform_curve["curve_points"], list)
+
+
 def test_rolling_metrics_handles_non_datetime_returns_index() -> None:
     result = {
         "returns": [0.01, -0.005, 0.002, -0.004, 0.003],
@@ -180,3 +204,16 @@ def test_rolling_metrics_handles_non_datetime_returns_index() -> None:
         assert isinstance(rolling["sharpe_curve_points"][0]["timestamp"], str)
     if rolling["win_rate_curve_points"]:
         assert isinstance(rolling["win_rate_curve_points"][0]["timestamp"], str)
+
+
+def test_rolling_metrics_uses_trade_based_win_rate_pct() -> None:
+    result = _sample_result()
+
+    rolling = compute_rolling_metrics(result, window_bars=2, max_points=20)
+
+    assert rolling["win_rate_basis"] == "trades"
+    assert rolling["win_rate_unit"] == "pct"
+    assert rolling["win_rate_window_trades"] == 2
+    assert rolling["win_rate_curve_points"]
+    assert all(0.0 <= point["value"] <= 100.0 for point in rolling["win_rate_curve_points"])
+    assert rolling["win_rate_last"] == 50.0

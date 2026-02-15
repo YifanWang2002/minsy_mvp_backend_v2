@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from redis.asyncio import ConnectionPool, Redis
 
 from src.config import settings
@@ -9,11 +11,18 @@ from src.util.logger import logger
 
 redis_pool: ConnectionPool | None = None
 redis_client: Redis | None = None
+_redis_loop: asyncio.AbstractEventLoop | None = None
 
 
 async def init_redis() -> None:
     """Initialize Redis connection pool and verify connectivity."""
-    global redis_pool, redis_client
+    global redis_pool, redis_client, _redis_loop
+    current_loop = asyncio.get_running_loop()
+
+    if redis_client is not None and _redis_loop is not current_loop:
+        # Recreate client when the app enters a different event loop
+        # (e.g. pytest async fixtures + TestClient mixed usage).
+        await close_redis()
 
     if redis_client is None:
         redis_pool = ConnectionPool.from_url(
@@ -22,6 +31,7 @@ async def init_redis() -> None:
             decode_responses=True,
         )
         redis_client = Redis(connection_pool=redis_pool)
+        _redis_loop = current_loop
 
     await redis_client.ping()
     logger.info("Redis pool initialized.")
@@ -29,18 +39,25 @@ async def init_redis() -> None:
 
 async def close_redis() -> None:
     """Close Redis client and pool."""
-    global redis_pool, redis_client
+    global redis_pool, redis_client, _redis_loop
 
     if redis_client is not None:
-        await redis_client.aclose()
-        logger.info("Redis client closed.")
+        try:
+            await redis_client.aclose()
+            logger.info("Redis client closed.")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Redis client close failed: %s", type(exc).__name__)
 
     if redis_pool is not None:
-        await redis_pool.disconnect(inuse_connections=True)
-        logger.info("Redis pool closed.")
+        try:
+            await redis_pool.disconnect(inuse_connections=True)
+            logger.info("Redis pool closed.")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Redis pool disconnect failed: %s", type(exc).__name__)
 
     redis_client = None
     redis_pool = None
+    _redis_loop = None
 
 
 def get_redis_client() -> Redis:

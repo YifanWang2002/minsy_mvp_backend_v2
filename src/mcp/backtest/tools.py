@@ -90,7 +90,8 @@ def _parse_uuid(value: str, field_name: str) -> UUID:
 
 async def _new_db_session():
     if db_module.AsyncSessionLocal is None:
-        await db_module.init_postgres()
+        # MCP worker process only needs a ready pool; schema is managed by API startup/migrations.
+        await db_module.init_postgres(ensure_schema=False)
     assert db_module.AsyncSessionLocal is not None
     return db_module.AsyncSessionLocal()
 

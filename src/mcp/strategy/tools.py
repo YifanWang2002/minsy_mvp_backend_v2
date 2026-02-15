@@ -15,10 +15,10 @@ from src.engine.feature.indicators import IndicatorCategory, IndicatorRegistry
 from src.engine.strategy import (
     StrategyDslValidationException,
     StrategyPatchApplyError,
-    create_strategy_draft,
     StrategyRevisionNotFoundError,
     StrategyStorageNotFoundError,
     StrategyVersionConflictError,
+    create_strategy_draft,
     diff_strategy_versions,
     get_session_user_id,
     get_strategy_or_raise,
@@ -284,7 +284,8 @@ def _visible_catalog_categories() -> list[IndicatorCategory]:
 
 async def _new_db_session():
     if db_module.AsyncSessionLocal is None:
-        await db_module.init_postgres()
+        # MCP worker process only needs a ready pool; schema is managed by API startup/migrations.
+        await db_module.init_postgres(ensure_schema=False)
     assert db_module.AsyncSessionLocal is not None
     return db_module.AsyncSessionLocal()
 

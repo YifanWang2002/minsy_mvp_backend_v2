@@ -144,6 +144,37 @@ def _make_empty_yfinance_ticker_class() -> type:
     return EmptyTicker
 
 
+def _make_non_mapping_info_yfinance_ticker_class() -> type:
+    class ResponseLikeInfo:
+        def __contains__(self, _key: object) -> bool:
+            return True
+
+    class NonMappingInfoTicker:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        @property
+        def info(self) -> Any:
+            return ResponseLikeInfo()
+
+        @property
+        def fast_info(self) -> dict[str, Any]:
+            return {
+                "lastPrice": 456.78,
+                "open": 450.0,
+                "dayHigh": 460.0,
+                "dayLow": 445.0,
+                "lastVolume": 987654.0,
+                "currency": "USD",
+                "exchange": "NMS",
+            }
+
+        def history(self, **_: Any) -> pd.DataFrame:
+            return pd.DataFrame()
+
+    return NonMappingInfoTicker
+
+
 @pytest.mark.asyncio
 async def test_local_data_tools(loader_with_mock_parquet: DataLoader, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
@@ -227,6 +258,37 @@ async def test_yfinance_wrappers_cover_four_markets(
         assert metadata_payload["ok"] is True
         assert metadata_payload["yfinance_symbol"] == expected_yf_symbol
         assert metadata_payload["metadata"]["symbol"] == expected_yf_symbol
+
+
+@pytest.mark.asyncio
+async def test_quote_and_metadata_handle_non_mapping_info(
+    loader_with_mock_parquet: DataLoader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
+    non_mapping_ticker = _make_non_mapping_info_yfinance_ticker_class()
+    monkeypatch.setattr(market_tools.yf, "Ticker", non_mapping_ticker)
+
+    mcp = FastMCP("test-market-data-non-mapping-info")
+    market_tools.register_market_data_tools(mcp)
+
+    quote_call = await mcp.call_tool(
+        "get_symbol_quote",
+        {"market": "stock", "symbol": "MSFT"},
+    )
+    quote_payload = _extract_payload(quote_call)
+    assert quote_payload["ok"] is True
+    assert quote_payload["quote"]["regularMarketPrice"] == 456.78
+    assert quote_payload["quote"]["regularMarketVolume"] == 987654.0
+
+    metadata_call = await mcp.call_tool(
+        "get_symbol_metadata",
+        {"market": "stock", "symbol": "MSFT"},
+    )
+    metadata_payload = _extract_payload(metadata_call)
+    assert metadata_payload["ok"] is True
+    assert metadata_payload["metadata_source"] == "fast_info"
+    assert metadata_payload["metadata"]["regularMarketPrice"] == 456.78
 
 
 @pytest.mark.asyncio

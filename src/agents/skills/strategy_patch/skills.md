@@ -1,12 +1,19 @@
 ---
 skill: strategy_patch_workflow
 description: >
-  Use RFC 6902 JSON Patch for minimal strategy updates after a strategy_id already exists.
+  Apply minimal field-level updates for existing strategies after a strategy_id is known.
 ---
 
 # Strategy Patch Workflow
 
 Use this workflow when the user asks to revise an existing strategy and a `strategy_id` is already known.
+
+## User-Facing Guardrail
+- This workflow is internal for tool calls.
+- Never expose raw operation arrays or JSON paths in normal user replies.
+- Never ask the user to manually apply backend update payloads.
+- If tool execution fails, ask for retry/context confirmation only; do not ask the user to manually edit strategy values.
+- Summarize changes in plain language (what changed, why, expected impact).
 
 ## Goal
 - Send only minimal changed fields via patch operations.
@@ -15,13 +22,13 @@ Use this workflow when the user asks to revise an existing strategy and a `strat
 
 ## Tool Sequence
 1. `strategy_get_dsl(session_id, strategy_id)` to fetch latest `dsl_json` and `metadata.version`.
-2. Build RFC 6902 patch operations (JSON array of op objects).
-3. `strategy_patch_dsl(session_id, strategy_id, patch_json, expected_version)`.
+2. Build minimal update operations only for fields that changed.
+3. `strategy_patch_dsl(session_id, strategy_id, <update_ops>, expected_version)`.
 
 ## Version History Helpers
 - `strategy_list_versions(session_id, strategy_id, limit)` returns latest revision metadata.
 - `strategy_get_version_dsl(session_id, strategy_id, version)` returns a specific historical DSL.
-- `strategy_diff_versions(session_id, strategy_id, from_version, to_version)` returns RFC 6902 patch ops.
+- `strategy_diff_versions(session_id, strategy_id, from_version, to_version)` returns structured update operations between versions.
 - `strategy_rollback_dsl(session_id, strategy_id, target_version, expected_version)` restores by creating a new latest version.
 
 ## Patch Rules
@@ -33,31 +40,8 @@ Use this workflow when the user asks to revise an existing strategy and a `strat
 - Patch path root is the DSL object itself. Use `/trade/...`, `/factors/...`, `/timeframe`, etc.
 - Never prefix paths with `/dsl_json`.
 
-## Examples
-
-### Replace one parameter
-```json
-[
-  {"op":"test","path":"/trade/long/exits/1/stop/value","value":0.02},
-  {"op":"replace","path":"/trade/long/exits/1/stop/value","value":0.015}
-]
-```
-
-### Append one condition
-```json
-[
-  {"op":"add","path":"/trade/long/entry/condition/all/-","value":{"cmp":{"left":{"ref":"rsi_14"},"op":"lt","right":65}}}
-]
-```
-
-### Remove one side
-```json
-[
-  {"op":"remove","path":"/trade/short"}
-]
-```
-
 ## Error Handling
+- For transient tool failures (`http_error`, status 424/5xx, `Session terminated`), retry the same tool call up to 4 times before reporting failure.
 - `STRATEGY_VERSION_CONFLICT`: re-run `strategy_get_dsl`, regenerate patch on latest version, retry.
 - `STRATEGY_PATCH_APPLY_FAILED`: fix invalid path/op and retry.
 - `STRATEGY_VALIDATION_FAILED`: patch produced invalid DSL; apply minimal corrective patch.

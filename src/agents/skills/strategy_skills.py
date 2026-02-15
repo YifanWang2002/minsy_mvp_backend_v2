@@ -69,7 +69,11 @@ def _normalize_phase_stage(stage: str | None) -> str:
 def _build_strategy_static_instructions_cached(*, language: str, phase_stage: str) -> str:
     template = _load_md(_STRATEGY_SKILLS_MD)
     ui_knowledge = _load_md(_UTILS_SKILLS_MD)
-    patch_knowledge = _load_md(_STRATEGY_PATCH_SKILLS_MD)
+    patch_knowledge = (
+        _load_md(_STRATEGY_PATCH_SKILLS_MD)
+        if phase_stage == "artifact_ops"
+        else ""
+    )
     stage_addendum = _load_optional_stage_addendum(phase_stage)
     dsl_spec = _load_optional_md(_DSL_SPEC_MD)
     dsl_schema = _load_optional_md(_DSL_SCHEMA_JSON) if phase_stage == "schema_only" else ""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10,12 +11,15 @@ from hashlib import sha256
 from typing import Any
 from uuid import UUID, uuid4
 
-from src.models.redis import get_redis_client
+from src.models.redis import get_redis_client, init_redis
 from src.util.logger import logger
 
 _DRAFT_KEY_PREFIX = "strategy:draft:"
 _DEFAULT_DRAFT_TTL_SECONDS = 60 * 60 * 6  # 6 hours
 _IN_MEMORY_DRAFTS: dict[str, tuple[dict[str, Any], datetime]] = {}
+_ALLOW_IN_MEMORY_DRAFT_FALLBACK = (
+    os.getenv("ALLOW_IN_MEMORY_DRAFT_FALLBACK", "").strip().lower() in {"1", "true", "yes"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +49,22 @@ def _normalize_utc(value: datetime) -> datetime:
 def _payload_hash(payload: dict[str, Any]) -> str:
     normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _use_in_memory_fallback() -> bool:
+    # Keep fallback for pytest/local isolated tests unless explicitly disabled.
+    if _ALLOW_IN_MEMORY_DRAFT_FALLBACK:
+        return True
+    return "PYTEST_CURRENT_TEST" in os.environ
+
+
+async def _get_ready_redis_client():
+    try:
+        return get_redis_client()
+    except RuntimeError:
+        # MCP worker process does not run FastAPI lifespan; initialize lazily in-place.
+        await init_redis()
+        return get_redis_client()
 
 
 def _to_raw(record: StrategyDraftRecord) -> dict[str, Any]:
@@ -115,14 +135,14 @@ async def create_strategy_draft(
     encoded = json.dumps(raw, ensure_ascii=False, separators=(",", ":"))
 
     try:
-        redis = get_redis_client()
+        redis = await _get_ready_redis_client()
         await redis.set(_key(record.strategy_draft_id), encoded, ex=resolved_ttl)
     except Exception as exc:  # noqa: BLE001
-        # Fallback for local tests where Redis may be unavailable.
-        _IN_MEMORY_DRAFTS[str(record.strategy_draft_id)] = (
-            raw,
-            _normalize_utc(record.expires_at),
-        )
+        if not _use_in_memory_fallback():
+            logger.exception("strategy draft persist failed (redis unavailable)")
+            raise RuntimeError("Strategy draft storage unavailable.") from exc
+        # Fallback for isolated tests where Redis may be unavailable.
+        _IN_MEMORY_DRAFTS[str(record.strategy_draft_id)] = (raw, _normalize_utc(record.expires_at))
         logger.warning("strategy draft stored in memory fallback: %s", type(exc).__name__)
 
     return record
@@ -134,7 +154,7 @@ async def get_strategy_draft(strategy_draft_id: UUID) -> StrategyDraftRecord | N
     now = datetime.now(UTC)
 
     try:
-        redis = get_redis_client()
+        redis = await _get_ready_redis_client()
         raw_value = await redis.get(_key(strategy_draft_id))
         if raw_value:
             if not isinstance(raw_value, str):
@@ -144,8 +164,11 @@ async def get_strategy_draft(strategy_draft_id: UUID) -> StrategyDraftRecord | N
                 record = _from_raw(parsed)
                 if record is not None and _normalize_utc(record.expires_at) > now:
                     return record
-    except Exception:
-        # Silent fallback to in-memory cache.
+    except Exception as exc:  # noqa: BLE001
+        if not _use_in_memory_fallback():
+            logger.exception("strategy draft read failed (redis unavailable)")
+            raise RuntimeError("Strategy draft storage unavailable.") from exc
+        # Silent fallback for isolated tests.
         pass
 
     fallback = _IN_MEMORY_DRAFTS.get(str(strategy_draft_id))
@@ -157,4 +180,3 @@ async def get_strategy_draft(strategy_draft_id: UUID) -> StrategyDraftRecord | N
         return None
 
     return _from_raw(raw)
-

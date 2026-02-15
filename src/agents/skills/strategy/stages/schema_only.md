@@ -9,3 +9,5 @@ Stage objective:
 - Do not print the full DSL JSON in plain text unless the user explicitly asks for raw JSON.
 - Do not emit `choice_prompt` GenUI unless DSL cannot be completed safely without one critical missing preference.
 - Ask only the minimum follow-up needed to complete schema fields.
+- In this stage, ignore update-by-id workflow instructions and do not mention internal update operation formats.
+- If user asks to modify an existing saved strategy in this stage, ask for saved `strategy_id` (or ask user to confirm/save first) and stop there.

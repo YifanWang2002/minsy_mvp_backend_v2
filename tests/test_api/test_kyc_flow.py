@@ -521,7 +521,7 @@ def test_pre_strategy_flow_completes_and_transitions_to_strategy() -> None:
             assert pre_strategy_profile["holding_period_bucket"] == "swing_days"
 
 
-def test_pre_strategy_instrument_options_are_filtered_by_selected_market() -> None:
+def test_pre_strategy_instrument_options_are_filtered_by_target_market() -> None:
     responses = [
         _TURN1_RESPONSE,
         _TURN2_RESPONSE,
@@ -602,6 +602,267 @@ def test_pre_strategy_instrument_options_are_filtered_by_selected_market() -> No
             assert "AAPL" not in option_ids
             assert "NVDA" not in option_ids
             assert set(option_ids).issubset({"BTCUSD", "ETHUSD"})
+
+
+def test_pre_strategy_instrument_empty_options_are_backfilled() -> None:
+    responses = [
+        _TURN1_RESPONSE,
+        _TURN2_RESPONSE,
+        _TURN3_RESPONSE,
+        (
+            "US equities noted. Which instrument do you want to focus on?"
+            '<AGENT_STATE_PATCH>{"target_market":"us_stocks"}</AGENT_STATE_PATCH>'
+            '<AGENT_UI_JSON>{"type":"choice_prompt","choice_id":"target_instrument",'
+            '"question":"Which instrument do you want to focus on?",'
+            '"options":[]}</AGENT_UI_JSON>'
+        ),
+    ]
+    call_idx = {"i": 0}
+
+    async def _mock_stream_events(
+        *,
+        model: str,
+        input_text: str,
+        instructions: str | None = None,
+        previous_response_id: str | None = None,
+        tools: list | None = None,
+        tool_choice: dict | None = None,
+        reasoning: dict | None = None,
+    ):
+        idx = call_idx["i"]
+        call_idx["i"] += 1
+        text = responses[idx]
+        yield {"type": "response.output_text.delta", "delta": text, "sequence_number": 1}
+        yield _make_mock_response_event(text, f"resp_mock_empty_options_{idx}")
+
+    with patch(
+        "src.services.openai_stream_service.OpenAIResponsesEventStreamer.stream_events",
+        side_effect=_mock_stream_events,
+    ):
+        with TestClient(app) as client:
+            token = _register_and_get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            turn1 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"message": "I have over 5 years of trading experience."},
+            )
+            assert turn1.status_code == 200
+            sid = next(
+                p for p in _parse_sse_payloads(turn1.text) if p.get("type") == "done"
+            )["session_id"]
+
+            turn2 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "My risk tolerance is aggressive."},
+            )
+            assert turn2.status_code == 200
+
+            turn3 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "I target high growth returns."},
+            )
+            assert turn3.status_code == 200
+
+            turn4 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "US Stocks"},
+            )
+            assert turn4.status_code == 200
+            payloads4 = _parse_sse_payloads(turn4.text)
+
+            genui_event = next(p for p in payloads4 if p.get("type") == "genui")
+            genui_payload = genui_event["payload"]
+            option_ids = [item["id"] for item in genui_payload["options"]]
+
+            assert genui_payload["choice_id"] == "target_instrument"
+            assert len(option_ids) >= 2
+            assert "SPY" in option_ids
+            assert "QQQ" in option_ids
+
+
+def test_pre_strategy_injects_fallback_choice_prompt_when_model_omits_genui() -> None:
+    responses = [
+        _TURN1_RESPONSE,
+        _TURN2_RESPONSE,
+        _TURN3_RESPONSE,
+        (
+            "US equities noted. I will continue with instrument selection."
+            '<AGENT_STATE_PATCH>{"target_market":"us_stocks"}</AGENT_STATE_PATCH>'
+        ),
+    ]
+    call_idx = {"i": 0}
+
+    async def _mock_stream_events(
+        *,
+        model: str,
+        input_text: str,
+        instructions: str | None = None,
+        previous_response_id: str | None = None,
+        tools: list | None = None,
+        tool_choice: dict | None = None,
+        reasoning: dict | None = None,
+    ):
+        idx = call_idx["i"]
+        call_idx["i"] += 1
+        text = responses[idx]
+        yield {"type": "response.output_text.delta", "delta": text, "sequence_number": 1}
+        yield _make_mock_response_event(text, f"resp_mock_fallback_choice_{idx}")
+
+    with patch(
+        "src.services.openai_stream_service.OpenAIResponsesEventStreamer.stream_events",
+        side_effect=_mock_stream_events,
+    ):
+        with TestClient(app) as client:
+            token = _register_and_get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            turn1 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"message": "I have over 5 years of trading experience."},
+            )
+            assert turn1.status_code == 200
+            sid = next(
+                p for p in _parse_sse_payloads(turn1.text) if p.get("type") == "done"
+            )["session_id"]
+
+            turn2 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "My risk tolerance is aggressive."},
+            )
+            assert turn2.status_code == 200
+
+            turn3 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "I target high growth returns."},
+            )
+            assert turn3.status_code == 200
+
+            turn4 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "US Stocks"},
+            )
+            assert turn4.status_code == 200
+            payloads4 = _parse_sse_payloads(turn4.text)
+
+            genui_payloads = [
+                item["payload"]
+                for item in payloads4
+                if item.get("type") == "genui" and isinstance(item.get("payload"), dict)
+            ]
+            assert genui_payloads
+            choice_prompt = next(
+                item for item in genui_payloads if item.get("type") == "choice_prompt"
+            )
+            assert choice_prompt["choice_id"] == "target_instrument"
+            assert isinstance(choice_prompt.get("options"), list)
+            assert len(choice_prompt["options"]) >= 2
+
+            done4 = next(p for p in payloads4 if p.get("type") == "done")
+            assert done4["phase"] == "pre_strategy"
+            assert done4["missing_fields"][0] == "target_instrument"
+
+
+def test_pre_strategy_injects_fallback_choice_and_chart_after_instrument_patch_only() -> None:
+    responses = [
+        _TURN1_RESPONSE,
+        _TURN2_RESPONSE,
+        _TURN3_RESPONSE,
+        _TURN5_PRE_STRATEGY_RESPONSE,
+        (
+            "SPY noted. I will continue with your setup preferences."
+            '<AGENT_STATE_PATCH>{"target_instrument":"SPY"}</AGENT_STATE_PATCH>'
+        ),
+    ]
+    call_idx = {"i": 0}
+
+    async def _mock_stream_events(
+        *,
+        model: str,
+        input_text: str,
+        instructions: str | None = None,
+        previous_response_id: str | None = None,
+        tools: list | None = None,
+        tool_choice: dict | None = None,
+        reasoning: dict | None = None,
+    ):
+        idx = call_idx["i"]
+        call_idx["i"] += 1
+        text = responses[idx]
+        yield {"type": "response.output_text.delta", "delta": text, "sequence_number": 1}
+        yield _make_mock_response_event(text, f"resp_mock_fallback_chart_{idx}")
+
+    with patch(
+        "src.services.openai_stream_service.OpenAIResponsesEventStreamer.stream_events",
+        side_effect=_mock_stream_events,
+    ):
+        with TestClient(app) as client:
+            token = _register_and_get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            turn1 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"message": "I have over 5 years of trading experience."},
+            )
+            assert turn1.status_code == 200
+            sid = next(
+                p for p in _parse_sse_payloads(turn1.text) if p.get("type") == "done"
+            )["session_id"]
+
+            turn2 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "My risk tolerance is aggressive."},
+            )
+            assert turn2.status_code == 200
+
+            turn3 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "I target high growth returns."},
+            )
+            assert turn3.status_code == 200
+
+            turn4 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "US Stocks"},
+            )
+            assert turn4.status_code == 200
+
+            turn5 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": sid, "message": "SPY"},
+            )
+            assert turn5.status_code == 200
+            payloads5 = _parse_sse_payloads(turn5.text)
+
+            genui_payloads = [
+                item["payload"]
+                for item in payloads5
+                if item.get("type") == "genui" and isinstance(item.get("payload"), dict)
+            ]
+            assert genui_payloads
+            assert any(item.get("type") == "tradingview_chart" for item in genui_payloads)
+            assert any(
+                item.get("type") == "choice_prompt"
+                and item.get("choice_id") == "opportunity_frequency_bucket"
+                for item in genui_payloads
+            )
+
+            done5 = next(p for p in payloads5 if p.get("type") == "done")
+            assert done5["phase"] == "pre_strategy"
+            assert done5["missing_fields"][0] == "opportunity_frequency_bucket"
 
 
 def test_pre_strategy_can_emit_chart_and_choice_in_same_turn() -> None:

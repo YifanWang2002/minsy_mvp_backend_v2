@@ -156,6 +156,7 @@ def build_compact_performance_payload(result: Any) -> dict[str, Any]:
     max_dd_duration, recovery_duration, current_dd_duration = _drawdown_duration_stats(equity)
     rolling_summary = _rolling_summary(
         returns=returns,
+        trades=trades,
         periods_per_year=prepared.periods_per_year,
         window_bars=0,
     )
@@ -186,6 +187,7 @@ def build_compact_performance_payload(result: Any) -> dict[str, Any]:
             "rolling_sharpe_min": rolling_summary["sharpe_min"],
             "rolling_win_rate_pct_last": rolling_summary["win_rate_last"],
             "rolling_win_rate_pct_min": rolling_summary["win_rate_min"],
+            "rolling_win_rate_window_trades": rolling_summary["win_rate_window_trades"],
         }
     )
 
@@ -376,6 +378,66 @@ def compute_underwater_curve(
     }
 
 
+def compute_equity_curve(
+    result: Any,
+    *,
+    sampling_mode: str = "auto",
+    max_points: int = _DEFAULT_MAX_POINTS,
+) -> dict[str, Any]:
+    prepared = _prepare_backtest_data(result)
+    equity = prepared.equity
+    if equity.empty:
+        return {
+            "sampling_mode": "uniform",
+            "start_equity": None,
+            "end_equity": None,
+            "total_return_pct": None,
+            "curve_points": [],
+            "point_count": 0,
+            "point_count_total": 0,
+            "point_count_after_sampling": 0,
+        }
+
+    normalized_mode = _normalize_sampling_mode(sampling_mode)
+    total_points = len(equity)
+    resolved_mode = normalized_mode
+    if normalized_mode == "auto":
+        # Long intraday ranges are easier to read when first reduced to EOD.
+        resolved_mode = "eod" if total_points > max(120, int(max_points) * 3) else "uniform"
+
+    sampled = equity
+    if resolved_mode == "eod":
+        sampled = _sample_end_of_day(equity)
+
+    sampled_point_count = len(sampled)
+    sampled = _downsample_frame(sampled, max_points=max_points)
+    points = [
+        {"timestamp": _timestamp_to_iso(ts), "equity": float(value)}
+        for ts, value in zip(sampled["timestamp"], sampled["equity"], strict=False)
+    ]
+
+    start_equity = _safe_float(equity["equity"].iloc[0]) if total_points else None
+    end_equity = _safe_float(equity["equity"].iloc[-1]) if total_points else None
+    total_return_pct = None
+    if (
+        start_equity is not None
+        and end_equity is not None
+        and start_equity != 0
+    ):
+        total_return_pct = (end_equity / start_equity - 1.0) * 100.0
+
+    return {
+        "sampling_mode": resolved_mode,
+        "start_equity": start_equity,
+        "end_equity": end_equity,
+        "total_return_pct": _safe_float(total_return_pct),
+        "curve_points": points,
+        "point_count": len(points),
+        "point_count_total": total_points,
+        "point_count_after_sampling": sampled_point_count,
+    }
+
+
 def compute_rolling_metrics(
     result: Any,
     *,
@@ -385,6 +447,7 @@ def compute_rolling_metrics(
     prepared = _prepare_backtest_data(result)
     summary = _rolling_summary(
         returns=prepared.returns,
+        trades=prepared.trades,
         periods_per_year=prepared.periods_per_year,
         window_bars=window_bars,
     )
@@ -407,6 +470,9 @@ def compute_rolling_metrics(
         "sharpe_last": summary["sharpe_last"],
         "sharpe_min": summary["sharpe_min"],
         "sharpe_max": summary["sharpe_max"],
+        "win_rate_basis": "trades",
+        "win_rate_unit": "pct",
+        "win_rate_window_trades": summary["win_rate_window_trades"],
         "win_rate_last": summary["win_rate_last"],
         "win_rate_min": summary["win_rate_min"],
         "win_rate_max": summary["win_rate_max"],
@@ -662,16 +728,39 @@ def _drawdown_duration_stats(equity: pd.DataFrame) -> tuple[int, int, int]:
     return (max_duration, max_recovery, current_duration)
 
 
+def _normalize_sampling_mode(value: str) -> str:
+    normalized = value.strip().lower() if isinstance(value, str) else ""
+    if normalized in {"uniform", "eod", "auto"}:
+        return normalized
+    return "auto"
+
+
+def _sample_end_of_day(equity: pd.DataFrame) -> pd.DataFrame:
+    if equity.empty:
+        return equity
+    frame = equity.copy()
+    timestamps = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+    frame = frame[timestamps.notna()].copy()
+    if frame.empty:
+        return _empty_equity_frame()
+    frame["_day"] = timestamps.loc[frame.index].dt.normalize()
+    sampled = frame.groupby("_day", sort=True).tail(1)
+    sampled = sampled.drop(columns=["_day"]).sort_values("timestamp").reset_index(drop=True)
+    return sampled
+
+
 def _rolling_summary(
     *,
     returns: pd.Series,
+    trades: pd.DataFrame,
     periods_per_year: int,
     window_bars: int,
 ) -> dict[str, Any]:
-    if returns.empty:
+    if returns.empty and trades.empty:
         empty = pd.DataFrame(columns=["timestamp", "value"])
         return {
             "window_bars": 0,
+            "win_rate_window_trades": 0,
             "sharpe_last": None,
             "sharpe_min": None,
             "sharpe_max": None,
@@ -690,10 +779,24 @@ def _rolling_summary(
         window = min(len(returns), int(window_bars))
     if window < 2:
         window = min(len(returns), 2)
-    if window < 2:
+
+    # Rolling win rate should follow overall win rate semantics (trade-based),
+    # not bar-based return wins, otherwise it is biased toward 0 during flat bars.
+    trade_window = 0
+    if len(trades) > 0:
+        if window_bars <= 1:
+            auto_trade_window = max(5, int(round(len(trades) / 4)))
+            trade_window = min(len(trades), auto_trade_window)
+        else:
+            trade_window = min(len(trades), int(window_bars))
+        if trade_window < 1:
+            trade_window = min(len(trades), 1)
+
+    if window < 2 and trade_window < 1:
         empty = pd.DataFrame(columns=["timestamp", "value"])
         return {
             "window_bars": window,
+            "win_rate_window_trades": trade_window,
             "sharpe_last": None,
             "sharpe_min": None,
             "sharpe_max": None,
@@ -705,23 +808,30 @@ def _rolling_summary(
             "point_count_total": 0,
         }
 
-    roll_mean = returns.rolling(window).mean()
-    roll_std = returns.rolling(window).std(ddof=0).replace(0.0, np.nan)
-    roll_sharpe = np.sqrt(max(periods_per_year, 1)) * (roll_mean / roll_std)
-    roll_win = (returns > 0).astype(float).rolling(window).mean() * 100.0
+    if window >= 2:
+        roll_mean = returns.rolling(window).mean()
+        roll_std = returns.rolling(window).std(ddof=0).replace(0.0, np.nan)
+        roll_sharpe = np.sqrt(max(periods_per_year, 1)) * (roll_mean / roll_std)
+        sharpe_series = (
+            pd.DataFrame({"timestamp": roll_sharpe.index, "value": roll_sharpe.values})
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna(subset=["value"])
+            .reset_index(drop=True)
+        )
+    else:
+        sharpe_series = pd.DataFrame(columns=["timestamp", "value"])
 
-    sharpe_series = (
-        pd.DataFrame({"timestamp": roll_sharpe.index, "value": roll_sharpe.values})
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna(subset=["value"])
-        .reset_index(drop=True)
-    )
-    win_series = (
-        pd.DataFrame({"timestamp": roll_win.index, "value": roll_win.values})
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna(subset=["value"])
-        .reset_index(drop=True)
-    )
+    if trade_window >= 1 and not trades.empty:
+        trade_returns = (trades["pnl"] > 0).astype(float) * 100.0
+        trade_roll = trade_returns.rolling(trade_window).mean()
+        win_series = (
+            pd.DataFrame({"timestamp": trades["exit_time"].values, "value": trade_roll.values})
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna(subset=["value"])
+            .reset_index(drop=True)
+        )
+    else:
+        win_series = pd.DataFrame(columns=["timestamp", "value"])
 
     sharpe_last = _safe_float(sharpe_series["value"].iloc[-1]) if not sharpe_series.empty else None
     sharpe_min = _safe_float(sharpe_series["value"].min()) if not sharpe_series.empty else None
@@ -732,6 +842,7 @@ def _rolling_summary(
 
     return {
         "window_bars": window,
+        "win_rate_window_trades": trade_window,
         "sharpe_last": sharpe_last,
         "sharpe_min": sharpe_min,
         "sharpe_max": sharpe_max,

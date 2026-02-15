@@ -92,9 +92,6 @@ def _normalize_choice_prompt(payload: dict[str, Any]) -> dict[str, Any] | None:
             normalized["subtitle"] = subtitle.strip()
         options_out.append(normalized)
 
-    if len(options_out) < 2:
-        return None
-
     choice_id = payload.get("choice_id")
     if not isinstance(choice_id, str) or not choice_id.strip():
         return None
@@ -131,5 +128,54 @@ def _normalize_tradingview_chart(payload: dict[str, Any]) -> dict[str, Any] | No
     }
 
 
+def _normalize_backtest_charts(payload: dict[str, Any]) -> dict[str, Any] | None:
+    job_id = payload.get("job_id")
+    if not isinstance(job_id, str) or not job_id.strip():
+        return None
+
+    normalized: dict[str, Any] = {
+        "type": "backtest_charts",
+        "job_id": job_id.strip(),
+    }
+
+    raw_charts = payload.get("charts")
+    if isinstance(raw_charts, list):
+        charts = [
+            chart.strip()
+            for chart in raw_charts
+            if isinstance(chart, str) and chart.strip()
+        ]
+        if charts:
+            normalized["charts"] = charts
+
+    strategy_id = payload.get("strategy_id")
+    if isinstance(strategy_id, str) and strategy_id.strip():
+        normalized["strategy_id"] = strategy_id.strip()
+
+    title = payload.get("title")
+    if isinstance(title, str) and title.strip():
+        normalized["title"] = title.strip()
+
+    sampling = payload.get("sampling")
+    if isinstance(sampling, str) and sampling.strip():
+        normalized["sampling"] = sampling.strip().lower()
+
+    max_points = payload.get("max_points")
+    if isinstance(max_points, (int, float)):
+        bounded = max(10, min(5000, int(max_points)))
+        normalized["max_points"] = bounded
+
+    window_bars = payload.get("window_bars")
+    if isinstance(window_bars, (int, float)):
+        normalized["window_bars"] = max(0, int(window_bars))
+
+    source = payload.get("source")
+    if isinstance(source, str) and source.strip():
+        normalized["source"] = source.strip()
+
+    return normalized
+
+
 register_genui_normalizer("choice_prompt", _normalize_choice_prompt)
 register_genui_normalizer("tradingview_chart", _normalize_tradingview_chart)
+register_genui_normalizer("backtest_charts", _normalize_backtest_charts)

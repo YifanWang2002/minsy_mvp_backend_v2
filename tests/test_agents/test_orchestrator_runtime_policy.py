@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
 import pytest
 
+from src.agents import orchestrator as orchestrator_mod
+from src.agents.handler_protocol import PostProcessResult, PromptPieces
 from src.agents.handler_registry import init_all_artifacts
 from src.agents.orchestrator import ChatOrchestrator
 from src.api.schemas.requests import ChatSendRequest
@@ -39,7 +42,11 @@ class _CaptureStreamer:
                 "reasoning": reasoning,
             }
         )
-        yield {"type": "response.output_text.delta", "delta": "ok", "sequence_number": 1}
+        yield {
+            "type": "response.output_text.delta",
+            "delta": "ok",
+            "sequence_number": 1,
+        }
         yield {
             "type": "response.completed",
             "response": {
@@ -80,7 +87,11 @@ class _SequencedStreamer:
         index = min(self.turn, len(self.outputs) - 1)
         self.turn += 1
         output = self.outputs[index]
-        yield {"type": "response.output_text.delta", "delta": output, "sequence_number": 1}
+        yield {
+            "type": "response.output_text.delta",
+            "delta": output,
+            "sequence_number": 1,
+        }
         yield {
             "type": "response.completed",
             "response": {
@@ -88,6 +99,32 @@ class _SequencedStreamer:
                 "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
             },
         }
+
+
+class _HangingStreamer:
+    async def stream_events(
+        self,
+        *,
+        model: str,
+        input_text: str,
+        instructions: str | None = None,
+        previous_response_id: str | None = None,
+        tools: list[dict[str, object]] | None = None,
+        tool_choice: dict[str, object] | None = None,
+        reasoning: dict[str, object] | None = None,
+    ) -> AsyncIterator[dict[str, object]]:
+        del (
+            model,
+            input_text,
+            instructions,
+            previous_response_id,
+            tools,
+            tool_choice,
+            reasoning,
+        )
+        await asyncio.sleep(0.2)
+        if False:
+            yield {}
 
 
 def _parse_sse_payload(chunk: str) -> dict[str, object] | None:
@@ -108,8 +145,14 @@ def _parse_sse_payload(chunk: str) -> dict[str, object] | None:
 
 
 @pytest.mark.asyncio
-async def test_strategy_phase_auto_policy_limits_tools_to_validation(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+async def test_strategy_phase_auto_policy_limits_tools_to_validation(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -127,7 +170,9 @@ async def test_strategy_phase_auto_policy_limits_tools_to_validation(db_session)
     orchestrator = ChatOrchestrator(db_session)
 
     payload = ChatSendRequest(session_id=session.id, message="please draft schema")
-    async for _ in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+    async for _ in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
         pass
 
     assert streamer.calls
@@ -140,11 +185,20 @@ async def test_strategy_phase_auto_policy_limits_tools_to_validation(db_session)
         if isinstance(tool, dict) and tool.get("server_label") == "strategy"
     )
     assert strategy_tools["allowed_tools"] == ["strategy_validate_dsl"]
+    instructions = streamer.calls[0]["instructions"]
+    assert isinstance(instructions, str)
+    assert "Strategy Patch Workflow" not in instructions
 
 
 @pytest.mark.asyncio
-async def test_strategy_phase_with_strategy_id_exposes_strategy_and_backtest_tools(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+async def test_strategy_phase_with_strategy_id_exposes_strategy_and_backtest_tools(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -165,25 +219,32 @@ async def test_strategy_phase_with_strategy_id_exposes_strategy_and_backtest_too
     streamer = _CaptureStreamer()
     orchestrator = ChatOrchestrator(db_session)
 
-    payload = ChatSendRequest(session_id=session.id, message="run first backtest and iterate")
-    async for _ in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+    payload = ChatSendRequest(
+        session_id=session.id, message="run first backtest and iterate"
+    )
+    async for _ in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
         pass
 
     assert streamer.calls
     tools = streamer.calls[0]["tools"]
     assert isinstance(tools, list) and tools
-    labels = {
-        tool.get("server_label")
-        for tool in tools
-        if isinstance(tool, dict)
-    }
+    labels = {tool.get("server_label") for tool in tools if isinstance(tool, dict)}
     assert "strategy" in labels
+    assert "market_data" in labels
     assert "backtest" in labels
 
 
 @pytest.mark.asyncio
-async def test_strategy_phase_message_strategy_id_unlocks_artifact_tools(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+async def test_strategy_phase_message_strategy_id_unlocks_artifact_tools(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -215,33 +276,95 @@ async def test_strategy_phase_message_strategy_id_unlocks_artifact_tools(db_sess
         session_id=session.id,
         message=f"Please update strategy_id {strategy_id} and rerun backtest.",
     )
-    async for _ in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+    async for _ in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
         pass
 
     assert streamer.calls
     tools = streamer.calls[0]["tools"]
     assert isinstance(tools, list) and tools
-    labels = {
-        tool.get("server_label")
-        for tool in tools
-        if isinstance(tool, dict)
-    }
+    labels = {tool.get("server_label") for tool in tools if isinstance(tool, dict)}
     assert "strategy" in labels
+    assert "market_data" in labels
     assert "backtest" in labels
 
     await db_session.refresh(session)
-    strategy_profile = (
-        (session.artifacts or {})
-        .get("strategy", {})
-        .get("profile", {})
-    )
+    strategy_profile = (session.artifacts or {}).get("strategy", {}).get("profile", {})
     assert strategy_profile.get("strategy_id") == strategy_id
 
 
 @pytest.mark.asyncio
-async def test_strategy_phase_ignores_foreign_strategy_id_in_message(db_session) -> None:
-    user_a = User(email=f"orchestrator_rt_a_{uuid4().hex}@example.com", password_hash="hash", name="rt-a")
-    user_b = User(email=f"orchestrator_rt_b_{uuid4().hex}@example.com", password_hash="hash", name="rt-b")
+async def test_strategy_phase_auto_hydrates_strategy_id_from_session_storage(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    dsl_payload = load_strategy_payload(EXAMPLE_PATH)
+    created = await upsert_strategy_dsl(
+        db_session,
+        session_id=session.id,
+        dsl_payload=dsl_payload,
+        auto_commit=False,
+    )
+    await db_session.commit()
+    strategy_id = str(created.strategy.id)
+
+    streamer = _CaptureStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(
+        session_id=session.id,
+        message="Tighten RSI threshold and rerun performance checks.",
+    )
+    async for _ in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
+        pass
+
+    assert streamer.calls
+    tools = streamer.calls[0]["tools"]
+    assert isinstance(tools, list) and tools
+    labels = {tool.get("server_label") for tool in tools if isinstance(tool, dict)}
+    assert "strategy" in labels
+    assert "market_data" in labels
+    assert "backtest" in labels
+
+    await db_session.refresh(session)
+    strategy_profile = (session.artifacts or {}).get("strategy", {}).get("profile", {})
+    assert strategy_profile.get("strategy_id") == strategy_id
+
+
+@pytest.mark.asyncio
+async def test_strategy_phase_ignores_foreign_strategy_id_in_message(
+    db_session,
+) -> None:
+    user_a = User(
+        email=f"orchestrator_rt_a_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt-a",
+    )
+    user_b = User(
+        email=f"orchestrator_rt_b_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt-b",
+    )
     db_session.add_all([user_a, user_b])
     await db_session.flush()
 
@@ -279,7 +402,9 @@ async def test_strategy_phase_ignores_foreign_strategy_id_in_message(db_session)
         session_id=session_a.id,
         message=f"Please patch strategy_id {foreign_strategy_id}.",
     )
-    async for _ in orchestrator.handle_message_stream(user_a, payload, streamer, language="en"):
+    async for _ in orchestrator.handle_message_stream(
+        user_a, payload, streamer, language="en"
+    ):
         pass
 
     assert streamer.calls
@@ -294,8 +419,14 @@ async def test_strategy_phase_ignores_foreign_strategy_id_in_message(db_session)
 
 
 @pytest.mark.asyncio
-async def test_legacy_stress_test_session_is_redirected_to_strategy_phase(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+async def test_legacy_stress_test_session_is_redirected_to_strategy_phase(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -320,9 +451,13 @@ async def test_legacy_stress_test_session_is_redirected_to_strategy_phase(db_ses
     streamer = _CaptureStreamer()
     orchestrator = ChatOrchestrator(db_session)
 
-    payload = ChatSendRequest(session_id=session.id, message="analyze result and improve")
+    payload = ChatSendRequest(
+        session_id=session.id, message="analyze result and improve"
+    )
     done_payload: dict[str, object] | None = None
-    async for chunk in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
         envelope = _parse_sse_payload(chunk)
         if not isinstance(envelope, dict):
             continue
@@ -333,24 +468,32 @@ async def test_legacy_stress_test_session_is_redirected_to_strategy_phase(db_ses
     tools = streamer.calls[0]["tools"]
     assert isinstance(tools, list) and tools
 
-    labels = {
-        tool.get("server_label")
-        for tool in tools
-        if isinstance(tool, dict)
-    }
+    labels = {tool.get("server_label") for tool in tools if isinstance(tool, dict)}
     assert "strategy" in labels
+    assert "market_data" in labels
     assert "backtest" in labels
     assert isinstance(done_payload, dict)
     assert done_payload.get("phase") == "strategy"
     await db_session.refresh(session)
     assert session.current_phase == "strategy"
-    strategy_profile = ((session.artifacts or {}).get("strategy", {}) or {}).get("profile", {})
-    assert strategy_profile.get("strategy_id") == artifacts["stress_test"]["profile"]["strategy_id"]
+    strategy_profile = ((session.artifacts or {}).get("strategy", {}) or {}).get(
+        "profile", {}
+    )
+    assert (
+        strategy_profile.get("strategy_id")
+        == artifacts["stress_test"]["profile"]["strategy_id"]
+    )
 
 
 @pytest.mark.asyncio
-async def test_strategy_phase_auto_wraps_first_full_dsl_into_strategy_genui(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+async def test_strategy_phase_auto_wraps_first_full_dsl_into_strategy_genui(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -371,7 +514,9 @@ async def test_strategy_phase_auto_wraps_first_full_dsl_into_strategy_genui(db_s
 
     payload = ChatSendRequest(session_id=session.id, message="draft strategy dsl")
     genui_payloads: list[dict[str, object]] = []
-    async for chunk in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
         envelope = _parse_sse_payload(chunk)
         if not isinstance(envelope, dict):
             continue
@@ -390,8 +535,14 @@ async def test_strategy_phase_auto_wraps_first_full_dsl_into_strategy_genui(db_s
 
 
 @pytest.mark.asyncio
-async def test_strategy_phase_auto_wraps_validate_draft_id_into_strategy_ref_genui(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+async def test_strategy_phase_auto_wraps_validate_draft_id_into_strategy_ref_genui(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -419,7 +570,15 @@ async def test_strategy_phase_auto_wraps_validate_draft_id_into_strategy_ref_gen
             tool_choice: dict[str, object] | None = None,
             reasoning: dict[str, object] | None = None,
         ) -> AsyncIterator[dict[str, object]]:
-            del model, input_text, instructions, previous_response_id, tools, tool_choice, reasoning
+            del (
+                model,
+                input_text,
+                instructions,
+                previous_response_id,
+                tools,
+                tool_choice,
+                reasoning,
+            )
             validate_output = {
                 "category": "strategy",
                 "tool": "strategy_validate_dsl",
@@ -453,7 +612,9 @@ async def test_strategy_phase_auto_wraps_validate_draft_id_into_strategy_ref_gen
 
     payload = ChatSendRequest(session_id=session.id, message="draft strategy dsl")
     genui_payloads: list[dict[str, object]] = []
-    async for chunk in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
         envelope = _parse_sse_payload(chunk)
         if not isinstance(envelope, dict):
             continue
@@ -472,8 +633,302 @@ async def test_strategy_phase_auto_wraps_validate_draft_id_into_strategy_ref_gen
 
 
 @pytest.mark.asyncio
+async def test_strategy_phase_auto_wraps_validate_draft_id_from_nested_data(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    strategy_draft_id = str(uuid4())
+
+    class _McpNestedDataStreamer:
+        async def stream_events(
+            self,
+            *,
+            model: str,
+            input_text: str,
+            instructions: str | None = None,
+            previous_response_id: str | None = None,
+            tools: list[dict[str, object]] | None = None,
+            tool_choice: dict[str, object] | None = None,
+            reasoning: dict[str, object] | None = None,
+        ) -> AsyncIterator[dict[str, object]]:
+            del (
+                model,
+                input_text,
+                instructions,
+                previous_response_id,
+                tools,
+                tool_choice,
+                reasoning,
+            )
+            validate_output = {
+                "category": "strategy",
+                "tool": "strategy_validate_dsl",
+                "ok": True,
+                "data": {"strategy_draft_id": strategy_draft_id},
+            }
+            yield {
+                "type": "response.output_item.done",
+                "sequence_number": 1,
+                "item": {
+                    "type": "mcp_call",
+                    "id": "call_strategy_validate_nested",
+                    "name": "strategy_validate_dsl",
+                    "status": "completed",
+                    "arguments": {"session_id": str(session.id)},
+                    "output": json.dumps(validate_output),
+                },
+            }
+            yield {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp_{uuid4().hex}",
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+
+    streamer = _McpNestedDataStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="draft strategy dsl")
+    genui_payloads: list[dict[str, object]] = []
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") != "genui":
+            continue
+        candidate = envelope.get("payload")
+        if isinstance(candidate, dict):
+            genui_payloads.append(candidate)
+
+    assert genui_payloads
+    strategy_ref = next(
+        item for item in genui_payloads if item.get("type") == "strategy_ref"
+    )
+    assert strategy_ref.get("strategy_draft_id") == strategy_draft_id
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_filters_genui_with_post_process_artifacts(db_session, monkeypatch) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="kyc",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    class _ProbeHandler:
+        @property
+        def phase_name(self) -> str:
+            return "kyc"
+
+        @property
+        def required_fields(self) -> list[str]:
+            return []
+
+        @property
+        def valid_values(self) -> dict[str, set[str]]:
+            return {}
+
+        def build_prompt(self, ctx, user_message):  # type: ignore[no-untyped-def]
+            del ctx, user_message
+            return PromptPieces(
+                instructions="test",
+                enriched_input="hello",
+                reasoning={"effort": "none"},
+            )
+
+        async def post_process(self, ctx, raw_patches, db):  # type: ignore[no-untyped-def]
+            del raw_patches, db
+            artifacts = ctx.session_artifacts
+            phase_data = artifacts.setdefault("kyc", {"profile": {}, "missing_fields": []})
+            profile = phase_data.setdefault("profile", {})
+            profile["probe"] = "updated"
+            return PostProcessResult(
+                artifacts=artifacts,
+                missing_fields=[],
+                completed=False,
+            )
+
+        def filter_genui(self, payload, ctx):  # type: ignore[no-untyped-def]
+            phase_data = ctx.session_artifacts.get("kyc", {})
+            profile = phase_data.get("profile", {})
+            if isinstance(profile, dict) and profile.get("probe") == "updated":
+                return payload
+            return None
+
+        def init_artifacts(self) -> dict[str, object]:
+            return {"profile": {}, "missing_fields": []}
+
+        def build_phase_entry_guidance(self, ctx):  # type: ignore[no-untyped-def]
+            del ctx
+            return None
+
+    class _GenUiStreamer:
+        async def stream_events(
+            self,
+            *,
+            model: str,
+            input_text: str,
+            instructions: str | None = None,
+            previous_response_id: str | None = None,
+            tools: list[dict[str, object]] | None = None,
+            tool_choice: dict[str, object] | None = None,
+            reasoning: dict[str, object] | None = None,
+        ) -> AsyncIterator[dict[str, object]]:
+            del (
+                model,
+                input_text,
+                instructions,
+                previous_response_id,
+                tools,
+                tool_choice,
+                reasoning,
+            )
+            yield {
+                "type": "response.output_text.delta",
+                "delta": (
+                    "Choose one.\n"
+                    "<AGENT_UI_JSON>"
+                    '{"type":"choice_prompt","choice_id":"demo","question":"Pick one","options":'
+                    '[{"id":"a","label":"A"},{"id":"b","label":"B"}]}'
+                    "</AGENT_UI_JSON>"
+                ),
+                "sequence_number": 1,
+            }
+            yield {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp_{uuid4().hex}",
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+
+    monkeypatch.setattr(orchestrator_mod, "get_handler", lambda phase: _ProbeHandler())
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="hello")
+    genui_payloads: list[dict[str, object]] = []
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, _GenUiStreamer(), language="en"
+    ):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") != "genui":
+            continue
+        candidate = envelope.get("payload")
+        if isinstance(candidate, dict):
+            genui_payloads.append(candidate)
+
+    assert genui_payloads
+    assert genui_payloads[0].get("type") == "choice_prompt"
+
+
+def test_extract_wrapped_payloads_strips_mcp_pseudo_tags(db_session) -> None:
+    orchestrator = ChatOrchestrator(db_session)
+    raw_text = (
+        "Visible before\\n"
+        '<mcp_check_symbol_available>{"symbol":"BTC-USD"}</mcp_check_symbol_available>\\n'
+        "Visible middle\\n"
+        '<mcp_get_symbol_quote>{"symbol":"BTC-USD"}\\n'
+    )
+    cleaned, genui, patches = orchestrator._extract_wrapped_payloads(raw_text)
+
+    assert genui == []
+    assert patches == []
+    assert "Visible before" in cleaned
+    assert "Visible middle" in cleaned
+    assert "<mcp_" not in cleaned.lower()
+    assert "check_symbol_available" not in cleaned
+    assert "get_symbol_quote" not in cleaned
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_stream_timeout_returns_done_with_error_detail(
+    db_session, monkeypatch
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    monkeypatch.setattr(orchestrator_mod, "_OPENAI_STREAM_HARD_TIMEOUT_SECONDS", 0.05)
+    streamer = _HangingStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="hello")
+    done_payload: dict[str, object] | None = None
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") == "done":
+            done_payload = envelope
+
+    assert isinstance(done_payload, dict)
+    stream_error = done_payload.get("stream_error")
+    assert isinstance(stream_error, str)
+    assert "timed out" in stream_error.lower()
+    detail = done_payload.get("stream_error_detail")
+    assert isinstance(detail, dict)
+    diagnostics = detail.get("diagnostics")
+    assert isinstance(diagnostics, dict)
+    assert diagnostics.get("category") == "orchestrator_stream_timeout"
+
+
+@pytest.mark.asyncio
 async def test_stop_criteria_placeholder_emits_hint_after_ten_turns(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -493,7 +948,9 @@ async def test_stop_criteria_placeholder_emits_hint_after_ten_turns(db_session) 
     seen_stop_hint = False
     for idx in range(10):
         payload = ChatSendRequest(session_id=session.id, message=f"turn-{idx}")
-        async for chunk in orchestrator.handle_message_stream(user, payload, streamer, language="en"):
+        async for chunk in orchestrator.handle_message_stream(
+            user, payload, streamer, language="en"
+        ):
             envelope = _parse_sse_payload(chunk)
             if not isinstance(envelope, dict):
                 continue
@@ -512,7 +969,11 @@ async def test_stop_criteria_placeholder_emits_hint_after_ten_turns(db_session) 
 
 @pytest.mark.asyncio
 async def test_phase_transition_resets_previous_response_id(db_session) -> None:
-    user = User(email=f"orchestrator_rt_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -540,8 +1001,14 @@ async def test_phase_transition_resets_previous_response_id(db_session) -> None:
 
 
 @pytest.mark.asyncio
-async def test_phase_carryover_memory_is_injected_once_after_transition(db_session) -> None:
-    user = User(email=f"orchestrator_carry_{uuid4().hex}@example.com", password_hash="hash", name="rt")
+async def test_phase_carryover_memory_is_injected_once_after_transition(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_carry_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
     db_session.add(user)
     await db_session.flush()
 
@@ -573,7 +1040,9 @@ async def test_phase_carryover_memory_is_injected_once_after_transition(db_sessi
         session_id=session.id,
         message="我的经验 years_5_plus，风险 aggressive，收益 high_growth。",
     )
-    async for _ in orchestrator.handle_message_stream(user, payload1, streamer, language="zh"):
+    async for _ in orchestrator.handle_message_stream(
+        user, payload1, streamer, language="zh"
+    ):
         pass
 
     await db_session.refresh(session)
@@ -583,8 +1052,12 @@ async def test_phase_carryover_memory_is_injected_once_after_transition(db_sessi
     assert isinstance(carryover_meta, dict)
     assert carryover_meta.get("target_phase") == "pre_strategy"
 
-    payload2 = ChatSendRequest(session_id=session.id, message="目标市场 target_market=us_stocks。")
-    async for _ in orchestrator.handle_message_stream(user, payload2, streamer, language="zh"):
+    payload2 = ChatSendRequest(
+        session_id=session.id, message="目标市场 target_market=us_stocks。"
+    )
+    async for _ in orchestrator.handle_message_stream(
+        user, payload2, streamer, language="zh"
+    ):
         pass
 
     assert len(streamer.calls) >= 2
@@ -598,7 +1071,9 @@ async def test_phase_carryover_memory_is_injected_once_after_transition(db_sessi
     assert "phase_carryover_memory" not in meta_after_consume
 
     payload3 = ChatSendRequest(session_id=session.id, message="继续。")
-    async for _ in orchestrator.handle_message_stream(user, payload3, streamer, language="zh"):
+    async for _ in orchestrator.handle_message_stream(
+        user, payload3, streamer, language="zh"
+    ):
         pass
 
     assert len(streamer.calls) >= 3

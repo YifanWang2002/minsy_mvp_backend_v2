@@ -41,7 +41,16 @@ async def get_strategy_draft_detail(
     strategy_draft_id: UUID,
     user: User = Depends(get_current_user),
 ) -> StrategyDraftDetailResponse:
-    draft = await get_strategy_draft(strategy_draft_id)
+    try:
+        draft = await get_strategy_draft(strategy_draft_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "STRATEGY_DRAFT_STORE_UNAVAILABLE",
+                "message": str(exc),
+            },
+        ) from exc
     if draft is None or draft.user_id != user.id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -170,11 +179,26 @@ async def confirm_strategy(
         ) from exc
 
     receipt = persistence.receipt
+    strategy_market, strategy_tickers, strategy_timeframe = _extract_strategy_scope(
+        payload.dsl_json
+    )
+    strategy_tickers_csv = ",".join(strategy_tickers) if strategy_tickers else None
+    strategy_primary_symbol = strategy_tickers[0] if strategy_tickers else None
 
     artifacts = ChatOrchestrator._ensure_phase_keyed(copy.deepcopy(session.artifacts or {}))
     strategy_block = artifacts.setdefault(Phase.STRATEGY.value, {"profile": {}, "missing_fields": []})
     strategy_profile = dict(strategy_block.get("profile", {}))
     strategy_profile["strategy_id"] = str(receipt.strategy_id)
+    if strategy_market:
+        strategy_profile["strategy_market"] = strategy_market
+    if strategy_tickers:
+        strategy_profile["strategy_tickers"] = strategy_tickers
+    if strategy_tickers_csv:
+        strategy_profile["strategy_tickers_csv"] = strategy_tickers_csv
+    if strategy_primary_symbol:
+        strategy_profile["strategy_primary_symbol"] = strategy_primary_symbol
+    if strategy_timeframe:
+        strategy_profile["strategy_timeframe"] = strategy_timeframe
     strategy_profile["strategy_confirmed"] = True
     strategy_profile["strategy_last_confirmed_at"] = receipt.last_updated_at.isoformat()
     strategy_block["profile"] = strategy_profile
@@ -186,6 +210,16 @@ async def confirm_strategy(
     )
     stress_profile = dict(stress_block.get("profile", {}))
     stress_profile["strategy_id"] = str(receipt.strategy_id)
+    if strategy_market:
+        stress_profile["strategy_market"] = strategy_market
+    if strategy_tickers:
+        stress_profile["strategy_tickers"] = strategy_tickers
+    if strategy_tickers_csv:
+        stress_profile["strategy_tickers_csv"] = strategy_tickers_csv
+    if strategy_primary_symbol:
+        stress_profile["strategy_primary_symbol"] = strategy_primary_symbol
+    if strategy_timeframe:
+        stress_profile["strategy_timeframe"] = strategy_timeframe
     stress_profile.pop("backtest_job_id", None)
     stress_profile.pop("backtest_status", None)
     stress_profile.pop("backtest_error_code", None)
@@ -193,16 +227,32 @@ async def confirm_strategy(
     stress_block["missing_fields"] = ["backtest_job_id", "backtest_status"]
 
     session.artifacts = artifacts
+    # Reset response-chain context so post-confirm turns always use refreshed
+    # strategy runtime policy/toolset.
+    session.previous_response_id = None
+    session.current_phase = Phase.STRATEGY.value
     session.last_activity_at = datetime.now(UTC)
+    next_meta = dict(session.metadata_ or {})
+    next_meta["strategy_id"] = str(receipt.strategy_id)
+    next_meta["strategy_confirmed_at"] = receipt.last_updated_at.isoformat()
+    if strategy_market:
+        next_meta["strategy_market"] = strategy_market
+    if strategy_tickers:
+        next_meta["strategy_tickers"] = strategy_tickers
+    if strategy_tickers_csv:
+        next_meta["strategy_tickers_csv"] = strategy_tickers_csv
+    if strategy_primary_symbol:
+        next_meta["strategy_primary_symbol"] = strategy_primary_symbol
+    if strategy_timeframe:
+        next_meta["strategy_timeframe"] = strategy_timeframe
 
     # Keep the session in strategy phase for performance-driven iteration.
     # `advance_to_stress_test` is currently ignored until dedicated stress-test
     # tools are shipped.
     if payload.advance_to_stress_test:
-        next_meta = dict(session.metadata_ or {})
         next_meta["advance_to_stress_test_ignored"] = True
         next_meta["advance_to_stress_test_ignored_at"] = datetime.now(UTC).isoformat()
-        session.metadata_ = next_meta
+    session.metadata_ = next_meta
 
     await db.commit()
     await db.refresh(session)
@@ -306,3 +356,40 @@ def _parse_sse_payload(chunk: str) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+def _extract_strategy_scope(
+    dsl_json: dict[str, Any],
+) -> tuple[str | None, list[str], str | None]:
+    if not isinstance(dsl_json, dict):
+        return None, [], None
+
+    universe = dsl_json.get("universe")
+    if not isinstance(universe, dict):
+        universe = {}
+
+    strategy_market = _coerce_non_empty_string(universe.get("market"))
+    strategy_tickers = _coerce_ticker_list(universe.get("tickers"))
+    strategy_timeframe = _coerce_non_empty_string(dsl_json.get("timeframe"))
+    return strategy_market, strategy_tickers, strategy_timeframe
+
+
+def _coerce_non_empty_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _coerce_ticker_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized

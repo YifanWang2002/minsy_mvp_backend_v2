@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
+from src.agents.handler_protocol import PhaseContext, RuntimePolicy
 from src.agents.handlers import pre_strategy_handler as handler_mod
 from src.agents.handlers.pre_strategy_handler import PreStrategyHandler
 from src.agents.skills import pre_strategy_skills as skills_mod
@@ -84,11 +87,11 @@ def test_dynamic_state_uses_catalog_and_normalized_values(monkeypatch) -> None:
         inferred_instrument_from_user_message="spy",
     )
 
-    assert "- selected_target_market: us_stocks" in state
-    assert "- selected_target_instrument: SPY" in state
-    assert "- allowed_instruments_for_selected_market: SPY, QQQ, AAPL" in state
-    assert "- mapped_market_data_symbol_for_selected_instrument: SPY" in state
-    assert "- mapped_tradingview_symbol_for_selected_instrument: SPY" in state
+    assert "- target_market: us_stocks" in state
+    assert "- target_instrument: SPY" in state
+    assert "- allowed_instruments_for_target_market: SPY, QQQ, AAPL" in state
+    assert "- mapped_market_data_symbol_for_target_instrument: SPY" in state
+    assert "- mapped_tradingview_symbol_for_target_instrument: SPY" in state
     assert "- symbol_newly_provided_this_turn_hint: true" in state
     assert "market_symbol_catalog:" not in state
     assert "instrument_symbol_map (instrument:market_data|tradingview):" not in state
@@ -155,6 +158,22 @@ def test_validate_patch_normalizes_market_alias_and_symbol_case(monkeypatch) -> 
     }
 
 
+def test_validate_patch_rejects_non_canonical_selected_keys(monkeypatch) -> None:
+    monkeypatch.setattr(handler_mod, "get_pre_strategy_valid_values", _sample_valid_values)
+
+    handler = PreStrategyHandler()
+    validated = handler._validate_patch(
+        {
+            "selected_target_market": "us_stocks",
+            "selected_target_instrument": "qqq",
+            "selected_opportunity_frequency_bucket": "few_per_week",
+            "selected_holding_period_bucket": "intraday",
+        }
+    )
+
+    assert validated == {}
+
+
 def test_infer_instrument_supports_market_data_style_aliases(monkeypatch) -> None:
     monkeypatch.setattr(
         handler_mod,
@@ -165,21 +184,21 @@ def test_infer_instrument_supports_market_data_style_aliases(monkeypatch) -> Non
     assert (
         handler_mod._infer_instrument_from_message(
             user_message="请看 btc-usd 的行情",
-            selected_market="crypto",
+            target_market="crypto",
         )
         == "BTCUSD"
     )
     assert (
         handler_mod._infer_instrument_from_message(
             user_message="trade eurusd=x",
-            selected_market="forex",
+            target_market="forex",
         )
         == "EURUSD"
     )
     assert (
         handler_mod._infer_instrument_from_message(
             user_message="Let's do es=f.",
-            selected_market="futures",
+            target_market="futures",
         )
         == "ES"
     )
@@ -194,7 +213,7 @@ def test_infer_instrument_does_not_false_positive_on_short_alias(monkeypatch) ->
 
     inferred = handler_mod._infer_instrument_from_message(
         user_message="I want the best setup this week.",
-        selected_market="futures",
+        target_market="futures",
     )
     assert inferred is None
 
@@ -212,6 +231,57 @@ def test_validate_patch_rejects_injection_like_values(monkeypatch) -> None:
         }
     )
     assert validated == {"holding_period_bucket": "intraday"}
+
+
+def test_build_prompt_injects_market_data_tools_when_symbol_is_newly_provided(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        handler_mod,
+        "get_pre_strategy_market_instrument_map",
+        _sample_market_catalog,
+    )
+
+    handler = PreStrategyHandler()
+    ctx = PhaseContext(
+        user_id=uuid4(),
+        session_id=uuid4(),
+        language="en",
+        runtime_policy=RuntimePolicy(),
+        session_artifacts={
+            "kyc": {
+                "profile": {
+                    "trading_years_bucket": "years_5_plus",
+                    "risk_tolerance": "moderate",
+                    "return_expectation": "growth",
+                },
+                "missing_fields": [],
+            },
+            "pre_strategy": {
+                "profile": {"target_market": "us_stocks"},
+                "missing_fields": [
+                    "target_instrument",
+                    "opportunity_frequency_bucket",
+                    "holding_period_bucket",
+                ],
+            },
+        },
+    )
+
+    prompt = handler.build_prompt(ctx, "Let's trade SPY")
+    assert isinstance(prompt.tools, list) and prompt.tools
+    market_data_tool = next(
+        tool
+        for tool in prompt.tools
+        if isinstance(tool, dict) and tool.get("server_label") == "market_data"
+    )
+    assert market_data_tool["allowed_tools"] == [
+        "check_symbol_available",
+        "get_symbol_quote",
+    ]
+
+    no_symbol_prompt = handler.build_prompt(ctx, "Let's continue")
+    assert no_symbol_prompt.tools is None
 
 
 def test_dynamic_state_handles_empty_market_catalog(monkeypatch) -> None:

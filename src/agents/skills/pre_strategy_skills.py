@@ -319,32 +319,32 @@ def build_pre_strategy_dynamic_state(
     next_missing = missing_fields[0] if missing_fields else "none"
     missing_str = ", ".join(missing_fields) if missing_fields else "none - all collected"
 
-    selected_market_raw = (collected_fields or {}).get("target_market")
-    selected_market = (
-        normalize_market_value(selected_market_raw)
-        if isinstance(selected_market_raw, str) and selected_market_raw.strip()
+    target_market_raw = (collected_fields or {}).get("target_market")
+    target_market = (
+        normalize_market_value(target_market_raw)
+        if isinstance(target_market_raw, str) and target_market_raw.strip()
         else ""
     )
-    selected_instrument_raw = (collected_fields or {}).get("target_instrument")
-    selected_instrument = (
-        normalize_instrument_value(selected_instrument_raw)
-        if isinstance(selected_instrument_raw, str) and selected_instrument_raw.strip()
+    target_instrument_raw = (collected_fields or {}).get("target_instrument")
+    target_instrument = (
+        normalize_instrument_value(target_instrument_raw)
+        if isinstance(target_instrument_raw, str) and target_instrument_raw.strip()
         else ""
     )
 
-    allowed_instruments = market_catalog.get(selected_market, ())
+    allowed_instruments = market_catalog.get(target_market, ())
     allowed_instruments_str = (
         ", ".join(allowed_instruments)
         if allowed_instruments
         else "none - select target_market first"
     )
     mapped_market_data_symbol = get_market_data_symbol_for_market_instrument(
-        market=selected_market,
-        instrument=selected_instrument,
+        market=target_market,
+        instrument=target_instrument,
     )
     mapped_tradingview_symbol = get_tradingview_symbol_for_market_instrument(
-        market=selected_market,
-        instrument=selected_instrument,
+        market=target_market,
+        instrument=target_instrument,
     )
 
     market_list_str = (
@@ -368,11 +368,11 @@ def build_pre_strategy_dynamic_state(
         f"- has_missing_fields: {str(has_missing).lower()}\n"
         f"- next_missing_field: {next_missing}\n"
         f"- available_markets: {available_markets_line}\n"
-        f"- selected_target_market: {selected_market or 'none'}\n"
-        f"- selected_target_instrument: {selected_instrument or 'none'}\n"
-        f"- allowed_instruments_for_selected_market: {allowed_instruments_str}\n"
-        f"- mapped_market_data_symbol_for_selected_instrument: {mapped_market_data_symbol}\n"
-        f"- mapped_tradingview_symbol_for_selected_instrument: {mapped_tradingview_symbol}\n"
+        f"- target_market: {target_market or 'none'}\n"
+        f"- target_instrument: {target_instrument or 'none'}\n"
+        f"- allowed_instruments_for_target_market: {allowed_instruments_str}\n"
+        f"- mapped_market_data_symbol_for_target_instrument: {mapped_market_data_symbol}\n"
+        f"- mapped_tradingview_symbol_for_target_instrument: {mapped_tradingview_symbol}\n"
         f"- symbol_newly_provided_this_turn_hint: {str(symbol_newly_provided_this_turn_hint).lower()}\n"
         f"- inferred_instrument_from_user_message: "
         f"{normalize_instrument_value(inferred_instrument_from_user_message) if inferred_instrument_from_user_message else 'none'}\n"
