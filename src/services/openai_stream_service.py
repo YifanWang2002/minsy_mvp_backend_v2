@@ -275,6 +275,44 @@ def _build_stream_error_payload(
     return payload
 
 
+def _build_stream_kwargs(
+    *,
+    model: str,
+    input_text: str,
+    instructions: str | None,
+    previous_response_id: str | None,
+    tools: list[dict[str, Any]] | None,
+    tool_choice: dict[str, Any] | None,
+    reasoning: dict[str, Any] | None,
+) -> dict[str, Any]:
+    stream_kwargs: dict[str, Any] = {
+        "model": model,
+        "input": input_text,
+    }
+    optional_fields: dict[str, Any] = {
+        "instructions": instructions,
+        "previous_response_id": previous_response_id,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "reasoning": reasoning,
+    }
+    for key, value in optional_fields.items():
+        if value is not None:
+            stream_kwargs[key] = value
+    return stream_kwargs
+
+
+def _should_retry_stream_error(
+    *,
+    retryable: bool,
+    saw_text_output_event: bool,
+    attempt: int,
+    max_attempts: int,
+) -> bool:
+    # If user-facing text has not started yet, retry transient failures.
+    return retryable and not saw_text_output_event and attempt < max_attempts
+
+
 class ResponsesEventStreamer(Protocol):
     """Protocol for streaming raw Responses API events."""
 
@@ -309,20 +347,15 @@ class OpenAIResponsesEventStreamer:
         tool_choice: dict[str, Any] | None = None,
         reasoning: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        stream_kwargs: dict[str, Any] = {
-            "model": model,
-            "input": input_text,
-        }
-        if instructions is not None:
-            stream_kwargs["instructions"] = instructions
-        if previous_response_id is not None:
-            stream_kwargs["previous_response_id"] = previous_response_id
-        if tools is not None:
-            stream_kwargs["tools"] = tools
-        if tool_choice is not None:
-            stream_kwargs["tool_choice"] = tool_choice
-        if reasoning is not None:
-            stream_kwargs["reasoning"] = reasoning
+        stream_kwargs = _build_stream_kwargs(
+            model=model,
+            input_text=input_text,
+            instructions=instructions,
+            previous_response_id=previous_response_id,
+            tools=tools,
+            tool_choice=tool_choice,
+            reasoning=reasoning,
+        )
 
         max_attempts = 3
         for attempt in range(1, max_attempts + 1):
@@ -346,7 +379,12 @@ class OpenAIResponsesEventStreamer:
                 retryable = retryable_network or retryable_mcp
                 # If user-facing text has not started yet, retry both transient network
                 # failures and MCP list-tools fetch failures even if setup events appeared.
-                can_retry = retryable and not saw_text_output_event and attempt < max_attempts
+                can_retry = _should_retry_stream_error(
+                    retryable=retryable,
+                    saw_text_output_event=saw_text_output_event,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                )
                 if can_retry:
                     await asyncio.sleep(0.35 * attempt)
                     continue

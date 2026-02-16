@@ -67,6 +67,41 @@ _BACKTEST_DEFAULT_CHARTS: tuple[str, ...] = (
     "monthly_return_table",
     "holding_period_pnl_bins",
 )
+_STRATEGY_SCHEMA_ONLY_TOOL_NAMES: tuple[str, ...] = (
+    "strategy_validate_dsl",
+)
+_STRATEGY_ARTIFACT_OPS_TOOL_NAMES: tuple[str, ...] = (
+    "strategy_validate_dsl",
+    "strategy_upsert_dsl",
+    "strategy_get_dsl",
+    "strategy_list_tunable_params",
+    "strategy_patch_dsl",
+    "strategy_list_versions",
+    "strategy_get_version_dsl",
+    "strategy_diff_versions",
+    "strategy_rollback_dsl",
+    "get_indicator_detail",
+    "get_indicator_catalog",
+)
+_MARKET_DATA_MINIMAL_TOOL_NAMES: tuple[str, ...] = (
+    "get_symbol_data_coverage",
+)
+_BACKTEST_BOOTSTRAP_TOOL_NAMES: tuple[str, ...] = (
+    "backtest_create_job",
+    "backtest_get_job",
+)
+_BACKTEST_FEEDBACK_TOOL_NAMES: tuple[str, ...] = (
+    "backtest_create_job",
+    "backtest_get_job",
+    "backtest_entry_hour_pnl_heatmap",
+    "backtest_entry_weekday_pnl",
+    "backtest_monthly_return_table",
+    "backtest_holding_period_pnl_bins",
+    "backtest_long_short_breakdown",
+    "backtest_exit_reason_breakdown",
+    "backtest_underwater_curve",
+    "backtest_rolling_metrics",
+)
 
 # Singleton for KYC-specific helpers (profile loading from UserProfile)
 _kyc_handler = KYCHandler()
@@ -505,7 +540,7 @@ class ChatOrchestrator:
             transitioned = True
 
         # Fallback: use genui question as assistant text
-        if not assistant_text and filtered_genui_payloads:
+        if not assistant_text and filtered_genui_payloads and full_text.strip():
             fallback_choice = next(
                 (
                     payload
@@ -1771,42 +1806,7 @@ class ChatOrchestrator:
             return HandlerRuntimePolicy(
                 phase_stage="artifact_ops",
                 tool_mode="replace",
-                allowed_tools=[
-                    self._build_strategy_tool_def(
-                        allowed_tools=[
-                            "strategy_validate_dsl",
-                            "strategy_upsert_dsl",
-                            "strategy_get_dsl",
-                            "strategy_list_tunable_params",
-                            "strategy_patch_dsl",
-                            "strategy_list_versions",
-                            "strategy_get_version_dsl",
-                            "strategy_diff_versions",
-                            "strategy_rollback_dsl",
-                            "get_indicator_detail",
-                            "get_indicator_catalog",
-                        ],
-                    ),
-                    self._build_market_data_tool_def(
-                        allowed_tools=[
-                            "get_symbol_data_coverage",
-                        ],
-                    ),
-                    self._build_backtest_tool_def(
-                        allowed_tools=[
-                            "backtest_create_job",
-                            "backtest_get_job",
-                            "backtest_entry_hour_pnl_heatmap",
-                            "backtest_entry_weekday_pnl",
-                            "backtest_monthly_return_table",
-                            "backtest_holding_period_pnl_bins",
-                            "backtest_long_short_breakdown",
-                            "backtest_exit_reason_breakdown",
-                            "backtest_underwater_curve",
-                            "backtest_rolling_metrics",
-                        ],
-                    ),
-                ],
+                allowed_tools=self._build_strategy_artifact_ops_allowed_tools(),
             )
 
         return HandlerRuntimePolicy(
@@ -1814,7 +1814,7 @@ class ChatOrchestrator:
             tool_mode="replace",
             allowed_tools=[
                 self._build_strategy_tool_def(
-                    allowed_tools=["strategy_validate_dsl"],
+                    allowed_tools=list(_STRATEGY_SCHEMA_ONLY_TOOL_NAMES),
                 )
             ],
         )
@@ -1834,42 +1834,7 @@ class ChatOrchestrator:
             return HandlerRuntimePolicy(
                 phase_stage="feedback",
                 tool_mode="replace",
-                allowed_tools=[
-                    self._build_market_data_tool_def(
-                        allowed_tools=[
-                            "get_symbol_data_coverage",
-                        ],
-                    ),
-                    self._build_backtest_tool_def(
-                        allowed_tools=[
-                            "backtest_create_job",
-                            "backtest_get_job",
-                            "backtest_entry_hour_pnl_heatmap",
-                            "backtest_entry_weekday_pnl",
-                            "backtest_monthly_return_table",
-                            "backtest_holding_period_pnl_bins",
-                            "backtest_long_short_breakdown",
-                            "backtest_exit_reason_breakdown",
-                            "backtest_underwater_curve",
-                            "backtest_rolling_metrics",
-                        ],
-                    ),
-                    self._build_strategy_tool_def(
-                        allowed_tools=[
-                            "strategy_validate_dsl",
-                            "strategy_upsert_dsl",
-                            "strategy_get_dsl",
-                            "strategy_list_tunable_params",
-                            "strategy_patch_dsl",
-                            "strategy_list_versions",
-                            "strategy_get_version_dsl",
-                            "strategy_diff_versions",
-                            "strategy_rollback_dsl",
-                            "get_indicator_detail",
-                            "get_indicator_catalog",
-                        ],
-                    ),
-                ],
+                allowed_tools=self._build_stress_feedback_allowed_tools(),
             )
 
         return HandlerRuntimePolicy(
@@ -1877,13 +1842,39 @@ class ChatOrchestrator:
             tool_mode="replace",
             allowed_tools=[
                 self._build_market_data_tool_def(
-                    allowed_tools=["get_symbol_data_coverage"],
+                    allowed_tools=list(_MARKET_DATA_MINIMAL_TOOL_NAMES),
                 ),
                 self._build_backtest_tool_def(
-                    allowed_tools=["backtest_create_job", "backtest_get_job"],
+                    allowed_tools=list(_BACKTEST_BOOTSTRAP_TOOL_NAMES),
                 ),
             ],
         )
+
+    def _build_strategy_artifact_ops_allowed_tools(self) -> list[dict[str, Any]]:
+        return [
+            self._build_strategy_tool_def(
+                allowed_tools=list(_STRATEGY_ARTIFACT_OPS_TOOL_NAMES),
+            ),
+            self._build_market_data_tool_def(
+                allowed_tools=list(_MARKET_DATA_MINIMAL_TOOL_NAMES),
+            ),
+            self._build_backtest_tool_def(
+                allowed_tools=list(_BACKTEST_FEEDBACK_TOOL_NAMES),
+            ),
+        ]
+
+    def _build_stress_feedback_allowed_tools(self) -> list[dict[str, Any]]:
+        return [
+            self._build_market_data_tool_def(
+                allowed_tools=list(_MARKET_DATA_MINIMAL_TOOL_NAMES),
+            ),
+            self._build_backtest_tool_def(
+                allowed_tools=list(_BACKTEST_FEEDBACK_TOOL_NAMES),
+            ),
+            self._build_strategy_tool_def(
+                allowed_tools=list(_STRATEGY_ARTIFACT_OPS_TOOL_NAMES),
+            ),
+        ]
 
     @staticmethod
     def _extract_phase_profile(

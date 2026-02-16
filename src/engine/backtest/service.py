@@ -10,8 +10,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.engine.backtest.engine import EventDrivenBacktestEngine
 from src.engine.backtest.analytics import build_compact_performance_payload
+from src.engine.backtest.engine import EventDrivenBacktestEngine
 from src.engine.backtest.types import BacktestConfig
 from src.engine.data import DataLoader
 from src.engine.strategy import parse_strategy_payload
@@ -80,15 +80,13 @@ async def create_backtest_job(
     if strategy is None:
         raise BacktestStrategyNotFoundError(f"Strategy not found: {strategy_id}")
 
-    initial_capital_value = float(initial_capital)
-    commission_rate_value = float(commission_rate)
-    slippage_bps_value = float(slippage_bps)
-    if initial_capital_value <= 0:
-        raise ValueError("initial_capital must be > 0")
-    if commission_rate_value < 0:
-        raise ValueError("commission_rate must be >= 0")
-    if slippage_bps_value < 0:
-        raise ValueError("slippage_bps must be >= 0")
+    initial_capital_value, commission_rate_value, slippage_bps_value = (
+        _validated_backtest_config_values(
+            initial_capital=initial_capital,
+            commission_rate=commission_rate,
+            slippage_bps=slippage_bps,
+        )
+    )
 
     config = {
         "start_date": start_date.strip(),
@@ -167,17 +165,11 @@ async def execute_backtest_job(
 
     strategy = await db.scalar(select(Strategy).where(Strategy.id == job.strategy_id))
     if strategy is None:
-        job.status = "failed"
-        job.progress = 100
-        job.current_step = "failed"
-        job.completed_at = datetime.now(UTC)
-        job.error_message = f"Strategy not found: {job.strategy_id}"
-        job.results = {
-            "error": {
-                "code": "STRATEGY_NOT_FOUND",
-                "message": job.error_message,
-            }
-        }
+        _mark_job_failed(
+            job,
+            error_code="STRATEGY_NOT_FOUND",
+            message=f"Strategy not found: {job.strategy_id}",
+        )
         if auto_commit:
             await db.commit()
         return _to_view(job)
@@ -215,16 +207,7 @@ async def execute_backtest_job(
             end_date=end_date,
         )
 
-        raw_record_bar_events = (job.config or {}).get("record_bar_events", False)
-        if isinstance(raw_record_bar_events, bool):
-            record_bar_events = raw_record_bar_events
-        else:
-            record_bar_events = str(raw_record_bar_events).strip().lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
+        record_bar_events = _parse_record_bar_events(job.config or {})
 
         config = BacktestConfig(
             initial_capital=float((job.config or {}).get("initial_capital", 100_000.0)),
@@ -256,17 +239,11 @@ async def execute_backtest_job(
         job.error_message = None
 
     except Exception as exc:  # noqa: BLE001
-        job.status = "failed"
-        job.progress = 100
-        job.current_step = "failed"
-        job.completed_at = datetime.now(UTC)
-        job.error_message = f"{type(exc).__name__}: {exc}"
-        job.results = {
-            "error": {
-                "code": "BACKTEST_RUN_ERROR",
-                "message": job.error_message,
-            }
-        }
+        _mark_job_failed(
+            job,
+            error_code="BACKTEST_RUN_ERROR",
+            message=f"{type(exc).__name__}: {exc}",
+        )
 
     if auto_commit:
         await db.commit()
@@ -360,20 +337,15 @@ def _resolve_timerange(
     if raw_start and raw_end:
         start = _parse_dt(raw_start)
         end = _parse_dt(raw_end)
-        if end < start:
-            raise ValueError("end_date must be greater than or equal to start_date")
-        return (start, end)
+        return _validated_timerange(start=start, end=end)
 
     metadata = loader.get_symbol_metadata(market, symbol)
     available = metadata.get("available_timerange", {})
     metadata_start = _parse_dt(str(available.get("start")))
     metadata_end = _parse_dt(str(available.get("end")))
-
     start = _parse_dt(raw_start) if raw_start else metadata_start
     end = _parse_dt(raw_end) if raw_end else metadata_end
-    if end < start:
-        raise ValueError("end_date must be greater than or equal to start_date")
-    return (start, end)
+    return _validated_timerange(start=start, end=end)
 
 
 def _parse_dt(value: str) -> datetime:
@@ -390,6 +362,63 @@ def _pick_symbol(symbols: tuple[str, ...]) -> str:
     if not symbols:
         raise ValueError("Strategy universe must contain at least one symbol.")
     return symbols[0]
+
+
+def _validated_backtest_config_values(
+    *,
+    initial_capital: float,
+    commission_rate: float,
+    slippage_bps: float,
+) -> tuple[float, float, float]:
+    initial_capital_value = float(initial_capital)
+    commission_rate_value = float(commission_rate)
+    slippage_bps_value = float(slippage_bps)
+
+    if initial_capital_value <= 0:
+        raise ValueError("initial_capital must be > 0")
+    if commission_rate_value < 0:
+        raise ValueError("commission_rate must be >= 0")
+    if slippage_bps_value < 0:
+        raise ValueError("slippage_bps must be >= 0")
+
+    return initial_capital_value, commission_rate_value, slippage_bps_value
+
+
+def _parse_record_bar_events(config: dict[str, Any]) -> bool:
+    raw_record_bar_events = config.get("record_bar_events", False)
+    if isinstance(raw_record_bar_events, bool):
+        return raw_record_bar_events
+    return str(raw_record_bar_events).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _validated_timerange(*, start: datetime, end: datetime) -> tuple[datetime, datetime]:
+    if end < start:
+        raise ValueError("end_date must be greater than or equal to start_date")
+    return (start, end)
+
+
+def _mark_job_failed(
+    job: BacktestJob,
+    *,
+    error_code: str,
+    message: str,
+) -> None:
+    job.status = "failed"
+    job.progress = 100
+    job.current_step = "failed"
+    job.completed_at = datetime.now(UTC)
+    job.error_message = message
+    job.results = {
+        "error": {
+            "code": error_code,
+            "message": message,
+        }
+    }
 
 
 def _to_view(job: BacktestJob) -> BacktestJobView:

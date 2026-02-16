@@ -48,6 +48,9 @@ TOOL_NAMES: tuple[str, ...] = (
 
 _SKILL_DIR = Path(__file__).resolve().parent / "skills" / "indicators"
 _EXCLUDED_CATALOG_CATEGORIES: set[str] = {IndicatorCategory.CANDLE.value}
+_OWNERSHIP_MISMATCH_ERROR = (
+    "Strategy ownership mismatch for the provided session/user context."
+)
 _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     IndicatorCategory.OVERLAP.value: "Moving averages and overlays.",
     IndicatorCategory.MOMENTUM.value: "Momentum and trend-strength indicators.",
@@ -288,6 +291,29 @@ async def _new_db_session():
         await db_module.init_postgres(ensure_schema=False)
     assert db_module.AsyncSessionLocal is not None
     return db_module.AsyncSessionLocal()
+
+
+async def _get_owned_strategy(
+    *,
+    db: Any,
+    session_id: UUID,
+    strategy_id: UUID,
+) -> Any:
+    session_user_id = await get_session_user_id(db, session_id=session_id)
+    strategy = await get_strategy_or_raise(db, strategy_id=strategy_id)
+    if strategy.user_id != session_user_id:
+        raise StrategyStorageNotFoundError(_OWNERSHIP_MISMATCH_ERROR)
+    return strategy
+
+
+def _parse_expected_version(expected_version: int) -> int | None:
+    if not isinstance(expected_version, int):
+        raise ValueError("expected_version must be an integer")
+    if expected_version > 0:
+        return expected_version
+    if expected_version < 0:
+        raise ValueError("expected_version must be >= 0")
+    return None
 
 
 def _to_dsl_param_name(*, factor_type: str, indicator_param_name: str) -> str:
@@ -675,12 +701,11 @@ def register_strategy_tools(mcp: FastMCP) -> None:
 
         try:
             async with await _new_db_session() as db:
-                session_user_id = await get_session_user_id(db, session_id=session_uuid)
-                strategy = await get_strategy_or_raise(db, strategy_id=strategy_uuid)
-                if strategy.user_id != session_user_id:
-                    raise StrategyStorageNotFoundError(
-                        "Strategy ownership mismatch for the provided session/user context.",
-                    )
+                strategy = await _get_owned_strategy(
+                    db=db,
+                    session_id=session_uuid,
+                    strategy_id=strategy_uuid,
+                )
         except StrategyStorageNotFoundError as exc:
             return _payload(
                 tool="strategy_get_dsl",
@@ -725,12 +750,11 @@ def register_strategy_tools(mcp: FastMCP) -> None:
 
         try:
             async with await _new_db_session() as db:
-                session_user_id = await get_session_user_id(db, session_id=session_uuid)
-                strategy = await get_strategy_or_raise(db, strategy_id=strategy_uuid)
-                if strategy.user_id != session_user_id:
-                    raise StrategyStorageNotFoundError(
-                        "Strategy ownership mismatch for the provided session/user context.",
-                    )
+                strategy = await _get_owned_strategy(
+                    db=db,
+                    session_id=session_uuid,
+                    strategy_id=strategy_uuid,
+                )
         except StrategyStorageNotFoundError as exc:
             return _payload(
                 tool="strategy_list_tunable_params",
@@ -824,13 +848,7 @@ def register_strategy_tools(mcp: FastMCP) -> None:
             session_uuid = _parse_uuid(session_id, "session_id")
             strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
             patch_ops = _parse_patch_ops(patch_json)
-            parsed_expected_version: int | None = None
-            if not isinstance(expected_version, int):
-                raise ValueError("expected_version must be an integer")
-            if expected_version > 0:
-                parsed_expected_version = expected_version
-            elif expected_version < 0:
-                raise ValueError("expected_version must be >= 0")
+            parsed_expected_version = _parse_expected_version(expected_version)
         except ValueError as exc:
             return _payload(
                 tool="strategy_patch_dsl",
@@ -1094,13 +1112,7 @@ def register_strategy_tools(mcp: FastMCP) -> None:
                 raise ValueError("target_version must be an integer")
             if target_version <= 0:
                 raise ValueError("target_version must be >= 1")
-            parsed_expected_version: int | None = None
-            if not isinstance(expected_version, int):
-                raise ValueError("expected_version must be an integer")
-            if expected_version > 0:
-                parsed_expected_version = expected_version
-            elif expected_version < 0:
-                raise ValueError("expected_version must be >= 0")
+            parsed_expected_version = _parse_expected_version(expected_version)
         except ValueError as exc:
             return _payload(
                 tool="strategy_rollback_dsl",

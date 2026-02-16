@@ -184,21 +184,19 @@ async def confirm_strategy(
     )
     strategy_tickers_csv = ",".join(strategy_tickers) if strategy_tickers else None
     strategy_primary_symbol = strategy_tickers[0] if strategy_tickers else None
+    scope_updates = _strategy_scope_updates(
+        strategy_market=strategy_market,
+        strategy_tickers=strategy_tickers,
+        strategy_tickers_csv=strategy_tickers_csv,
+        strategy_primary_symbol=strategy_primary_symbol,
+        strategy_timeframe=strategy_timeframe,
+    )
 
     artifacts = ChatOrchestrator._ensure_phase_keyed(copy.deepcopy(session.artifacts or {}))
     strategy_block = artifacts.setdefault(Phase.STRATEGY.value, {"profile": {}, "missing_fields": []})
     strategy_profile = dict(strategy_block.get("profile", {}))
     strategy_profile["strategy_id"] = str(receipt.strategy_id)
-    if strategy_market:
-        strategy_profile["strategy_market"] = strategy_market
-    if strategy_tickers:
-        strategy_profile["strategy_tickers"] = strategy_tickers
-    if strategy_tickers_csv:
-        strategy_profile["strategy_tickers_csv"] = strategy_tickers_csv
-    if strategy_primary_symbol:
-        strategy_profile["strategy_primary_symbol"] = strategy_primary_symbol
-    if strategy_timeframe:
-        strategy_profile["strategy_timeframe"] = strategy_timeframe
+    strategy_profile.update(scope_updates)
     strategy_profile["strategy_confirmed"] = True
     strategy_profile["strategy_last_confirmed_at"] = receipt.last_updated_at.isoformat()
     strategy_block["profile"] = strategy_profile
@@ -210,16 +208,7 @@ async def confirm_strategy(
     )
     stress_profile = dict(stress_block.get("profile", {}))
     stress_profile["strategy_id"] = str(receipt.strategy_id)
-    if strategy_market:
-        stress_profile["strategy_market"] = strategy_market
-    if strategy_tickers:
-        stress_profile["strategy_tickers"] = strategy_tickers
-    if strategy_tickers_csv:
-        stress_profile["strategy_tickers_csv"] = strategy_tickers_csv
-    if strategy_primary_symbol:
-        stress_profile["strategy_primary_symbol"] = strategy_primary_symbol
-    if strategy_timeframe:
-        stress_profile["strategy_timeframe"] = strategy_timeframe
+    stress_profile.update(scope_updates)
     stress_profile.pop("backtest_job_id", None)
     stress_profile.pop("backtest_status", None)
     stress_profile.pop("backtest_error_code", None)
@@ -235,16 +224,7 @@ async def confirm_strategy(
     next_meta = dict(session.metadata_ or {})
     next_meta["strategy_id"] = str(receipt.strategy_id)
     next_meta["strategy_confirmed_at"] = receipt.last_updated_at.isoformat()
-    if strategy_market:
-        next_meta["strategy_market"] = strategy_market
-    if strategy_tickers:
-        next_meta["strategy_tickers"] = strategy_tickers
-    if strategy_tickers_csv:
-        next_meta["strategy_tickers_csv"] = strategy_tickers_csv
-    if strategy_primary_symbol:
-        next_meta["strategy_primary_symbol"] = strategy_primary_symbol
-    if strategy_timeframe:
-        next_meta["strategy_timeframe"] = strategy_timeframe
+    next_meta.update(scope_updates)
 
     # Keep the session in strategy phase for performance-driven iteration.
     # `advance_to_stress_test` is currently ignored until dedicated stress-test
@@ -303,18 +283,7 @@ async def confirm_strategy(
         session_id=session.id,
         strategy_id=receipt.strategy_id,
         phase=session.current_phase,
-        metadata={
-            "user_id": str(receipt.user_id),
-            "session_id": str(receipt.session_id),
-            "strategy_name": receipt.strategy_name,
-            "dsl_version": receipt.dsl_version,
-            "version": receipt.version,
-            "status": receipt.status,
-            "timeframe": receipt.timeframe,
-            "symbol_count": receipt.symbol_count,
-            "payload_hash": receipt.payload_hash,
-            "last_updated_at": receipt.last_updated_at.isoformat(),
-        },
+        metadata=_receipt_metadata(receipt),
         auto_started=auto_started,
         auto_message=auto_message_text,
         auto_assistant_text=auto_assistant_text,
@@ -374,6 +343,43 @@ def _extract_strategy_scope(
     return strategy_market, strategy_tickers, strategy_timeframe
 
 
+def _strategy_scope_updates(
+    *,
+    strategy_market: str | None,
+    strategy_tickers: list[str],
+    strategy_tickers_csv: str | None,
+    strategy_primary_symbol: str | None,
+    strategy_timeframe: str | None,
+) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if strategy_market:
+        updates["strategy_market"] = strategy_market
+    if strategy_tickers:
+        updates["strategy_tickers"] = strategy_tickers
+    if strategy_tickers_csv:
+        updates["strategy_tickers_csv"] = strategy_tickers_csv
+    if strategy_primary_symbol:
+        updates["strategy_primary_symbol"] = strategy_primary_symbol
+    if strategy_timeframe:
+        updates["strategy_timeframe"] = strategy_timeframe
+    return updates
+
+
+def _receipt_metadata(receipt: Any) -> dict[str, Any]:
+    return {
+        "user_id": str(receipt.user_id),
+        "session_id": str(receipt.session_id),
+        "strategy_name": receipt.strategy_name,
+        "dsl_version": receipt.dsl_version,
+        "version": receipt.version,
+        "status": receipt.status,
+        "timeframe": receipt.timeframe,
+        "symbol_count": receipt.symbol_count,
+        "payload_hash": receipt.payload_hash,
+        "last_updated_at": receipt.last_updated_at.isoformat(),
+    }
+
+
 def _coerce_non_empty_string(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -386,10 +392,13 @@ def _coerce_ticker_list(value: Any) -> list[str]:
         return []
 
     normalized: list[str] = []
+    seen: set[str] = set()
     for item in value:
         if not isinstance(item, str):
             continue
         text = item.strip()
-        if text and text not in normalized:
-            normalized.append(text)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
     return normalized
