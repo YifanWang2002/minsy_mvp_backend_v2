@@ -131,10 +131,80 @@ async def confirm_strategy(
     db: AsyncSession = Depends(get_db),
     streamer: ResponsesEventStreamer = Depends(get_responses_event_streamer),
 ) -> StrategyConfirmResponse:
+    session = await _load_active_session_for_confirm(
+        db=db,
+        session_id=payload.session_id,
+        user_id=user.id,
+    )
+    receipt = await _upsert_confirmed_strategy(
+        db=db,
+        session=session,
+        dsl_json=payload.dsl_json,
+        strategy_id=payload.strategy_id,
+    )
+    strategy_market, strategy_tickers, strategy_timeframe = _extract_strategy_scope(
+        payload.dsl_json
+    )
+    strategy_tickers_csv = ",".join(strategy_tickers) if strategy_tickers else None
+    strategy_primary_symbol = strategy_tickers[0] if strategy_tickers else None
+    scope_updates = _strategy_scope_updates(
+        strategy_market=strategy_market,
+        strategy_tickers=strategy_tickers,
+        strategy_tickers_csv=strategy_tickers_csv,
+        strategy_primary_symbol=strategy_primary_symbol,
+        strategy_timeframe=strategy_timeframe,
+    )
+    _apply_strategy_confirm_artifacts(
+        session=session,
+        receipt=receipt,
+        scope_updates=scope_updates,
+    )
+    _apply_strategy_confirm_metadata(
+        session=session,
+        receipt=receipt,
+        scope_updates=scope_updates,
+        advance_to_stress_test=payload.advance_to_stress_test,
+    )
+
+    await db.commit()
+    await db.refresh(session)
+
+    auto_started, auto_message_text, auto_assistant_text, auto_done_payload, auto_error = (
+        await _run_auto_backtest_followup(
+            db=db,
+            user=user,
+            session=session,
+            streamer=streamer,
+            auto_start_backtest=payload.auto_start_backtest,
+            auto_message=payload.auto_message,
+            language=payload.language,
+            strategy_id=str(receipt.strategy_id),
+        )
+    )
+
+    return StrategyConfirmResponse(
+        session_id=session.id,
+        strategy_id=receipt.strategy_id,
+        phase=session.current_phase,
+        metadata=_receipt_metadata(receipt),
+        auto_started=auto_started,
+        auto_message=auto_message_text,
+        auto_assistant_text=auto_assistant_text,
+        auto_done_payload=auto_done_payload,
+        auto_error=auto_error,
+    )
+
+
+async def _load_active_session_for_confirm(
+    *,
+    db: AsyncSession,
+    session_id: UUID,
+    user_id: UUID,
+) -> Session:
     session = await db.scalar(
         select(Session).where(
-            Session.id == payload.session_id,
-            Session.user_id == user.id,
+            Session.id == session_id,
+            Session.user_id == user_id,
         ),
     )
     if session is None:
@@ -144,13 +214,22 @@ async def confirm_strategy(
             status_code=status.HTTP_409_CONFLICT,
             detail="Session is archived. Unarchive it before confirming strategy.",
         )
+    return session
 
+
+async def _upsert_confirmed_strategy(
+    *,
+    db: AsyncSession,
+    session: Session,
+    dsl_json: dict[str, Any],
+    strategy_id: UUID | None,
+) -> Any:
     try:
         persistence = await upsert_strategy_dsl(
             db,
             session_id=session.id,
-            dsl_payload=payload.dsl_json,
-            strategy_id=payload.strategy_id,
+            dsl_payload=dsl_json,
+            strategy_id=strategy_id,
             auto_commit=False,
         )
     except StrategyDslValidationException as exc:
@@ -177,21 +256,15 @@ async def confirm_strategy(
                 "message": str(exc),
             },
         ) from exc
+    return persistence.receipt
 
-    receipt = persistence.receipt
-    strategy_market, strategy_tickers, strategy_timeframe = _extract_strategy_scope(
-        payload.dsl_json
-    )
-    strategy_tickers_csv = ",".join(strategy_tickers) if strategy_tickers else None
-    strategy_primary_symbol = strategy_tickers[0] if strategy_tickers else None
-    scope_updates = _strategy_scope_updates(
-        strategy_market=strategy_market,
-        strategy_tickers=strategy_tickers,
-        strategy_tickers_csv=strategy_tickers_csv,
-        strategy_primary_symbol=strategy_primary_symbol,
-        strategy_timeframe=strategy_timeframe,
-    )
 
+def _apply_strategy_confirm_artifacts(
+    *,
+    session: Session,
+    receipt: Any,
+    scope_updates: dict[str, Any],
+) -> None:
     artifacts = ChatOrchestrator._ensure_phase_keyed(copy.deepcopy(session.artifacts or {}))
     strategy_block = artifacts.setdefault(Phase.STRATEGY.value, {"profile": {}, "missing_fields": []})
     strategy_profile = dict(strategy_block.get("profile", {}))
@@ -214,8 +287,16 @@ async def confirm_strategy(
     stress_profile.pop("backtest_error_code", None)
     stress_block["profile"] = stress_profile
     stress_block["missing_fields"] = ["backtest_job_id", "backtest_status"]
-
     session.artifacts = artifacts
+
+
+def _apply_strategy_confirm_metadata(
+    *,
+    session: Session,
+    receipt: Any,
+    scope_updates: dict[str, Any],
+    advance_to_stress_test: bool,
+) -> None:
     # Reset response-chain context so post-confirm turns always use refreshed
     # strategy runtime policy/toolset.
     session.previous_response_id = None
@@ -229,67 +310,65 @@ async def confirm_strategy(
     # Keep the session in strategy phase for performance-driven iteration.
     # `advance_to_stress_test` is currently ignored until dedicated stress-test
     # tools are shipped.
-    if payload.advance_to_stress_test:
+    if advance_to_stress_test:
         next_meta["advance_to_stress_test_ignored"] = True
         next_meta["advance_to_stress_test_ignored_at"] = datetime.now(UTC).isoformat()
     session.metadata_ = next_meta
 
-    await db.commit()
-    await db.refresh(session)
 
+async def _run_auto_backtest_followup(
+    *,
+    db: AsyncSession,
+    user: User,
+    session: Session,
+    streamer: ResponsesEventStreamer,
+    auto_start_backtest: bool,
+    auto_message: str | None,
+    language: str,
+    strategy_id: str,
+) -> tuple[bool, str | None, str | None, dict[str, Any] | None, str | None]:
     auto_message_text: str | None = None
     auto_assistant_text: str | None = None
     auto_done_payload: dict[str, Any] | None = None
     auto_error: str | None = None
     auto_started = False
+    if not auto_start_backtest:
+        return auto_started, auto_message_text, auto_assistant_text, auto_done_payload, auto_error
 
-    if payload.auto_start_backtest:
-        auto_message_text = payload.auto_message or _default_auto_message(
-            language=payload.language,
-            strategy_id=str(receipt.strategy_id),
-        )
-        orchestrator = ChatOrchestrator(db)
-        follow_up_payload = ChatSendRequest(
-            session_id=session.id,
-            message=auto_message_text,
-        )
-
-        text_parts: list[str] = []
-        try:
-            async for chunk in orchestrator.handle_message_stream(
-                user,
-                follow_up_payload,
-                streamer,
-                language=payload.language,
-            ):
-                envelope = _parse_sse_payload(chunk)
-                if envelope is None:
-                    continue
-                event_type = envelope.get("type")
-                if event_type == "text_delta":
-                    delta = envelope.get("delta")
-                    if isinstance(delta, str) and delta:
-                        text_parts.append(delta)
-                elif event_type == "done":
-                    auto_done_payload = envelope
-
-            auto_assistant_text = "".join(text_parts).strip() or None
-            auto_started = True
-            await db.refresh(session)
-        except Exception as exc:  # noqa: BLE001
-            auto_error = f"{type(exc).__name__}: {exc}"
-
-    return StrategyConfirmResponse(
-        session_id=session.id,
-        strategy_id=receipt.strategy_id,
-        phase=session.current_phase,
-        metadata=_receipt_metadata(receipt),
-        auto_started=auto_started,
-        auto_message=auto_message_text,
-        auto_assistant_text=auto_assistant_text,
-        auto_done_payload=auto_done_payload,
-        auto_error=auto_error,
+    auto_message_text = auto_message or _default_auto_message(
+        language=language,
+        strategy_id=strategy_id,
     )
+    orchestrator = ChatOrchestrator(db)
+    follow_up_payload = ChatSendRequest(
+        session_id=session.id,
+        message=auto_message_text,
+    )
+    text_parts: list[str] = []
+    try:
+        async for chunk in orchestrator.handle_message_stream(
+            user,
+            follow_up_payload,
+            streamer,
+            language=language,
+        ):
+            envelope = _parse_sse_payload(chunk)
+            if envelope is None:
+                continue
+            event_type = envelope.get("type")
+            if event_type == "text_delta":
+                delta = envelope.get("delta")
+                if isinstance(delta, str) and delta:
+                    text_parts.append(delta)
+            elif event_type == "done":
+                auto_done_payload = envelope
+
+        auto_assistant_text = "".join(text_parts).strip() or None
+        auto_started = True
+        await db.refresh(session)
+    except Exception as exc:  # noqa: BLE001
+        auto_error = f"{type(exc).__name__}: {exc}"
+    return auto_started, auto_message_text, auto_assistant_text, auto_done_payload, auto_error
 
 
 def _default_auto_message(*, language: str, strategy_id: str) -> str:

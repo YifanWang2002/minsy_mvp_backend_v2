@@ -330,6 +330,41 @@ async def _ensure_current_revision_snapshot(
     )
 
 
+async def _persist_next_strategy_version(
+    db: AsyncSession,
+    *,
+    strategy: Strategy,
+    session_id: UUID,
+    current_version: int,
+    next_payload: dict[str, Any],
+    change_type: str,
+    source_version: int | None = None,
+    patch_ops: list[dict[str, Any]] | None = None,
+    auto_commit: bool = True,
+) -> StrategyPersistenceResult:
+    columns = _derive_strategy_columns(next_payload)
+    strategy.session_id = session_id
+    strategy.version = current_version + 1
+    for field, value in columns.items():
+        setattr(strategy, field, value)
+    await db.flush()
+
+    await _insert_revision_if_absent(
+        db,
+        strategy=strategy,
+        version=int(strategy.version),
+        payload=next_payload,
+        change_type=change_type,
+        session_id=session_id,
+        source_version=source_version,
+        patch_ops=patch_ops,
+    )
+    if auto_commit:
+        await db.commit()
+        await db.refresh(strategy)
+    return StrategyPersistenceResult(strategy=strategy, receipt=_build_receipt(strategy))
+
+
 async def upsert_strategy_dsl(
     db: AsyncSession,
     *,
@@ -375,28 +410,22 @@ async def upsert_strategy_dsl(
             change_type="create",
             session_id=session_id,
         )
-    else:
-        await _ensure_current_revision_snapshot(db, strategy=strategy)
-        current_version = int(strategy.version)
-        strategy.session_id = session_id
-        strategy.version = current_version + 1
-        for field, value in columns.items():
-            setattr(strategy, field, value)
-        await db.flush()
-        await _insert_revision_if_absent(
-            db,
-            strategy=strategy,
-            version=int(strategy.version),
-            payload=dsl_payload,
-            change_type="upsert",
-            session_id=session_id,
-        )
+        if auto_commit:
+            await db.commit()
+            await db.refresh(strategy)
+        return StrategyPersistenceResult(strategy=strategy, receipt=_build_receipt(strategy))
 
-    if auto_commit:
-        await db.commit()
-        await db.refresh(strategy)
-
-    return StrategyPersistenceResult(strategy=strategy, receipt=_build_receipt(strategy))
+    await _ensure_current_revision_snapshot(db, strategy=strategy)
+    current_version = int(strategy.version)
+    return await _persist_next_strategy_version(
+        db,
+        strategy=strategy,
+        session_id=session_id,
+        current_version=current_version,
+        next_payload=dsl_payload,
+        change_type="upsert",
+        auto_commit=auto_commit,
+    )
 
 
 def apply_strategy_json_patch(
@@ -478,29 +507,16 @@ async def patch_strategy_dsl(
 
     await _ensure_current_revision_snapshot(db, strategy=strategy)
 
-    columns = _derive_strategy_columns(next_payload)
-    strategy.session_id = session_id
-    strategy.version = current_version + 1
-    for field, value in columns.items():
-        setattr(strategy, field, value)
-
-    await db.flush()
-
-    await _insert_revision_if_absent(
+    return await _persist_next_strategy_version(
         db,
         strategy=strategy,
-        version=int(strategy.version),
-        payload=next_payload,
-        change_type="patch",
         session_id=session_id,
+        current_version=current_version,
+        next_payload=next_payload,
+        change_type="patch",
         patch_ops=patch_ops,
+        auto_commit=auto_commit,
     )
-
-    if auto_commit:
-        await db.commit()
-        await db.refresh(strategy)
-
-    return StrategyPersistenceResult(strategy=strategy, receipt=_build_receipt(strategy))
 
 
 async def list_strategy_versions(
@@ -662,32 +678,19 @@ async def rollback_strategy_dsl(
     await validate_strategy_payload_or_raise(next_payload)
     await _ensure_current_revision_snapshot(db, strategy=strategy)
 
-    columns = _derive_strategy_columns(next_payload)
-    strategy.session_id = session_id
-    strategy.version = current_version + 1
-    for field, value in columns.items():
-        setattr(strategy, field, value)
-
-    await db.flush()
-
     rollback_patch = jsonpatch.make_patch(current_payload, next_payload).patch
     normalized_patch_ops = rollback_patch if isinstance(rollback_patch, list) else None
-    await _insert_revision_if_absent(
+    return await _persist_next_strategy_version(
         db,
         strategy=strategy,
-        version=int(strategy.version),
-        payload=next_payload,
-        change_type="rollback",
         session_id=session_id,
+        current_version=current_version,
+        next_payload=next_payload,
+        change_type="rollback",
         source_version=target_version,
         patch_ops=normalized_patch_ops,
+        auto_commit=auto_commit,
     )
-
-    if auto_commit:
-        await db.commit()
-        await db.refresh(strategy)
-
-    return StrategyPersistenceResult(strategy=strategy, receipt=_build_receipt(strategy))
 
 
 async def validate_stored_strategy(

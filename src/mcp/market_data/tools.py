@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 import time
+from collections.abc import Callable, Mapping
 from functools import lru_cache
 from typing import Any
 
@@ -152,6 +152,69 @@ def _build_error_payload(
         error_message=error_message,
         context=context,
     )
+
+
+def _resolve_ticker_context(
+    *,
+    market: str,
+    symbol: str,
+) -> tuple[str, str, str, yf.Ticker]:
+    market_key = _normalize_market(market)
+    symbol_key = _normalize_symbol(symbol)
+    yfinance_symbol = _to_yfinance_symbol(market=market_key, symbol=symbol_key)
+    return market_key, symbol_key, yfinance_symbol, yf.Ticker(yfinance_symbol)
+
+
+def _build_market_input_context(
+    *,
+    market: str,
+    symbol: str,
+    extra_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    context = {"market": market, "symbol": symbol}
+    if isinstance(extra_context, dict) and extra_context:
+        context.update(extra_context)
+    return context
+
+
+def _run_market_tool(
+    *,
+    tool: str,
+    market: str,
+    symbol: str,
+    fetch_error_code: str,
+    runner: Callable[[str, str, str, yf.Ticker], str],
+    extra_context: dict[str, Any] | None = None,
+) -> str:
+    try:
+        market_key, symbol_key, yfinance_symbol, ticker = _resolve_ticker_context(
+            market=market,
+            symbol=symbol,
+        )
+        return runner(market_key, symbol_key, yfinance_symbol, ticker)
+    except ValueError as exc:
+        return _build_error_payload(
+            tool=tool,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context=_build_market_input_context(
+                market=market,
+                symbol=symbol,
+                extra_context=extra_context,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else fetch_error_code
+        return _build_error_payload(
+            tool=tool,
+            error_code=code,
+            error_message=f"{type(exc).__name__}: {exc}",
+            context=_build_market_input_context(
+                market=market,
+                symbol=symbol,
+                extra_context=extra_context,
+            ),
+        )
 
 
 def _normalize_market(market: str) -> str:
@@ -326,6 +389,15 @@ def _history_to_records(history_df: Any) -> list[dict[str, Any]]:
     return records
 
 
+def _symbol_available_in_market(
+    *,
+    loader: DataLoader,
+    market_key: str,
+    symbol_key: str,
+) -> bool:
+    return symbol_key in set(loader.get_available_symbols(market_key))
+
+
 def check_symbol_available(symbol: str, market: str = "") -> str:
     """
     Check whether a symbol is available.
@@ -345,7 +417,11 @@ def check_symbol_available(symbol: str, market: str = "") -> str:
     try:
         if market.strip():
             market_key = loader.normalize_market(market)
-            available = symbol_key in set(loader.get_available_symbols(market_key))
+            available = _symbol_available_in_market(
+                loader=loader,
+                market_key=market_key,
+                symbol_key=symbol_key,
+            )
             return _build_success_payload(
                 tool="check_symbol_available",
                 data={
@@ -357,7 +433,11 @@ def check_symbol_available(symbol: str, market: str = "") -> str:
 
         matched_markets: list[str] = []
         for candidate in ("us_stocks", "crypto", "forex", "futures"):
-            if symbol_key in set(loader.get_available_symbols(candidate)):
+            if _symbol_available_in_market(
+                loader=loader,
+                market_key=candidate,
+                symbol_key=symbol_key,
+            ):
                 matched_markets.append(candidate)
         return _build_success_payload(
             tool="check_symbol_available",
@@ -452,11 +532,12 @@ def get_symbol_quote(symbol: str, market: str) -> str:
 
     Provide `symbol` and `market`.
     """
-    try:
-        market_key = _normalize_market(market)
-        symbol_key = _normalize_symbol(symbol)
-        yfinance_symbol = _to_yfinance_symbol(market=market_key, symbol=symbol_key)
-        ticker = yf.Ticker(yfinance_symbol)
+    def _runner(
+        market_key: str,
+        symbol_key: str,
+        yfinance_symbol: str,
+        ticker: yf.Ticker,
+    ) -> str:
         summary = _retry_yfinance_call(_ticker_info_summary, ticker)
         if not summary:
             summary = _ticker_fast_info_summary(
@@ -493,7 +574,6 @@ def get_symbol_quote(symbol: str, market: str) -> str:
                     "yfinance_symbol": yfinance_symbol,
                 },
             )
-
         return _build_success_payload(
             tool="get_symbol_quote",
             data={
@@ -503,21 +583,14 @@ def get_symbol_quote(symbol: str, market: str) -> str:
                 "quote": summary,
             },
         )
-    except ValueError as exc:
-        return _build_error_payload(
-            tool="get_symbol_quote",
-            error_code="INVALID_INPUT",
-            error_message=str(exc),
-            context={"market": market, "symbol": symbol},
-        )
-    except Exception as exc:  # noqa: BLE001
-        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "QUOTE_FETCH_ERROR"
-        return _build_error_payload(
-            tool="get_symbol_quote",
-            error_code=code,
-            error_message=f"{type(exc).__name__}: {exc}",
-            context={"market": market, "symbol": symbol},
-        )
+
+    return _run_market_tool(
+        tool="get_symbol_quote",
+        market=market,
+        symbol=symbol,
+        fetch_error_code="QUOTE_FETCH_ERROR",
+        runner=_runner,
+    )
 
 
 def get_symbol_candles(
@@ -534,15 +607,16 @@ def get_symbol_candles(
 
     Provide `symbol` and `market`.
     """
-    try:
+    def _runner(
+        market_key: str,
+        symbol_key: str,
+        yfinance_symbol: str,
+        ticker: yf.Ticker,
+    ) -> str:
         if interval not in VALID_INTERVALS:
             raise ValueError(f"Invalid interval '{interval}'")
         if not start and period not in VALID_PERIODS:
             raise ValueError(f"Invalid period '{period}'")
-
-        market_key = _normalize_market(market)
-        symbol_key = _normalize_symbol(symbol)
-        yfinance_symbol = _to_yfinance_symbol(market=market_key, symbol=symbol_key)
 
         kwargs: dict[str, Any] = {
             "interval": interval,
@@ -556,11 +630,19 @@ def get_symbol_candles(
         else:
             kwargs["period"] = period
 
-        ticker = yf.Ticker(yfinance_symbol)
         try:
             history_df = _retry_yfinance_call(ticker.history, **kwargs)
         except Exception as exc:  # noqa: BLE001
-            if _is_rate_limit_error(exc) and interval in {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}:
+            if _is_rate_limit_error(exc) and interval in {
+                "1m",
+                "2m",
+                "5m",
+                "15m",
+                "30m",
+                "60m",
+                "90m",
+                "1h",
+            }:
                 fallback_kwargs = dict(kwargs)
                 fallback_kwargs["interval"] = "1d"
                 if "period" in fallback_kwargs:
@@ -568,6 +650,7 @@ def get_symbol_candles(
                 history_df = _retry_yfinance_call(ticker.history, **fallback_kwargs)
             else:
                 raise
+
         records = _history_to_records(history_df)
         if not records:
             return _build_error_payload(
@@ -587,7 +670,6 @@ def get_symbol_candles(
         truncated = len(records) > safe_limit
         if truncated:
             records = records[-safe_limit:]
-
         return _build_success_payload(
             tool="get_symbol_candles",
             data={
@@ -603,35 +685,20 @@ def get_symbol_candles(
                 "candles": records,
             },
         )
-    except ValueError as exc:
-        return _build_error_payload(
-            tool="get_symbol_candles",
-            error_code="INVALID_INPUT",
-            error_message=str(exc),
-            context={
-                "market": market,
-                "symbol": symbol,
-                "period": period,
-                "interval": interval,
-                "start": start,
-                "end": end,
-            },
-        )
-    except Exception as exc:  # noqa: BLE001
-        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "CANDLES_FETCH_ERROR"
-        return _build_error_payload(
-            tool="get_symbol_candles",
-            error_code=code,
-            error_message=f"{type(exc).__name__}: {exc}",
-            context={
-                "market": market,
-                "symbol": symbol,
-                "period": period,
-                "interval": interval,
-                "start": start,
-                "end": end,
-            },
-        )
+
+    return _run_market_tool(
+        tool="get_symbol_candles",
+        market=market,
+        symbol=symbol,
+        fetch_error_code="CANDLES_FETCH_ERROR",
+        runner=_runner,
+        extra_context={
+            "period": period,
+            "interval": interval,
+            "start": start,
+            "end": end,
+        },
+    )
 
 
 def get_symbol_metadata(symbol: str, market: str) -> str:
@@ -640,11 +707,12 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
 
     Provide `symbol` and `market`.
     """
-    try:
-        market_key = _normalize_market(market)
-        symbol_key = _normalize_symbol(symbol)
-        yfinance_symbol = _to_yfinance_symbol(market=market_key, symbol=symbol_key)
-        ticker = yf.Ticker(yfinance_symbol)
+    def _runner(
+        market_key: str,
+        symbol_key: str,
+        yfinance_symbol: str,
+        ticker: yf.Ticker,
+    ) -> str:
         info = _coerce_mapping(_retry_yfinance_call(lambda: ticker.info))
         metadata_source = "info"
         if not info:
@@ -664,7 +732,6 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
                     "yfinance_symbol": yfinance_symbol,
                 },
             )
-
         return _build_success_payload(
             tool="get_symbol_metadata",
             data={
@@ -675,21 +742,14 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
                 "metadata": info,
             },
         )
-    except ValueError as exc:
-        return _build_error_payload(
-            tool="get_symbol_metadata",
-            error_code="INVALID_INPUT",
-            error_message=str(exc),
-            context={"market": market, "symbol": symbol},
-        )
-    except Exception as exc:  # noqa: BLE001
-        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "METADATA_FETCH_ERROR"
-        return _build_error_payload(
-            tool="get_symbol_metadata",
-            error_code=code,
-            error_message=f"{type(exc).__name__}: {exc}",
-            context={"market": market, "symbol": symbol},
-        )
+
+    return _run_market_tool(
+        tool="get_symbol_metadata",
+        market=market,
+        symbol=symbol,
+        fetch_error_code="METADATA_FETCH_ERROR",
+        runner=_runner,
+    )
 
 
 def market_data_get_quote(symbol: str, venue: str = "US") -> str:

@@ -174,11 +174,8 @@ async def execute_backtest_job(
             await db.commit()
         return _to_view(job)
 
-    job.status = "running"
-    job.progress = 5
-    job.current_step = "loading_data"
-    if auto_commit:
-        await db.commit()
+    _mark_job_running_step(job, progress=5, step="loading_data")
+    await _commit_if_requested(db, auto_commit=auto_commit)
 
     try:
         parsed = parse_strategy_payload(strategy.dsl_payload or {})
@@ -194,10 +191,8 @@ async def execute_backtest_job(
             config=job.config or {},
         )
 
-        job.progress = 20
-        job.current_step = "running_engine"
-        if auto_commit:
-            await db.commit()
+        _mark_job_running_step(job, progress=20, step="running_engine")
+        await _commit_if_requested(db, auto_commit=auto_commit)
 
         frame = loader.load(
             market=market,
@@ -207,36 +202,23 @@ async def execute_backtest_job(
             end_date=end_date,
         )
 
-        record_bar_events = _parse_record_bar_events(job.config or {})
-
-        config = BacktestConfig(
-            initial_capital=float((job.config or {}).get("initial_capital", 100_000.0)),
-            commission_rate=float((job.config or {}).get("commission_rate", 0.0)),
-            slippage_bps=float((job.config or {}).get("slippage_bps", 0.0)),
-            record_bar_events=record_bar_events,
-        )
+        config = _build_backtest_config(job.config or {})
         result = EventDrivenBacktestEngine(
             strategy=parsed,
             data=frame,
             config=config,
         ).run()
 
-        job.progress = 95
-        job.current_step = "serializing_result"
-        if auto_commit:
-            await db.commit()
+        _mark_job_running_step(job, progress=95, step="serializing_result")
+        await _commit_if_requested(db, auto_commit=auto_commit)
 
-        job.results = _serialize_backtest_result(
+        serialized_result = _serialize_backtest_result(
             result=result,
             market=market,
             symbol=symbol,
             timeframe=timeframe,
         )
-        job.status = "completed"
-        job.progress = 100
-        job.current_step = "done"
-        job.completed_at = datetime.now(UTC)
-        job.error_message = None
+        _mark_job_completed(job, result=serialized_result)
 
     except Exception as exc:  # noqa: BLE001
         _mark_job_failed(
@@ -396,10 +378,53 @@ def _parse_record_bar_events(config: dict[str, Any]) -> bool:
     }
 
 
+def _build_backtest_config(config: dict[str, Any]) -> BacktestConfig:
+    record_bar_events = _parse_record_bar_events(config)
+    return BacktestConfig(
+        initial_capital=float(config.get("initial_capital", 100_000.0)),
+        commission_rate=float(config.get("commission_rate", 0.0)),
+        slippage_bps=float(config.get("slippage_bps", 0.0)),
+        record_bar_events=record_bar_events,
+    )
+
+
 def _validated_timerange(*, start: datetime, end: datetime) -> tuple[datetime, datetime]:
     if end < start:
         raise ValueError("end_date must be greater than or equal to start_date")
     return (start, end)
+
+
+async def _commit_if_requested(
+    db: AsyncSession,
+    *,
+    auto_commit: bool,
+) -> None:
+    if auto_commit:
+        await db.commit()
+
+
+def _mark_job_running_step(
+    job: BacktestJob,
+    *,
+    progress: int,
+    step: str,
+) -> None:
+    job.status = "running"
+    job.progress = progress
+    job.current_step = step
+
+
+def _mark_job_completed(
+    job: BacktestJob,
+    *,
+    result: dict[str, Any],
+) -> None:
+    job.results = result
+    job.status = "completed"
+    job.progress = 100
+    job.current_step = "done"
+    job.completed_at = datetime.now(UTC)
+    job.error_message = None
 
 
 def _mark_job_failed(

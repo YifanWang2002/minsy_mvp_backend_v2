@@ -358,830 +358,825 @@ def _estimate_step(
     return 0.01
 
 
-def register_strategy_tools(mcp: FastMCP) -> None:
-    """Register strategy-related tools."""
+def get_indicator_detail(
+    indicator: str = "",
+    indicator_list: list[str] | None = None,
+) -> str:
+    """Return indicator skill detail for one or more indicators."""
 
-    @mcp.tool()
-    def get_indicator_detail(
-        indicator: str = "",
-        indicator_list: list[str] | None = None,
-    ) -> str:
-        """Return indicator skill detail for one or more indicators."""
-
-        requested = _normalize_indicator_inputs(
-            indicator=indicator,
-            indicator_list=indicator_list,
-        )
-        if not requested:
-            return _payload(
-                tool="get_indicator_detail",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message="Provide `indicator` or `indicator_list`.",
-            )
-
-        found: list[dict[str, Any]] = []
-        missing: list[str] = []
-
-        for name in requested:
-            skill = _read_indicator_skill(name)
-            metadata = _indicator_metadata_snapshot(name)
-            if skill is None and metadata is None:
-                missing.append(name)
-                continue
-
-            category = (
-                (metadata or {}).get("category")
-                or (skill or {}).get("category")
-                or ""
-            )
-            summary = (
-                (skill or {}).get("summary")
-                or (metadata or {}).get("description")
-                or ""
-            )
-
-            found.append(
-                {
-                    "indicator": name,
-                    "category": category,
-                    "summary": summary,
-                    "skill_path": (skill or {}).get("skill_path", ""),
-                    "content": (skill or {}).get("content", ""),
-                    "registry": metadata,
-                }
-            )
-
-        if not found:
-            return _payload(
-                tool="get_indicator_detail",
-                ok=False,
-                data={
-                    "requested_indicators": requested,
-                    "missing": missing,
-                    "available_categories": [
-                        category.value for category in _visible_catalog_categories()
-                    ],
-                },
-                error_code="INDICATOR_NOT_FOUND",
-                error_message="No indicator detail found for requested indicators.",
-            )
-
+    requested = _normalize_indicator_inputs(
+        indicator=indicator,
+        indicator_list=indicator_list,
+    )
+    if not requested:
         return _payload(
             tool="get_indicator_detail",
-            ok=True,
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message="Provide `indicator` or `indicator_list`.",
+        )
+
+    found: list[dict[str, Any]] = []
+    missing: list[str] = []
+
+    for name in requested:
+        skill = _read_indicator_skill(name)
+        metadata = _indicator_metadata_snapshot(name)
+        if skill is None and metadata is None:
+            missing.append(name)
+            continue
+
+        category = (metadata or {}).get("category") or (skill or {}).get("category") or ""
+        summary = (skill or {}).get("summary") or (metadata or {}).get("description") or ""
+        found.append(
+            {
+                "indicator": name,
+                "category": category,
+                "summary": summary,
+                "skill_path": (skill or {}).get("skill_path", ""),
+                "content": (skill or {}).get("content", ""),
+                "registry": metadata,
+            }
+        )
+
+    if not found:
+        return _payload(
+            tool="get_indicator_detail",
+            ok=False,
             data={
                 "requested_indicators": requested,
-                "count": len(found),
-                "indicators": found,
                 "missing": missing,
                 "available_categories": [
                     category.value for category in _visible_catalog_categories()
                 ],
             },
+            error_code="INDICATOR_NOT_FOUND",
+            error_message="No indicator detail found for requested indicators.",
         )
 
-    @mcp.tool()
-    def get_indicator_catalog(category: str = "") -> str:
-        """Return registry catalog for categories: overlap, momentum, volatility, volume, utils."""
+    return _payload(
+        tool="get_indicator_detail",
+        ok=True,
+        data={
+            "requested_indicators": requested,
+            "count": len(found),
+            "indicators": found,
+            "missing": missing,
+            "available_categories": [
+                category.value for category in _visible_catalog_categories()
+            ],
+        },
+    )
 
-        available_categories = [
-            category_item.value for category_item in _visible_catalog_categories()
-        ]
-        requested = category.strip().lower()
 
-        categories_to_render: list[IndicatorCategory] = []
-        if requested:
-            if requested in _EXCLUDED_CATALOG_CATEGORIES:
-                return _payload(
-                    tool="get_indicator_catalog",
-                    ok=False,
-                    data={
-                        "available_categories": available_categories,
-                        "excluded_categories": sorted(_EXCLUDED_CATALOG_CATEGORIES),
-                    },
-                    error_code="CATEGORY_EXCLUDED",
-                    error_message=(
-                        f"Category '{requested}' is intentionally excluded from catalog output."
-                    ),
-                )
-            try:
-                requested_category = IndicatorCategory(requested)
-            except ValueError:
-                return _payload(
-                    tool="get_indicator_catalog",
-                    ok=False,
-                    data={
-                        "available_categories": available_categories,
-                        "excluded_categories": sorted(_EXCLUDED_CATALOG_CATEGORIES),
-                    },
-                    error_code="INVALID_CATEGORY",
-                    error_message=(
-                        f"Unknown category '{requested}'."
-                    ),
-                )
-            categories_to_render = [requested_category]
-        else:
-            categories_to_render = _visible_catalog_categories()
+def get_indicator_catalog(category: str = "") -> str:
+    """Return registry catalog for categories: overlap, momentum, volatility, volume, utils."""
 
-        grouped: list[dict[str, Any]] = []
-        total = 0
-        for category_item in categories_to_render:
-            if category_item.value in _EXCLUDED_CATALOG_CATEGORIES:
+    available_categories = [
+        category_item.value for category_item in _visible_catalog_categories()
+    ]
+    requested = category.strip().lower()
+
+    categories_to_render: list[IndicatorCategory] = []
+    if requested:
+        if requested in _EXCLUDED_CATALOG_CATEGORIES:
+            return _payload(
+                tool="get_indicator_catalog",
+                ok=False,
+                data={
+                    "available_categories": available_categories,
+                    "excluded_categories": sorted(_EXCLUDED_CATALOG_CATEGORIES),
+                },
+                error_code="CATEGORY_EXCLUDED",
+                error_message=(
+                    f"Category '{requested}' is intentionally excluded from catalog output."
+                ),
+            )
+        try:
+            requested_category = IndicatorCategory(requested)
+        except ValueError:
+            return _payload(
+                tool="get_indicator_catalog",
+                ok=False,
+                data={
+                    "available_categories": available_categories,
+                    "excluded_categories": sorted(_EXCLUDED_CATALOG_CATEGORIES),
+                },
+                error_code="INVALID_CATEGORY",
+                error_message=f"Unknown category '{requested}'.",
+            )
+        categories_to_render = [requested_category]
+    else:
+        categories_to_render = _visible_catalog_categories()
+
+    grouped: list[dict[str, Any]] = []
+    total = 0
+    for category_item in categories_to_render:
+        if category_item.value in _EXCLUDED_CATALOG_CATEGORIES:
+            continue
+        names = IndicatorRegistry.list_by_category(category_item)
+        indicators: list[dict[str, Any]] = []
+        for name in names:
+            snapshot = _indicator_metadata_snapshot(name)
+            if snapshot is None:
                 continue
-            names = IndicatorRegistry.list_by_category(category_item)
-            indicators: list[dict[str, Any]] = []
-            for name in names:
-                snapshot = _indicator_metadata_snapshot(name)
-                if snapshot is None:
-                    continue
-                skill = _read_indicator_skill(name)
-                indicators.append(
-                    {
-                        "indicator": snapshot["name"],
-                        "full_name": snapshot["full_name"],
-                        "description": snapshot["description"],
-                        "params": snapshot["params"],
-                        "outputs": snapshot["outputs"],
-                        "required_columns": snapshot["required_columns"],
-                        "skill_summary": (skill or {}).get("summary", ""),
-                        "skill_path": (skill or {}).get("skill_path", ""),
-                    }
-                )
+            skill = _read_indicator_skill(name)
+            indicators.append(
+                {
+                    "indicator": snapshot["name"],
+                    "full_name": snapshot["full_name"],
+                    "description": snapshot["description"],
+                    "params": snapshot["params"],
+                    "outputs": snapshot["outputs"],
+                    "required_columns": snapshot["required_columns"],
+                    "skill_summary": (skill or {}).get("summary", ""),
+                    "skill_path": (skill or {}).get("skill_path", ""),
+                }
+            )
 
-            if not indicators and requested:
-                grouped.append(
-                    {
-                        "category": category_item.value,
-                        "description": _CATEGORY_DESCRIPTIONS.get(category_item.value, ""),
-                        "count": 0,
-                        "indicators": [],
-                    }
-                )
-                continue
-            if not indicators:
-                continue
-
-            total += len(indicators)
+        if not indicators and requested:
             grouped.append(
                 {
                     "category": category_item.value,
                     "description": _CATEGORY_DESCRIPTIONS.get(category_item.value, ""),
-                    "count": len(indicators),
-                    "indicators": indicators,
+                    "count": 0,
+                    "indicators": [],
+                }
+            )
+            continue
+        if not indicators:
+            continue
+
+        total += len(indicators)
+        grouped.append(
+            {
+                "category": category_item.value,
+                "description": _CATEGORY_DESCRIPTIONS.get(category_item.value, ""),
+                "count": len(indicators),
+                "indicators": indicators,
+            }
+        )
+
+    return _payload(
+        tool="get_indicator_catalog",
+        ok=True,
+        data={
+            "category_filter": requested or None,
+            "available_categories": available_categories,
+            "excluded_categories": sorted(_EXCLUDED_CATALOG_CATEGORIES),
+            "count": total,
+            "categories": grouped,
+        },
+    )
+
+
+async def strategy_validate_dsl(
+    dsl_json: str,
+    session_id: str = "",
+) -> str:
+    try:
+        payload = _parse_payload(dsl_json)
+    except ValueError as exc:
+        return _payload(
+            tool="strategy_validate_dsl",
+            ok=False,
+            error_code="INVALID_JSON",
+            error_message=str(exc),
+        )
+
+    session_uuid: UUID | None = None
+    if session_id.strip():
+        try:
+            session_uuid = _parse_uuid(session_id, "session_id")
+        except ValueError as exc:
+            return _payload(
+                tool="strategy_validate_dsl",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+
+    validation = validate_strategy_payload(payload)
+    if not validation.is_valid:
+        return _payload(
+            tool="strategy_validate_dsl",
+            ok=False,
+            data={
+                "errors": _validation_errors_to_dict(validation.errors),
+                "dsl_version": payload.get("dsl_version", ""),
+            },
+            error_code="STRATEGY_VALIDATION_FAILED",
+            error_message="Strategy DSL validation failed.",
+        )
+
+    response_data: dict[str, Any] = {
+        "errors": [],
+        "dsl_version": payload.get("dsl_version", ""),
+    }
+    if session_uuid is not None:
+        try:
+            async with await _new_db_session() as db:
+                session_user_id = await get_session_user_id(db, session_id=session_uuid)
+            draft = await create_strategy_draft(
+                user_id=session_user_id,
+                session_id=session_uuid,
+                dsl_json=payload,
+            )
+        except StrategyStorageNotFoundError as exc:
+            return _payload(
+                tool="strategy_validate_dsl",
+                ok=False,
+                error_code="STRATEGY_STORAGE_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="strategy_validate_dsl",
+                ok=False,
+                error_code="STRATEGY_DRAFT_STORE_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        response_data["strategy_draft_id"] = str(draft.strategy_draft_id)
+        response_data["draft_expires_at"] = draft.expires_at.isoformat()
+        response_data["draft_ttl_seconds"] = draft.ttl_seconds
+
+    return _payload(
+        tool="strategy_validate_dsl",
+        ok=True,
+        data=response_data,
+    )
+
+
+async def strategy_upsert_dsl(
+    session_id: str,
+    dsl_json: str,
+    strategy_id: str = "",
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id") if strategy_id.strip() else None
+        payload = _parse_payload(dsl_json)
+    except ValueError as exc:
+        return _payload(
+            tool="strategy_upsert_dsl",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
+
+    try:
+        async with await _new_db_session() as db:
+            result = await upsert_strategy_dsl(
+                db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+                dsl_payload=payload,
+                auto_commit=True,
+            )
+    except StrategyDslValidationException as exc:
+        return _payload(
+            tool="strategy_upsert_dsl",
+            ok=False,
+            data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+            error_code="STRATEGY_VALIDATION_FAILED",
+            error_message="Strategy DSL validation failed.",
+        )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_upsert_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_upsert_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    receipt = result.receipt
+    return _payload(
+        tool="strategy_upsert_dsl",
+        ok=True,
+        data={
+            "strategy_id": str(receipt.strategy_id),
+            "metadata": _strategy_metadata_from_receipt(receipt),
+        },
+    )
+
+
+async def strategy_get_dsl(
+    session_id: str,
+    strategy_id: str,
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+    except ValueError as exc:
+        return _payload(
+            tool="strategy_get_dsl",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
+
+    try:
+        async with await _new_db_session() as db:
+            strategy = await _get_owned_strategy(
+                db=db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+            )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_get_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_get_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    return _payload(
+        tool="strategy_get_dsl",
+        ok=True,
+        data={
+            "strategy_id": str(strategy.id),
+            "dsl_json": dsl_payload,
+            "metadata": _strategy_metadata_snapshot(strategy),
+        },
+    )
+
+
+async def strategy_list_tunable_params(
+    session_id: str,
+    strategy_id: str,
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+    except ValueError as exc:
+        return _payload(
+            tool="strategy_list_tunable_params",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
+
+    try:
+        async with await _new_db_session() as db:
+            strategy = await _get_owned_strategy(
+                db=db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+            )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_list_tunable_params",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_list_tunable_params",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    factors_raw = dsl_payload.get("factors")
+    factors = factors_raw if isinstance(factors_raw, dict) else {}
+    tunable_params: list[dict[str, Any]] = []
+    for factor_id, factor_def in factors.items():
+        if not isinstance(factor_id, str) or not isinstance(factor_def, dict):
+            continue
+
+        factor_type = str(factor_def.get("type", "")).strip().lower()
+        params = factor_def.get("params")
+        if not isinstance(params, dict):
+            params = {}
+
+        metadata = IndicatorRegistry.get(factor_type)
+        if metadata is None:
+            continue
+
+        for param in metadata.params:
+            dsl_param = _to_dsl_param_name(
+                factor_type=factor_type,
+                indicator_param_name=param.name,
+            )
+            current_value = params.get(dsl_param, param.default)
+            tunable = param.type in {"int", "float"} or bool(param.choices)
+            tunable_params.append(
+                {
+                    "factor_id": factor_id,
+                    "factor_type": factor_type,
+                    "param_name": dsl_param,
+                    "json_path": f"/factors/{factor_id}/params/{dsl_param}",
+                    "current_value": current_value,
+                    "type": param.type,
+                    "min": param.min_value,
+                    "max": param.max_value,
+                    "default": param.default,
+                    "choices": list(param.choices) if param.choices else [],
+                    "suggested_step": _estimate_step(
+                        value_type=param.type,
+                        min_value=param.min_value,
+                        max_value=param.max_value,
+                        default=param.default,
+                    ),
+                    "tunable": tunable,
                 }
             )
 
-        return _payload(
-            tool="get_indicator_catalog",
-            ok=True,
-            data={
-                "category_filter": requested or None,
-                "available_categories": available_categories,
-                "excluded_categories": sorted(_EXCLUDED_CATALOG_CATEGORIES),
-                "count": total,
-                "categories": grouped,
-            },
+    tunable_params.sort(
+        key=lambda item: (
+            str(item.get("factor_id", "")),
+            str(item.get("param_name", "")),
         )
+    )
+    return _payload(
+        tool="strategy_list_tunable_params",
+        ok=True,
+        data={
+            "strategy_id": str(strategy.id),
+            "metadata": _strategy_metadata_snapshot(strategy),
+            "count": len(tunable_params),
+            "params": tunable_params,
+        },
+    )
 
-    @mcp.tool()
-    async def strategy_validate_dsl(
-        dsl_json: str,
-        session_id: str = "",
-    ) -> str:
-        try:
-            payload = _parse_payload(dsl_json)
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_validate_dsl",
-                ok=False,
-                error_code="INVALID_JSON",
-                error_message=str(exc),
-            )
 
-        session_uuid: UUID | None = None
-        if session_id.strip():
-            try:
-                session_uuid = _parse_uuid(session_id, "session_id")
-            except ValueError as exc:
-                return _payload(
-                    tool="strategy_validate_dsl",
-                    ok=False,
-                    error_code="INVALID_INPUT",
-                    error_message=str(exc),
-                )
-
-        validation = validate_strategy_payload(payload)
-        if not validation.is_valid:
-            return _payload(
-                tool="strategy_validate_dsl",
-                ok=False,
-                data={
-                    "errors": _validation_errors_to_dict(validation.errors),
-                    "dsl_version": payload.get("dsl_version", ""),
-                },
-                error_code="STRATEGY_VALIDATION_FAILED",
-                error_message="Strategy DSL validation failed.",
-            )
-
-        response_data: dict[str, Any] = {
-            "errors": [],
-            "dsl_version": payload.get("dsl_version", ""),
-        }
-
-        if session_uuid is not None:
-            try:
-                async with await _new_db_session() as db:
-                    session_user_id = await get_session_user_id(db, session_id=session_uuid)
-                draft = await create_strategy_draft(
-                    user_id=session_user_id,
-                    session_id=session_uuid,
-                    dsl_json=payload,
-                )
-            except StrategyStorageNotFoundError as exc:
-                return _payload(
-                    tool="strategy_validate_dsl",
-                    ok=False,
-                    error_code="STRATEGY_STORAGE_NOT_FOUND",
-                    error_message=str(exc),
-                )
-            except Exception as exc:  # noqa: BLE001
-                return _payload(
-                    tool="strategy_validate_dsl",
-                    ok=False,
-                    error_code="STRATEGY_DRAFT_STORE_ERROR",
-                    error_message=f"{type(exc).__name__}: {exc}",
-                )
-
-            response_data["strategy_draft_id"] = str(draft.strategy_draft_id)
-            response_data["draft_expires_at"] = draft.expires_at.isoformat()
-            response_data["draft_ttl_seconds"] = draft.ttl_seconds
-
-        return _payload(
-            tool="strategy_validate_dsl",
-            ok=True,
-            data=response_data,
-        )
-
-    @mcp.tool()
-    async def strategy_upsert_dsl(
-        session_id: str,
-        dsl_json: str,
-        strategy_id: str = "",
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id") if strategy_id.strip() else None
-            payload = _parse_payload(dsl_json)
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_upsert_dsl",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
-            )
-
-        try:
-            async with await _new_db_session() as db:
-                result = await upsert_strategy_dsl(
-                    db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                    dsl_payload=payload,
-                    auto_commit=True,
-                )
-        except StrategyDslValidationException as exc:
-            return _payload(
-                tool="strategy_upsert_dsl",
-                ok=False,
-                data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
-                error_code="STRATEGY_VALIDATION_FAILED",
-                error_message="Strategy DSL validation failed.",
-            )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_upsert_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_upsert_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
-
-        receipt = result.receipt
-        return _payload(
-            tool="strategy_upsert_dsl",
-            ok=True,
-            data={
-                "strategy_id": str(receipt.strategy_id),
-                "metadata": _strategy_metadata_from_receipt(receipt),
-            },
-        )
-
-    @mcp.tool()
-    async def strategy_get_dsl(
-        session_id: str,
-        strategy_id: str,
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_get_dsl",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
-            )
-
-        try:
-            async with await _new_db_session() as db:
-                strategy = await _get_owned_strategy(
-                    db=db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_get_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_get_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
-
-        dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
-        return _payload(
-            tool="strategy_get_dsl",
-            ok=True,
-            data={
-                "strategy_id": str(strategy.id),
-                "dsl_json": dsl_payload,
-                "metadata": _strategy_metadata_snapshot(strategy),
-            },
-        )
-
-    @mcp.tool()
-    async def strategy_list_tunable_params(
-        session_id: str,
-        strategy_id: str,
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_list_tunable_params",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
-            )
-
-        try:
-            async with await _new_db_session() as db:
-                strategy = await _get_owned_strategy(
-                    db=db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_list_tunable_params",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_list_tunable_params",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
-
-        dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
-        factors_raw = dsl_payload.get("factors")
-        factors = factors_raw if isinstance(factors_raw, dict) else {}
-
-        tunable_params: list[dict[str, Any]] = []
-        for factor_id, factor_def in factors.items():
-            if not isinstance(factor_id, str):
-                continue
-            if not isinstance(factor_def, dict):
-                continue
-
-            factor_type = str(factor_def.get("type", "")).strip().lower()
-            params = factor_def.get("params")
-            if not isinstance(params, dict):
-                params = {}
-
-            metadata = IndicatorRegistry.get(factor_type)
-            if metadata is None:
-                continue
-
-            for param in metadata.params:
-                dsl_param = _to_dsl_param_name(
-                    factor_type=factor_type,
-                    indicator_param_name=param.name,
-                )
-                current_value = params.get(dsl_param, param.default)
-                tunable = param.type in {"int", "float"} or bool(param.choices)
-                tunable_params.append(
-                    {
-                        "factor_id": factor_id,
-                        "factor_type": factor_type,
-                        "param_name": dsl_param,
-                        "json_path": f"/factors/{factor_id}/params/{dsl_param}",
-                        "current_value": current_value,
-                        "type": param.type,
-                        "min": param.min_value,
-                        "max": param.max_value,
-                        "default": param.default,
-                        "choices": list(param.choices) if param.choices else [],
-                        "suggested_step": _estimate_step(
-                            value_type=param.type,
-                            min_value=param.min_value,
-                            max_value=param.max_value,
-                            default=param.default,
-                        ),
-                        "tunable": tunable,
-                    }
-                )
-
-        tunable_params.sort(
-            key=lambda item: (
-                str(item.get("factor_id", "")),
-                str(item.get("param_name", "")),
-            )
-        )
-
-        return _payload(
-            tool="strategy_list_tunable_params",
-            ok=True,
-            data={
-                "strategy_id": str(strategy.id),
-                "metadata": _strategy_metadata_snapshot(strategy),
-                "count": len(tunable_params),
-                "params": tunable_params,
-            },
-        )
-
-    @mcp.tool()
-    async def strategy_patch_dsl(
-        session_id: str,
-        strategy_id: str,
-        patch_json: str,
-        expected_version: int = 0,
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
-            patch_ops = _parse_patch_ops(patch_json)
-            parsed_expected_version = _parse_expected_version(expected_version)
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_patch_dsl",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
-            )
-
-        try:
-            async with await _new_db_session() as db:
-                result = await patch_strategy_dsl(
-                    db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                    patch_ops=patch_ops,
-                    expected_version=parsed_expected_version,
-                    auto_commit=True,
-                )
-        except StrategyPatchApplyError as exc:
-            return _payload(
-                tool="strategy_patch_dsl",
-                ok=False,
-                error_code="STRATEGY_PATCH_APPLY_FAILED",
-                error_message=str(exc),
-            )
-        except StrategyVersionConflictError as exc:
-            return _payload(
-                tool="strategy_patch_dsl",
-                ok=False,
-                error_code="STRATEGY_VERSION_CONFLICT",
-                error_message=str(exc),
-            )
-        except StrategyDslValidationException as exc:
-            return _payload(
-                tool="strategy_patch_dsl",
-                ok=False,
-                data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
-                error_code="STRATEGY_VALIDATION_FAILED",
-                error_message="Strategy DSL validation failed.",
-            )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_patch_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_patch_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
-
-        receipt = result.receipt
+async def strategy_patch_dsl(
+    session_id: str,
+    strategy_id: str,
+    patch_json: str,
+    expected_version: int = 0,
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+        patch_ops = _parse_patch_ops(patch_json)
+        parsed_expected_version = _parse_expected_version(expected_version)
+    except ValueError as exc:
         return _payload(
             tool="strategy_patch_dsl",
-            ok=True,
-            data={
-                "strategy_id": str(receipt.strategy_id),
-                "patch_op_count": len(patch_ops),
-                "metadata": _strategy_metadata_from_receipt(receipt),
-            },
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
         )
 
-    @mcp.tool()
-    async def strategy_list_versions(
-        session_id: str,
-        strategy_id: str,
-        limit: int = 20,
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
-            if not isinstance(limit, int):
-                raise ValueError("limit must be an integer")
-            if limit <= 0 or limit > 200:
-                raise ValueError("limit must be between 1 and 200")
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_list_versions",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
+    try:
+        async with await _new_db_session() as db:
+            result = await patch_strategy_dsl(
+                db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+                patch_ops=patch_ops,
+                expected_version=parsed_expected_version,
+                auto_commit=True,
             )
+    except StrategyPatchApplyError as exc:
+        return _payload(
+            tool="strategy_patch_dsl",
+            ok=False,
+            error_code="STRATEGY_PATCH_APPLY_FAILED",
+            error_message=str(exc),
+        )
+    except StrategyVersionConflictError as exc:
+        return _payload(
+            tool="strategy_patch_dsl",
+            ok=False,
+            error_code="STRATEGY_VERSION_CONFLICT",
+            error_message=str(exc),
+        )
+    except StrategyDslValidationException as exc:
+        return _payload(
+            tool="strategy_patch_dsl",
+            ok=False,
+            data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+            error_code="STRATEGY_VALIDATION_FAILED",
+            error_message="Strategy DSL validation failed.",
+        )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_patch_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_patch_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
 
-        try:
-            async with await _new_db_session() as db:
-                versions = await list_strategy_versions(
-                    db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                    limit=limit,
-                )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_list_versions",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_list_versions",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
+    receipt = result.receipt
+    return _payload(
+        tool="strategy_patch_dsl",
+        ok=True,
+        data={
+            "strategy_id": str(receipt.strategy_id),
+            "patch_op_count": len(patch_ops),
+            "metadata": _strategy_metadata_from_receipt(receipt),
+        },
+    )
 
+
+async def strategy_list_versions(
+    session_id: str,
+    strategy_id: str,
+    limit: int = 20,
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+        if not isinstance(limit, int):
+            raise ValueError("limit must be an integer")
+        if limit <= 0 or limit > 200:
+            raise ValueError("limit must be between 1 and 200")
+    except ValueError as exc:
         return _payload(
             tool="strategy_list_versions",
-            ok=True,
-            data={
-                "strategy_id": str(strategy_uuid),
-                "count": len(versions),
-                "versions": [_revision_snapshot(item) for item in versions],
-            },
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
         )
 
-    @mcp.tool()
-    async def strategy_get_version_dsl(
-        session_id: str,
-        strategy_id: str,
-        version: int,
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
-            if not isinstance(version, int):
-                raise ValueError("version must be an integer")
-            if version <= 0:
-                raise ValueError("version must be >= 1")
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_get_version_dsl",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
+    try:
+        async with await _new_db_session() as db:
+            versions = await list_strategy_versions(
+                db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+                limit=limit,
             )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_list_versions",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_list_versions",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
 
-        try:
-            async with await _new_db_session() as db:
-                resolved = await get_strategy_version_payload(
-                    db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                    version=version,
-                )
-        except StrategyRevisionNotFoundError as exc:
-            return _payload(
-                tool="strategy_get_version_dsl",
-                ok=False,
-                error_code="STRATEGY_REVISION_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_get_version_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_get_version_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
+    return _payload(
+        tool="strategy_list_versions",
+        ok=True,
+        data={
+            "strategy_id": str(strategy_uuid),
+            "count": len(versions),
+            "versions": [_revision_snapshot(item) for item in versions],
+        },
+    )
 
+
+async def strategy_get_version_dsl(
+    session_id: str,
+    strategy_id: str,
+    version: int,
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+        if not isinstance(version, int):
+            raise ValueError("version must be an integer")
+        if version <= 0:
+            raise ValueError("version must be >= 1")
+    except ValueError as exc:
         return _payload(
             tool="strategy_get_version_dsl",
-            ok=True,
-            data={
-                "strategy_id": str(resolved.strategy_id),
-                "version": resolved.version,
-                "dsl_json": resolved.dsl_payload,
-                "revision": _revision_snapshot(resolved.receipt),
-            },
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
         )
 
-    @mcp.tool()
-    async def strategy_diff_versions(
-        session_id: str,
-        strategy_id: str,
-        from_version: int,
-        to_version: int,
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
-            if not isinstance(from_version, int) or not isinstance(to_version, int):
-                raise ValueError("from_version and to_version must be integers")
-            if from_version <= 0 or to_version <= 0:
-                raise ValueError("from_version and to_version must be >= 1")
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_diff_versions",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
+    try:
+        async with await _new_db_session() as db:
+            resolved = await get_strategy_version_payload(
+                db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+                version=version,
             )
+    except StrategyRevisionNotFoundError as exc:
+        return _payload(
+            tool="strategy_get_version_dsl",
+            ok=False,
+            error_code="STRATEGY_REVISION_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_get_version_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_get_version_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
 
-        try:
-            async with await _new_db_session() as db:
-                diff_result = await diff_strategy_versions(
-                    db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                    from_version=from_version,
-                    to_version=to_version,
-                )
-        except StrategyRevisionNotFoundError as exc:
-            return _payload(
-                tool="strategy_diff_versions",
-                ok=False,
-                error_code="STRATEGY_REVISION_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_diff_versions",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_diff_versions",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
+    return _payload(
+        tool="strategy_get_version_dsl",
+        ok=True,
+        data={
+            "strategy_id": str(resolved.strategy_id),
+            "version": resolved.version,
+            "dsl_json": resolved.dsl_payload,
+            "revision": _revision_snapshot(resolved.receipt),
+        },
+    )
 
+
+async def strategy_diff_versions(
+    session_id: str,
+    strategy_id: str,
+    from_version: int,
+    to_version: int,
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+        if not isinstance(from_version, int) or not isinstance(to_version, int):
+            raise ValueError("from_version and to_version must be integers")
+        if from_version <= 0 or to_version <= 0:
+            raise ValueError("from_version and to_version must be >= 1")
+    except ValueError as exc:
         return _payload(
             tool="strategy_diff_versions",
-            ok=True,
-            data={
-                "strategy_id": str(diff_result.strategy_id),
-                "from_version": diff_result.from_version,
-                "to_version": diff_result.to_version,
-                "patch_op_count": diff_result.op_count,
-                "patch_ops": diff_result.patch_ops,
-                "from_payload_hash": diff_result.from_payload_hash,
-                "to_payload_hash": diff_result.to_payload_hash,
-            },
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
         )
 
-    @mcp.tool()
-    async def strategy_rollback_dsl(
-        session_id: str,
-        strategy_id: str,
-        target_version: int,
-        expected_version: int = 0,
-    ) -> str:
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-            strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
-            if not isinstance(target_version, int):
-                raise ValueError("target_version must be an integer")
-            if target_version <= 0:
-                raise ValueError("target_version must be >= 1")
-            parsed_expected_version = _parse_expected_version(expected_version)
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_rollback_dsl",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
+    try:
+        async with await _new_db_session() as db:
+            diff_result = await diff_strategy_versions(
+                db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+                from_version=from_version,
+                to_version=to_version,
             )
+    except StrategyRevisionNotFoundError as exc:
+        return _payload(
+            tool="strategy_diff_versions",
+            ok=False,
+            error_code="STRATEGY_REVISION_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_diff_versions",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_diff_versions",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
 
-        try:
-            async with await _new_db_session() as db:
-                result = await rollback_strategy_dsl(
-                    db,
-                    session_id=session_uuid,
-                    strategy_id=strategy_uuid,
-                    target_version=target_version,
-                    expected_version=parsed_expected_version,
-                    auto_commit=True,
-                )
-        except StrategyRevisionNotFoundError as exc:
-            return _payload(
-                tool="strategy_rollback_dsl",
-                ok=False,
-                error_code="STRATEGY_REVISION_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except StrategyPatchApplyError as exc:
-            return _payload(
-                tool="strategy_rollback_dsl",
-                ok=False,
-                error_code="STRATEGY_PATCH_APPLY_FAILED",
-                error_message=str(exc),
-            )
-        except StrategyVersionConflictError as exc:
-            return _payload(
-                tool="strategy_rollback_dsl",
-                ok=False,
-                error_code="STRATEGY_VERSION_CONFLICT",
-                error_message=str(exc),
-            )
-        except StrategyDslValidationException as exc:
-            return _payload(
-                tool="strategy_rollback_dsl",
-                ok=False,
-                data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
-                error_code="STRATEGY_VALIDATION_FAILED",
-                error_message="Strategy DSL validation failed.",
-            )
-        except StrategyStorageNotFoundError as exc:
-            return _payload(
-                tool="strategy_rollback_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_NOT_FOUND",
-                error_message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return _payload(
-                tool="strategy_rollback_dsl",
-                ok=False,
-                error_code="STRATEGY_STORAGE_ERROR",
-                error_message=f"{type(exc).__name__}: {exc}",
-            )
+    return _payload(
+        tool="strategy_diff_versions",
+        ok=True,
+        data={
+            "strategy_id": str(diff_result.strategy_id),
+            "from_version": diff_result.from_version,
+            "to_version": diff_result.to_version,
+            "patch_op_count": diff_result.op_count,
+            "patch_ops": diff_result.patch_ops,
+            "from_payload_hash": diff_result.from_payload_hash,
+            "to_payload_hash": diff_result.to_payload_hash,
+        },
+    )
 
-        receipt = result.receipt
+
+async def strategy_rollback_dsl(
+    session_id: str,
+    strategy_id: str,
+    target_version: int,
+    expected_version: int = 0,
+) -> str:
+    try:
+        session_uuid = _parse_uuid(session_id, "session_id")
+        strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
+        if not isinstance(target_version, int):
+            raise ValueError("target_version must be an integer")
+        if target_version <= 0:
+            raise ValueError("target_version must be >= 1")
+        parsed_expected_version = _parse_expected_version(expected_version)
+    except ValueError as exc:
         return _payload(
             tool="strategy_rollback_dsl",
-            ok=True,
-            data={
-                "strategy_id": str(receipt.strategy_id),
-                "target_version": target_version,
-                "metadata": _strategy_metadata_from_receipt(receipt),
-            },
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
         )
+
+    try:
+        async with await _new_db_session() as db:
+            result = await rollback_strategy_dsl(
+                db,
+                session_id=session_uuid,
+                strategy_id=strategy_uuid,
+                target_version=target_version,
+                expected_version=parsed_expected_version,
+                auto_commit=True,
+            )
+    except StrategyRevisionNotFoundError as exc:
+        return _payload(
+            tool="strategy_rollback_dsl",
+            ok=False,
+            error_code="STRATEGY_REVISION_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except StrategyPatchApplyError as exc:
+        return _payload(
+            tool="strategy_rollback_dsl",
+            ok=False,
+            error_code="STRATEGY_PATCH_APPLY_FAILED",
+            error_message=str(exc),
+        )
+    except StrategyVersionConflictError as exc:
+        return _payload(
+            tool="strategy_rollback_dsl",
+            ok=False,
+            error_code="STRATEGY_VERSION_CONFLICT",
+            error_message=str(exc),
+        )
+    except StrategyDslValidationException as exc:
+        return _payload(
+            tool="strategy_rollback_dsl",
+            ok=False,
+            data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+            error_code="STRATEGY_VALIDATION_FAILED",
+            error_message="Strategy DSL validation failed.",
+        )
+    except StrategyStorageNotFoundError as exc:
+        return _payload(
+            tool="strategy_rollback_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="strategy_rollback_dsl",
+            ok=False,
+            error_code="STRATEGY_STORAGE_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    receipt = result.receipt
+    return _payload(
+        tool="strategy_rollback_dsl",
+        ok=True,
+        data={
+            "strategy_id": str(receipt.strategy_id),
+            "target_version": target_version,
+            "metadata": _strategy_metadata_from_receipt(receipt),
+        },
+    )
+
+
+def register_strategy_tools(mcp: FastMCP) -> None:
+    """Register strategy-related tools."""
+    mcp.tool()(get_indicator_detail)
+    mcp.tool()(get_indicator_catalog)
+    mcp.tool()(strategy_validate_dsl)
+    mcp.tool()(strategy_upsert_dsl)
+    mcp.tool()(strategy_get_dsl)
+    mcp.tool()(strategy_list_tunable_params)
+    mcp.tool()(strategy_patch_dsl)
+    mcp.tool()(strategy_list_versions)
+    mcp.tool()(strategy_get_version_dsl)
+    mcp.tool()(strategy_diff_versions)
+    mcp.tool()(strategy_rollback_dsl)

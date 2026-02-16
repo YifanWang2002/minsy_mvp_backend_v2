@@ -15,6 +15,7 @@ import copy
 import json
 import re
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -105,6 +106,43 @@ _BACKTEST_FEEDBACK_TOOL_NAMES: tuple[str, ...] = (
 
 # Singleton for KYC-specific helpers (profile loading from UserProfile)
 _kyc_handler = KYCHandler()
+
+
+@dataclass(slots=True)
+class _TurnPreparation:
+    phase_before: str
+    phase_turn_count: int
+    prompt_user_message: str
+    handler: Any
+    artifacts: dict[str, Any]
+    pre_strategy_instrument_before: str | None
+    ctx: PhaseContext
+    prompt: Any
+    tools: list[dict[str, Any]]
+
+
+@dataclass(slots=True)
+class _TurnStreamState:
+    full_text: str = ""
+    text_delta_emitted: bool = False
+    completed_usage: dict[str, Any] = field(default_factory=dict)
+    stream_error_message: str | None = None
+    stream_error_detail: dict[str, Any] | None = None
+    mcp_call_records: dict[str, dict[str, Any]] = field(default_factory=dict)
+    mcp_call_order: list[str] = field(default_factory=list)
+    mcp_fallback_counter: int = 0
+
+
+@dataclass(slots=True)
+class _TurnPostProcessResult:
+    assistant_text: str
+    cleaned_text: str
+    filtered_genui_payloads: list[dict[str, Any]]
+    persisted_tool_calls: list[dict[str, Any]]
+    missing_fields: list[str]
+    kyc_status: str
+    transitioned: bool
+    stop_criteria_delta: str | None
 
 
 class ChatOrchestrator:
@@ -254,7 +292,57 @@ class ChatOrchestrator:
             )
             return
 
-        # -- migrate artifacts if needed ---------------------------------
+        preparation = await self._prepare_turn_context(
+            session=session,
+            user=user,
+            payload=payload,
+            language=language,
+            phase_before=phase_before,
+            user_runtime_policy=user_runtime_policy,
+            prompt_user_message=prompt_user_message,
+            phase_turn_count=phase_turn_count,
+            handler=handler,
+        )
+        stream_state = _TurnStreamState()
+        async for stream_event in self._stream_openai_and_collect(
+            session=session,
+            streamer=streamer,
+            preparation=preparation,
+            stream_state=stream_state,
+        ):
+            yield stream_event
+
+        post_process_result = await self._post_process_turn(
+            session=session,
+            user=user,
+            payload=payload,
+            language=language,
+            preparation=preparation,
+            stream_state=stream_state,
+        )
+        async for tail_event in self._emit_tail_events_and_persist(
+            session=session,
+            preparation=preparation,
+            stream_state=stream_state,
+            post_process_result=post_process_result,
+        ):
+            yield tail_event
+
+        log_agent("orchestrator", f"session={session.id} phase={session.current_phase}")
+
+    async def _prepare_turn_context(
+        self,
+        *,
+        session: Session,
+        user: User,
+        payload: ChatSendRequest,
+        language: str,
+        phase_before: str,
+        user_runtime_policy: HandlerRuntimePolicy,
+        prompt_user_message: str,
+        phase_turn_count: int,
+        handler: Any,
+    ) -> _TurnPreparation:
         artifacts = copy.deepcopy(session.artifacts or {})
         artifacts = self._ensure_phase_keyed(artifacts)
         await self._hydrate_strategy_context(
@@ -279,8 +367,6 @@ class ChatOrchestrator:
             artifacts=artifacts,
             user_runtime_policy=user_runtime_policy,
         )
-
-        # -- build prompt via handler ------------------------------------
         ctx = PhaseContext(
             user_id=user.id,
             session_artifacts=artifacts,
@@ -289,35 +375,44 @@ class ChatOrchestrator:
             runtime_policy=runtime_policy,
         )
         prompt = handler.build_prompt(ctx, prompt_user_message)
-
         tools = self._merge_tools(
             base_tools=prompt.tools,
             runtime_policy=runtime_policy,
         )
+        return _TurnPreparation(
+            phase_before=phase_before,
+            phase_turn_count=phase_turn_count,
+            prompt_user_message=prompt_user_message,
+            handler=handler,
+            artifacts=artifacts,
+            pre_strategy_instrument_before=pre_strategy_instrument_before,
+            ctx=ctx,
+            prompt=prompt,
+            tools=tools,
+        )
 
-        # -- stream from Responses API -----------------------------------
-        full_text = ""
-        text_delta_emitted = False
-        completed_usage: dict[str, Any] = {}
-        stream_error_message: str | None = None
-        stream_error_detail: dict[str, Any] | None = None
-        mcp_call_records: dict[str, dict[str, Any]] = {}
-        mcp_call_order: list[str] = []
-        mcp_fallback_counter = 0
+    async def _stream_openai_and_collect(
+        self,
+        *,
+        session: Session,
+        streamer: ResponsesEventStreamer,
+        preparation: _TurnPreparation,
+        stream_state: _TurnStreamState,
+    ) -> AsyncIterator[str]:
         stream_request_kwargs: dict[str, Any] = {
-            "model": prompt.model or settings.openai_response_model,
-            "input_text": prompt.enriched_input,
-            "instructions": prompt.instructions,
+            "model": preparation.prompt.model or settings.openai_response_model,
+            "input_text": preparation.prompt.enriched_input,
+            "instructions": preparation.prompt.instructions,
             "previous_response_id": session.previous_response_id,
-            "tools": tools,
-            "tool_choice": prompt.tool_choice,
-            "reasoning": prompt.reasoning,
+            "tools": preparation.tools,
+            "tool_choice": preparation.prompt.tool_choice,
+            "reasoning": preparation.prompt.reasoning,
         }
         record_chat_debug_trace(
             "orchestrator_to_openai_request",
             {
                 "session_id": str(session.id),
-                "phase": phase_before,
+                "phase": preparation.phase_before,
                 **stream_request_kwargs,
             },
         )
@@ -328,22 +423,20 @@ class ChatOrchestrator:
                         "openai_to_orchestrator_event",
                         {
                             "session_id": str(session.id),
-                            "phase": phase_before,
+                            "phase": preparation.phase_before,
                             "event": event,
                         },
                     )
                     event_type = str(event.get("type", "unknown"))
                     seq = event.get("sequence_number")
-                    mcp_fallback_counter = self._collect_mcp_records_from_event(
+                    stream_state.mcp_fallback_counter = self._collect_mcp_records_from_event(
                         event_type=event_type,
                         event=event,
                         sequence_number=seq,
-                        records=mcp_call_records,
-                        order=mcp_call_order,
-                        fallback_counter=mcp_fallback_counter,
+                        records=stream_state.mcp_call_records,
+                        order=stream_state.mcp_call_order,
+                        fallback_counter=stream_state.mcp_fallback_counter,
                     )
-
-                    # Forward raw OpenAI event to frontend
                     yield self._sse(
                         "openai_event",
                         {
@@ -353,34 +446,33 @@ class ChatOrchestrator:
                             "payload": event,
                         },
                     )
-
                     if event_type == "response.stream_error":
                         err = event.get("error")
                         if isinstance(err, dict):
-                            stream_error_detail = copy.deepcopy(err)
+                            stream_state.stream_error_detail = copy.deepcopy(err)
                             msg = err.get("message")
                             if isinstance(msg, str) and msg.strip():
-                                stream_error_message = msg.strip()
-                            if not stream_error_message:
+                                stream_state.stream_error_message = msg.strip()
+                            if not stream_state.stream_error_message:
                                 diagnostics = err.get("diagnostics")
                                 if isinstance(diagnostics, dict):
-                                    fallback_message = diagnostics.get(
-                                        "upstream_message"
-                                    )
+                                    fallback_message = diagnostics.get("upstream_message")
                                     if (
                                         isinstance(fallback_message, str)
                                         and fallback_message.strip()
                                     ):
-                                        stream_error_message = fallback_message.strip()
-                        if not stream_error_message:
-                            stream_error_message = "Upstream stream interrupted."
+                                        stream_state.stream_error_message = (
+                                            fallback_message.strip()
+                                        )
+                        if not stream_state.stream_error_message:
+                            stream_state.stream_error_message = (
+                                "Upstream stream interrupted."
+                            )
                         continue
-
-                    # Accumulate text deltas
                     if event_type == "response.output_text.delta":
                         delta = event.get("delta")
                         if isinstance(delta, str) and delta:
-                            full_text += delta
+                            stream_state.full_text += delta
                             yield self._sse(
                                 "stream",
                                 {
@@ -389,15 +481,15 @@ class ChatOrchestrator:
                                     "sequence_number": seq,
                                 },
                             )
-                            text_delta_emitted = True
+                            stream_state.text_delta_emitted = True
                     elif event_type == "response.output_text.done":
                         done_text = event.get("text")
                         if (
                             isinstance(done_text, str)
                             and done_text
-                            and not full_text.strip()
+                            and not stream_state.full_text.strip()
                         ):
-                            full_text = done_text
+                            stream_state.full_text = done_text
                             yield self._sse(
                                 "stream",
                                 {
@@ -406,9 +498,7 @@ class ChatOrchestrator:
                                     "sequence_number": seq,
                                 },
                             )
-                            text_delta_emitted = True
-
-                    # Forward MCP events
+                            stream_state.text_delta_emitted = True
                     if "mcp_" in event_type:
                         yield self._sse(
                             "stream",
@@ -419,116 +509,118 @@ class ChatOrchestrator:
                                 "payload": event,
                             },
                         )
-
-                    # Capture response id + usage on completion
                     if event_type == "response.completed":
                         response_obj = event.get("response")
                         if isinstance(response_obj, dict):
                             usage = response_obj.get("usage")
                             if isinstance(usage, dict):
-                                completed_usage = usage
+                                stream_state.completed_usage = usage
                             resp_id = response_obj.get("id")
                             if isinstance(resp_id, str) and resp_id:
                                 session.previous_response_id = resp_id
         except TimeoutError:
-            stream_error_message = (
+            stream_state.stream_error_message = (
                 "OpenAI stream timed out before completion. "
                 f"(>{int(_OPENAI_STREAM_HARD_TIMEOUT_SECONDS)}s)"
             )
-            stream_error_detail = {
+            stream_state.stream_error_detail = {
                 "class": "TimeoutError",
-                "message": stream_error_message,
+                "message": stream_state.stream_error_message,
                 "diagnostics": {"category": "orchestrator_stream_timeout"},
             }
         except Exception as exc:  # noqa: BLE001
-            stream_error_message = f"{type(exc).__name__}: {exc}"
-            stream_error_detail = {
+            stream_state.stream_error_message = f"{type(exc).__name__}: {exc}"
+            stream_state.stream_error_detail = {
                 "class": type(exc).__name__,
                 "message": str(exc),
                 "diagnostics": {"category": "orchestrator_stream_runtime_error"},
             }
 
-        # -- post-processing: extract patches / genui ---------------------
+    async def _post_process_turn(
+        self,
+        *,
+        session: Session,
+        user: User,
+        payload: ChatSendRequest,
+        language: str,
+        preparation: _TurnPreparation,
+        stream_state: _TurnStreamState,
+    ) -> _TurnPostProcessResult:
         cleaned_text, genui_payloads, raw_patches = self._extract_wrapped_payloads(
-            full_text
+            stream_state.full_text
         )
         record_chat_debug_trace(
             "openai_to_orchestrator_full_text",
             {
                 "session_id": str(session.id),
-                "phase": phase_before,
-                "full_text": full_text,
+                "phase": preparation.phase_before,
+                "full_text": stream_state.full_text,
                 "cleaned_text": cleaned_text,
-                "stream_error": stream_error_message,
-                "stream_error_detail": stream_error_detail,
+                "stream_error": stream_state.stream_error_message,
+                "stream_error_detail": stream_state.stream_error_detail,
             },
         )
         assistant_text = cleaned_text.strip()
-        if stream_error_message and not assistant_text:
+        if stream_state.stream_error_message and not assistant_text:
             assistant_text = (
                 "The upstream AI stream was interrupted before completion. "
-                f"Reason: {stream_error_message}. Please retry this step."
+                f"Reason: {stream_state.stream_error_message}. Please retry this step."
             )
 
         final_mcp_tool_calls = self._build_persistable_mcp_tool_calls(
-            records=mcp_call_records,
-            order=mcp_call_order,
+            records=stream_state.mcp_call_records,
+            order=stream_state.mcp_call_order,
         )
         selected_genui_payloads = normalize_genui_payloads(
             genui_payloads,
             allow_passthrough_unregistered=True,
         )
         selected_genui_payloads = self._maybe_auto_wrap_strategy_genui(
-            phase=phase_before,
-            artifacts=artifacts,
+            phase=preparation.phase_before,
+            artifacts=preparation.artifacts,
             assistant_text=assistant_text,
             existing_genui=selected_genui_payloads,
             mcp_tool_calls=final_mcp_tool_calls,
         )
         selected_genui_payloads = self._maybe_auto_wrap_backtest_charts_genui(
-            phase=phase_before,
+            phase=preparation.phase_before,
             existing_genui=selected_genui_payloads,
             mcp_tool_calls=final_mcp_tool_calls,
         )
 
-        # -- delegate post-processing to handler --------------------------
-        result = await handler.post_process(ctx, raw_patches, self.db)
-
-        # Write back updated artifacts
+        result = await preparation.handler.post_process(
+            preparation.ctx, raw_patches, self.db
+        )
         session.artifacts = result.artifacts
-
-        # Suppress genui when phase is complete
         if result.completed:
             selected_genui_payloads = []
 
-        # Apply handler's genui filter
         post_process_ctx = PhaseContext(
-            user_id=ctx.user_id,
+            user_id=preparation.ctx.user_id,
             session_artifacts=result.artifacts,
-            session_id=ctx.session_id,
-            language=ctx.language,
-            runtime_policy=ctx.runtime_policy,
+            session_id=preparation.ctx.session_id,
+            language=preparation.ctx.language,
+            runtime_policy=preparation.ctx.runtime_policy,
         )
         filtered_genui_payloads: list[dict[str, Any]] = []
         for genui_payload in selected_genui_payloads:
-            filtered = handler.filter_genui(genui_payload, post_process_ctx)
+            filtered = preparation.handler.filter_genui(genui_payload, post_process_ctx)
             if filtered is not None:
                 filtered_genui_payloads.append(filtered)
         filtered_genui_payloads = self._ensure_required_choice_prompt_payload(
-            handler=handler,
+            handler=preparation.handler,
             ctx=post_process_ctx,
             missing_fields=result.missing_fields,
             genui_payloads=filtered_genui_payloads,
         )
         filtered_genui_payloads = self._ensure_pre_strategy_chart_payload(
-            phase_before=phase_before,
+            phase_before=preparation.phase_before,
             artifacts=result.artifacts,
             genui_payloads=filtered_genui_payloads,
-            instrument_before=pre_strategy_instrument_before,
+            instrument_before=preparation.pre_strategy_instrument_before,
         )
         persisted_tool_calls = [*filtered_genui_payloads, *final_mcp_tool_calls]
 
-        # Handle transition
         transitioned = False
         if result.completed and result.next_phase:
             await self._transition_phase(
@@ -539,88 +631,120 @@ class ChatOrchestrator:
             )
             transitioned = True
 
-        # Fallback: use genui question as assistant text
-        if not assistant_text and filtered_genui_payloads and full_text.strip():
-            fallback_choice = next(
-                (
-                    payload
-                    for payload in reversed(filtered_genui_payloads)
-                    if payload.get("type") == "choice_prompt"
-                ),
-                None,
-            )
-            question = (
-                fallback_choice.get("question") if fallback_choice is not None else None
-            )
-            if isinstance(question, str) and question.strip():
-                assistant_text = question.strip()
+        assistant_text = self._resolve_assistant_text_fallbacks(
+            assistant_text=assistant_text,
+            filtered_genui_payloads=filtered_genui_payloads,
+            full_text=stream_state.full_text,
+        )
 
-        # Fetch kyc_status for the done event
         kyc_status = result.phase_status.get("kyc_status")
         if kyc_status is None:
             kyc_status = await self._fetch_kyc_status(user.id)
 
-        assistant_text, stop_criteria_delta = (
-            self._maybe_apply_stop_criteria_placeholder(
-                session=session,
-                phase=phase_before,
-                phase_turn_count=phase_turn_count,
-                language=language,
-                assistant_text=assistant_text,
-            )
+        assistant_text, stop_criteria_delta = self._maybe_apply_stop_criteria_placeholder(
+            session=session,
+            phase=preparation.phase_before,
+            phase_turn_count=preparation.phase_turn_count,
+            language=language,
+            assistant_text=assistant_text,
         )
         if not assistant_text.strip():
             assistant_text = self._build_empty_turn_fallback_text(
-                phase=phase_before,
+                phase=preparation.phase_before,
                 missing_fields=result.missing_fields,
                 language=language,
             )
             log_agent(
                 "orchestrator",
-                f"session={session.id} phase={phase_before} empty_model_output_fallback",
+                (
+                    f"session={session.id} phase={preparation.phase_before} "
+                    "empty_model_output_fallback"
+                ),
             )
         if transitioned:
             await self._store_phase_carryover_memory(
                 session=session,
-                from_phase=phase_before,
+                from_phase=preparation.phase_before,
                 to_phase=session.current_phase,
                 user_message=payload.message,
                 assistant_message=assistant_text,
             )
 
-        # -- persist assistant message ------------------------------------
+        return _TurnPostProcessResult(
+            assistant_text=assistant_text,
+            cleaned_text=cleaned_text,
+            filtered_genui_payloads=filtered_genui_payloads,
+            persisted_tool_calls=persisted_tool_calls,
+            missing_fields=result.missing_fields,
+            kyc_status=kyc_status,
+            transitioned=transitioned,
+            stop_criteria_delta=stop_criteria_delta,
+        )
+
+    def _resolve_assistant_text_fallbacks(
+        self,
+        *,
+        assistant_text: str,
+        filtered_genui_payloads: list[dict[str, Any]],
+        full_text: str,
+    ) -> str:
+        if assistant_text:
+            return assistant_text
+        if not filtered_genui_payloads or not full_text.strip():
+            return assistant_text
+
+        fallback_choice = next(
+            (
+                payload
+                for payload in reversed(filtered_genui_payloads)
+                if payload.get("type") == "choice_prompt"
+            ),
+            None,
+        )
+        question = fallback_choice.get("question") if fallback_choice is not None else None
+        if isinstance(question, str) and question.strip():
+            return question.strip()
+        return assistant_text
+
+    async def _emit_tail_events_and_persist(
+        self,
+        *,
+        session: Session,
+        preparation: _TurnPreparation,
+        stream_state: _TurnStreamState,
+        post_process_result: _TurnPostProcessResult,
+    ) -> AsyncIterator[str]:
         self.db.add(
             Message(
                 session_id=session.id,
                 role="assistant",
-                content=assistant_text,
-                phase=phase_before,
+                content=post_process_result.assistant_text,
+                phase=preparation.phase_before,
                 response_id=session.previous_response_id,
-                tool_calls=persisted_tool_calls or None,
-                token_usage=completed_usage or None,
+                tool_calls=post_process_result.persisted_tool_calls or None,
+                token_usage=stream_state.completed_usage or None,
             )
         )
-
         session.last_activity_at = datetime.now(UTC)
         await self.db.commit()
         await self.db.refresh(session)
 
-        # -- tail events --------------------------------------------------
-        for genui_payload in filtered_genui_payloads:
+        for genui_payload in post_process_result.filtered_genui_payloads:
             yield self._sse("stream", {"type": "genui", "payload": genui_payload})
 
-        if transitioned:
+        if post_process_result.transitioned:
             yield self._sse(
                 "stream",
                 {
                     "type": "phase_change",
-                    "from_phase": phase_before,
+                    "from_phase": preparation.phase_before,
                     "to_phase": session.current_phase,
                 },
             )
 
+        stop_criteria_delta = post_process_result.stop_criteria_delta
         if isinstance(stop_criteria_delta, str) and stop_criteria_delta.strip():
-            if text_delta_emitted and cleaned_text.strip():
+            if stream_state.text_delta_emitted and post_process_result.cleaned_text.strip():
                 yield self._sse(
                     "stream",
                     {
@@ -632,18 +756,22 @@ class ChatOrchestrator:
                 stop_criteria_delta = None
 
         should_emit_terminal_text = (
-            assistant_text.strip()
-            and (not text_delta_emitted or not cleaned_text.strip())
+            post_process_result.assistant_text.strip()
+            and (
+                not stream_state.text_delta_emitted
+                or not post_process_result.cleaned_text.strip()
+            )
         )
         if should_emit_terminal_text:
             yield self._sse(
                 "stream",
                 {
                     "type": "text_delta",
-                    "delta": assistant_text,
+                    "delta": post_process_result.assistant_text,
                 },
             )
-            text_delta_emitted = True
+            stream_state.text_delta_emitted = True
+
         yield self._sse(
             "stream",
             {
@@ -651,15 +779,13 @@ class ChatOrchestrator:
                 "session_id": str(session.id),
                 "phase": session.current_phase,
                 "status": session.status,
-                "kyc_status": kyc_status,
-                "missing_fields": result.missing_fields,
-                "usage": completed_usage,
-                "stream_error": stream_error_message,
-                "stream_error_detail": stream_error_detail,
+                "kyc_status": post_process_result.kyc_status,
+                "missing_fields": post_process_result.missing_fields,
+                "usage": stream_state.completed_usage,
+                "stream_error": stream_state.stream_error_message,
+                "stream_error_detail": stream_state.stream_error_detail,
             },
         )
-
-        log_agent("orchestrator", f"session={session.id} phase={session.current_phase}")
 
     # ------------------------------------------------------------------
     # Private helpers – session / DB
