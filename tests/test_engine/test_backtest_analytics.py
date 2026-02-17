@@ -217,3 +217,35 @@ def test_rolling_metrics_uses_trade_based_win_rate_pct() -> None:
     assert rolling["win_rate_curve_points"]
     assert all(0.0 <= point["value"] <= 100.0 for point in rolling["win_rate_curve_points"])
     assert rolling["win_rate_last"] == 50.0
+
+
+def test_entry_time_analytics_handles_empty_or_invalid_trades() -> None:
+    result = {
+        "trades": [
+            {
+                "side": "long",
+                "entry_time": "not-a-timestamp",
+                "exit_time": "also-invalid",
+                "entry_price": 100,
+                "exit_price": 101,
+                "quantity": 1,
+                "bars_held": 1,
+                "exit_reason": "signal_exit",
+                "pnl": 1,
+                "pnl_pct": 1,
+                "commission": 0.1,
+            }
+        ],
+        "equity_curve": [],
+        "returns": [],
+    }
+
+    hour = compute_entry_hour_pnl_heatmap(result)
+    assert len(hour["heatmap"]) == 24
+    assert hour["total_trades"] == 0
+    assert all(item["trade_count"] == 0 for item in hour["heatmap"])
+
+    weekday = compute_entry_weekday_pnl(result)
+    assert len(weekday["weekday_stats"]) == 7
+    assert weekday["total_trades"] == 0
+    assert all(item["trade_count"] == 0 for item in weekday["weekday_stats"])

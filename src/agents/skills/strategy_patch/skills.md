@@ -45,3 +45,6 @@ Use this workflow when the user asks to revise an existing strategy and a `strat
 - `STRATEGY_VERSION_CONFLICT`: re-run `strategy_get_dsl`, regenerate patch on latest version, retry.
 - `STRATEGY_PATCH_APPLY_FAILED`: fix invalid path/op and retry.
 - `STRATEGY_VALIDATION_FAILED`: patch produced invalid DSL; apply minimal corrective patch.
+- For `STRATEGY_VALIDATION_FAILED`, read structured `errors[]` and use `code/path/suggestion` to build one minimal corrective patch.
+- In one assistant turn, for the same patch intent, run at most 2 patch-validation attempts. If still failing, stop retries and ask one focused clarification.
+- Never re-submit an unchanged patch payload after validation failure.

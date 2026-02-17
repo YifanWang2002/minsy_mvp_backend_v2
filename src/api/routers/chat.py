@@ -18,6 +18,7 @@ from src.services.session_title_service import read_session_title_from_metadata
 from src.util.chat_debug_trace import (
     CHAT_TRACE_HEADER_ENABLED,
     CHAT_TRACE_HEADER_ID,
+    CHAT_TRACE_HEADER_MODE,
     CHAT_TRACE_RESPONSE_HEADER_ID,
     build_chat_debug_trace,
     reset_chat_debug_trace,
@@ -70,8 +71,10 @@ async def send_message_stream(
     """Stream a chat turn via the OpenAI Responses API (SSE)."""
     trace = build_chat_debug_trace(
         default_enabled=settings.chat_debug_trace_enabled,
+        default_mode=settings.chat_debug_trace_mode,
         header_value=request.headers.get(CHAT_TRACE_HEADER_ENABLED),
         requested_trace_id=request.headers.get(CHAT_TRACE_HEADER_ID),
+        requested_mode=request.headers.get(CHAT_TRACE_HEADER_MODE),
     )
 
     orchestrator = ChatOrchestrator(db)

@@ -58,6 +58,7 @@ def _claims_for(
     *,
     user_id: Any,
     session_id: Any | None,
+    request_id: str | None = None,
 ) -> McpContextClaims:
     now = datetime.now(UTC)
     return McpContextClaims(
@@ -67,6 +68,7 @@ def _claims_for(
         expires_at=now + timedelta(minutes=5),
         trace_id="test-trace",
         phase="strategy",
+        request_id=request_id,
     )
 
 
@@ -170,6 +172,13 @@ async def test_strategy_validate_dsl_tool_covers_pass_and_fail(
     assert invalid_result["ok"] is False
     assert invalid_result["error"]["code"] == "STRATEGY_VALIDATION_FAILED"
     assert any(item["code"] == "MISSING_REQUIRED_FIELD" for item in invalid_result["errors"])
+    assert "validation" in invalid_result
+    assert invalid_result["validation"]["error_count"] >= 1
+    assert isinstance(invalid_result["validation"]["top_codes"], list)
+    first_error = invalid_result["errors"][0]
+    assert "stage" in first_error
+    assert "path_pointer" in first_error
+    assert "suggestion" in first_error
 
     invalid_json_call = await mcp.call_tool(
         "strategy_validate_dsl",
@@ -178,6 +187,50 @@ async def test_strategy_validate_dsl_tool_covers_pass_and_fail(
     invalid_json_result = _extract_payload(invalid_json_call)
     assert invalid_json_result["ok"] is False
     assert invalid_json_result["error"]["code"] == "INVALID_JSON"
+
+
+@pytest.mark.asyncio
+async def test_strategy_validate_dsl_retry_limit_metadata_is_exposed_with_request_context(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_validate_retry@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+
+    claims = _claims_for(
+        user_id=session.user_id,
+        session_id=session.id,
+        request_id="turn_retry_test",
+    )
+    monkeypatch.setattr(strategy_tools, "_resolve_context_claims", lambda ctx: claims)
+
+    mcp = FastMCP("test-strategy-tools-validate-retry")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    invalid_payload = deepcopy(payload)
+    invalid_payload.pop("timeframe", None)
+    request = {
+        "dsl_json": json.dumps(invalid_payload),
+        "session_id": str(session.id),
+    }
+
+    first = _extract_payload(await mcp.call_tool("strategy_validate_dsl", request))
+    second = _extract_payload(await mcp.call_tool("strategy_validate_dsl", request))
+    third = _extract_payload(await mcp.call_tool("strategy_validate_dsl", request))
+
+    assert first["ok"] is False
+    assert second["ok"] is False
+    assert third["ok"] is False
+    assert first["error"]["code"] == "STRATEGY_VALIDATION_FAILED"
+    assert third["error"]["code"] == "STRATEGY_VALIDATION_FAILED"
+    assert third["validation"]["retry_limit_reached"] is True
+    assert third["validation"]["retry_count"] >= 3
+    assert "Retry limit reached" in third["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -551,6 +604,52 @@ async def test_strategy_get_tool_accepts_context_without_session_argument(
     get_call = await mcp.call_tool(
         "strategy_get_dsl",
         {"strategy_id": upsert_payload["strategy_id"]},
+    )
+    get_payload = _extract_payload(get_call)
+    assert get_payload["ok"] is True
+    assert get_payload["strategy_id"] == upsert_payload["strategy_id"]
+
+
+@pytest.mark.asyncio
+async def test_strategy_tools_accept_placeholder_session_id_when_context_is_present(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(
+        db_session,
+        email="strategy_mcp_ctx_placeholder@example.com",
+    )
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(
+        strategy_tools,
+        "_resolve_context_claims",
+        lambda _ctx: _claims_for(user_id=session.user_id, session_id=session.id),
+    )
+
+    mcp = FastMCP("test-strategy-tools-context-placeholder")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    upsert_call = await mcp.call_tool(
+        "strategy_upsert_dsl",
+        {
+            "session_id": "—",
+            "dsl_json": json.dumps(payload),
+        },
+    )
+    upsert_payload = _extract_payload(upsert_call)
+    assert upsert_payload["ok"] is True
+
+    get_call = await mcp.call_tool(
+        "strategy_get_dsl",
+        {
+            "strategy_id": upsert_payload["strategy_id"],
+            "session_id": "—",
+        },
     )
     get_payload = _extract_payload(get_call)
     assert get_payload["ok"] is True

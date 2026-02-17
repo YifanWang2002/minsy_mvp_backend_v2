@@ -331,3 +331,78 @@ async def test_market_data_tools_error_payload_shape(
     invalid_candles_payload = _extract_payload(invalid_candles)
     assert invalid_candles_payload["ok"] is False
     assert invalid_candles_payload["error"]["code"] == "INVALID_INPUT"
+
+
+@pytest.mark.asyncio
+async def test_check_symbol_available_covers_global_and_market_scoped_lookup(
+    loader_with_mock_parquet: DataLoader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
+    fake_ticker = _make_fake_yfinance_ticker_class()
+    monkeypatch.setattr(market_tools.yf, "Ticker", fake_ticker)
+
+    mcp = FastMCP("test-market-data-check-symbol")
+    market_tools.register_market_data_tools(mcp)
+
+    global_hit_call = await mcp.call_tool(
+        "check_symbol_available",
+        {"symbol": "BTCUSD"},
+    )
+    global_hit_payload = _extract_payload(global_hit_call)
+    assert global_hit_payload["ok"] is True
+    assert global_hit_payload["available"] is True
+    assert global_hit_payload["matched_markets"] == ["crypto"]
+
+    market_hit_call = await mcp.call_tool(
+        "check_symbol_available",
+        {"market": "stock", "symbol": "SPY"},
+    )
+    market_hit_payload = _extract_payload(market_hit_call)
+    assert market_hit_payload["ok"] is True
+    assert market_hit_payload["market"] == "us_stocks"
+    assert market_hit_payload["available"] is True
+
+    market_miss_call = await mcp.call_tool(
+        "check_symbol_available",
+        {"market": "futures", "symbol": "SPY"},
+    )
+    market_miss_payload = _extract_payload(market_miss_call)
+    assert market_miss_payload["ok"] is True
+    assert market_miss_payload["market"] == "futures"
+    assert market_miss_payload["available"] is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_market_data_alias_tools_map_to_yfinance_symbols(
+    loader_with_mock_parquet: DataLoader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
+    fake_ticker = _make_fake_yfinance_ticker_class()
+    monkeypatch.setattr(market_tools.yf, "Ticker", fake_ticker)
+
+    mcp = FastMCP("test-market-data-legacy-aliases")
+    market_tools.register_market_data_tools(mcp)
+
+    quote_call = await mcp.call_tool(
+        "market_data_get_quote",
+        {"symbol": "EURUSD", "venue": "FOREX"},
+    )
+    quote_payload = _extract_payload(quote_call)
+    assert quote_payload["ok"] is True
+    assert quote_payload["market"] == "forex"
+    assert quote_payload["yfinance_symbol"] == "EURUSD=X"
+
+    candles_call = await mcp.call_tool(
+        "market_data_get_candles",
+        {"symbol": "AAPL", "interval": "1d", "limit": 2},
+    )
+    candles_payload = _extract_payload(candles_call)
+    assert candles_payload["ok"] is True
+    assert candles_payload["market"] == "us_stocks"
+    assert candles_payload["yfinance_symbol"] == "AAPL"
+    assert candles_payload["period"] == "1mo"
+    assert candles_payload["interval"] == "1d"
+    assert candles_payload["rows"] == 2
+    assert candles_payload["truncated"] is True

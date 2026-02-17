@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default=False,
         alias="CHAT_DEBUG_TRACE_ENABLED",
     )
+    chat_debug_trace_mode: str = Field(
+        default="verbose",
+        alias="CHAT_DEBUG_TRACE_MODE",
+    )
     openai_api_key: str = Field(alias="OPENAI_API_KEY")
     secret_key: str = Field(alias="SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")

@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from src.agents.handler_registry import init_all_artifacts
+from src.config import settings
 from src.main import app
 from src.models import database as db_module
 from src.models.session import Session
@@ -57,6 +58,7 @@ def _create_strategy_phase_session(
 
 
 def test_openai_stream_strategy_phase_uses_real_prompt_and_skills() -> None:
+    assert settings.strategy_mcp_server_url == "https://dev.minsyai.com/mcp"
     with TestClient(app) as client:
         token = _register_and_get_token(client)
         headers = {"Authorization": f"Bearer {token}"}

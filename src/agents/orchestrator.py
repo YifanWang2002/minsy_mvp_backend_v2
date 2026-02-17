@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -36,7 +36,7 @@ from src.agents.skills.pre_strategy_skills import (
 )
 from src.api.schemas.requests import ChatSendRequest
 from src.config import settings
-from src.engine.strategy import validate_strategy_payload
+from src.engine.strategy import create_strategy_draft, validate_strategy_payload
 from src.mcp.context_auth import MCP_CONTEXT_HEADER, create_mcp_context_token
 from src.models.phase_transition import PhaseTransition
 from src.models.session import Message, Session
@@ -44,7 +44,11 @@ from src.models.strategy import Strategy
 from src.models.user import User, UserProfile
 from src.services.openai_stream_service import ResponsesEventStreamer
 from src.services.session_title_service import refresh_session_title
-from src.util.chat_debug_trace import get_chat_debug_trace, record_chat_debug_trace
+from src.util.chat_debug_trace import (
+    CHAT_TRACE_MODE_COMPACT,
+    get_chat_debug_trace,
+    record_chat_debug_trace,
+)
 from src.util.logger import log_agent
 
 _AGENT_UI_TAG = "AGENT_UI_JSON"
@@ -230,6 +234,7 @@ class ChatOrchestrator:
         )
         await self._enforce_strategy_only_boundary(session=session)
         phase_before = session.current_phase
+        turn_request_id = f"turn_{uuid4().hex}"
         user_runtime_policy = self._build_runtime_policy(payload)
         carryover_block = self._consume_phase_carryover_memory(
             session=session, phase=phase_before
@@ -311,6 +316,7 @@ class ChatOrchestrator:
             prompt_user_message=prompt_user_message,
             phase_turn_count=phase_turn_count,
             handler=handler,
+            turn_request_id=turn_request_id,
         )
         stream_state = _TurnStreamState()
         async for stream_event in self._stream_openai_and_collect(
@@ -351,6 +357,7 @@ class ChatOrchestrator:
         prompt_user_message: str,
         phase_turn_count: int,
         handler: Any,
+        turn_request_id: str,
     ) -> _TurnPreparation:
         artifacts = copy.deepcopy(session.artifacts or {})
         artifacts = self._ensure_phase_keyed(artifacts)
@@ -393,6 +400,7 @@ class ChatOrchestrator:
             user_id=user.id,
             session_id=session.id,
             phase=phase_before,
+            request_id=turn_request_id,
         )
         return _TurnPreparation(
             phase_before=phase_before,
@@ -434,18 +442,26 @@ class ChatOrchestrator:
                 **trace_stream_request_kwargs,
             },
         )
+        trace = get_chat_debug_trace()
+        compact_trace = (
+            trace is not None
+            and trace.enabled
+            and isinstance(trace.mode, str)
+            and trace.mode.strip().lower() == CHAT_TRACE_MODE_COMPACT
+        )
         try:
             async with asyncio.timeout(_OPENAI_STREAM_HARD_TIMEOUT_SECONDS):
                 async for event in streamer.stream_events(**stream_request_kwargs):
-                    record_chat_debug_trace(
-                        "openai_to_orchestrator_event",
-                        {
-                            "session_id": str(session.id),
-                            "phase": preparation.phase_before,
-                            "event": event,
-                        },
-                    )
                     event_type = str(event.get("type", "unknown"))
+                    if not (compact_trace and self._is_delta_trace_token(event_type)):
+                        record_chat_debug_trace(
+                            "openai_to_orchestrator_event",
+                            {
+                                "session_id": str(session.id),
+                                "phase": preparation.phase_before,
+                                "event": event,
+                            },
+                        )
                     seq = event.get("sequence_number")
                     stream_state.mcp_fallback_counter = self._collect_mcp_records_from_event(
                         event_type=event_type,
@@ -599,6 +615,14 @@ class ChatOrchestrator:
             assistant_text=assistant_text,
             existing_genui=selected_genui_payloads,
             mcp_tool_calls=final_mcp_tool_calls,
+        )
+        selected_genui_payloads = await self._maybe_backfill_strategy_ref_from_validate_call(
+            phase=preparation.phase_before,
+            artifacts=preparation.artifacts,
+            existing_genui=selected_genui_payloads,
+            mcp_tool_calls=final_mcp_tool_calls,
+            session_id=session.id,
+            user_id=user.id,
         )
         selected_genui_payloads = self._maybe_auto_wrap_backtest_charts_genui(
             phase=preparation.phase_before,
@@ -995,6 +1019,173 @@ class ChatOrchestrator:
         if dedupe_key in existing_keys:
             return existing_genui
         return [*existing_genui, candidate]
+
+    async def _maybe_backfill_strategy_ref_from_validate_call(
+        self,
+        *,
+        phase: str,
+        artifacts: dict[str, Any],
+        existing_genui: list[dict[str, Any]],
+        mcp_tool_calls: list[dict[str, Any]],
+        session_id: UUID,
+        user_id: UUID,
+    ) -> list[dict[str, Any]]:
+        if phase != Phase.STRATEGY.value:
+            return existing_genui
+
+        strategy_profile = self._extract_phase_profile(
+            artifacts=artifacts,
+            phase=Phase.STRATEGY.value,
+        )
+        strategy_id = strategy_profile.get("strategy_id")
+        if isinstance(strategy_id, str) and strategy_id.strip():
+            return existing_genui
+
+        strategy_ref_index = self._find_strategy_ref_payload_index(existing_genui)
+        if strategy_ref_index is not None:
+            existing_ref = existing_genui[strategy_ref_index]
+            existing_ref_draft_id = self._coerce_uuid_text(
+                existing_ref.get("strategy_draft_id")
+            )
+            if existing_ref_draft_id is not None:
+                return existing_genui
+
+        latest = self._extract_latest_successful_strategy_validate_call(mcp_tool_calls)
+        if latest is None:
+            return existing_genui
+        validate_call, output_payload = latest
+
+        # Normal path already handled by the regular wrapper.
+        existing_draft_id = self._coerce_uuid_text(output_payload.get("strategy_draft_id"))
+        if existing_draft_id is None:
+            data_payload = self._coerce_json_object(output_payload.get("data"))
+            if isinstance(data_payload, dict):
+                existing_draft_id = self._coerce_uuid_text(data_payload.get("strategy_draft_id"))
+        if existing_draft_id is not None:
+            return existing_genui
+
+        dsl_payload = self._extract_validate_dsl_payload_from_arguments(
+            validate_call.get("arguments")
+        )
+        if not isinstance(dsl_payload, dict):
+            return existing_genui
+
+        validation = validate_strategy_payload(dsl_payload)
+        if not validation.is_valid:
+            return existing_genui
+
+        try:
+            draft = await create_strategy_draft(
+                user_id=user_id,
+                session_id=session_id,
+                dsl_json=dsl_payload,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log_agent(
+                "orchestrator",
+                (
+                    f"session={session_id} strategy_ref_backfill_failed "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
+            return existing_genui
+
+        self._inject_strategy_draft_into_validate_call_output(
+            validate_call=validate_call,
+            output_payload=output_payload,
+            strategy_draft_id=str(draft.strategy_draft_id),
+            draft_expires_at=draft.expires_at.isoformat(),
+            draft_ttl_seconds=int(draft.ttl_seconds),
+        )
+        if strategy_ref_index is not None:
+            updated = list(existing_genui)
+            next_payload = dict(updated[strategy_ref_index])
+            next_payload["strategy_draft_id"] = str(draft.strategy_draft_id)
+            next_payload["source"] = "strategy_validate_dsl_backfill"
+            if not str(next_payload.get("display_mode", "")).strip():
+                next_payload["display_mode"] = "draft"
+            updated[strategy_ref_index] = next_payload
+            return updated
+
+        wrapped_ref = {
+            "type": _STRATEGY_REF_GENUI_TYPE,
+            "strategy_draft_id": str(draft.strategy_draft_id),
+            "source": "strategy_validate_dsl_backfill",
+            "display_mode": "draft",
+        }
+        return self._append_genui_if_new(
+            existing_genui=existing_genui,
+            candidate=wrapped_ref,
+        )
+
+    @staticmethod
+    def _find_strategy_ref_payload_index(payloads: list[dict[str, Any]]) -> int | None:
+        for index, payload in enumerate(payloads):
+            payload_type = payload.get("type")
+            if not isinstance(payload_type, str):
+                continue
+            if payload_type.strip().lower() == _STRATEGY_REF_GENUI_TYPE:
+                return index
+        return None
+
+    def _extract_latest_successful_strategy_validate_call(
+        self,
+        mcp_tool_calls: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        for item in reversed(mcp_tool_calls):
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type", "")).strip().lower() != "mcp_call":
+                continue
+            if str(item.get("name", "")).strip() != "strategy_validate_dsl":
+                continue
+            if str(item.get("status", "")).strip().lower() != "success":
+                continue
+            output_payload = self._coerce_json_object(item.get("output"))
+            if not isinstance(output_payload, dict):
+                output_payload = self._coerce_json_object(item.get("result"))
+            if not isinstance(output_payload, dict):
+                continue
+            if output_payload.get("ok") is not True:
+                continue
+            return item, output_payload
+        return None
+
+    def _extract_validate_dsl_payload_from_arguments(
+        self,
+        arguments: Any,
+    ) -> dict[str, Any] | None:
+        payload = self._coerce_json_object(arguments)
+        if not isinstance(payload, dict):
+            return None
+        raw_dsl = payload.get("dsl_json")
+        if isinstance(raw_dsl, dict):
+            return dict(raw_dsl)
+        if isinstance(raw_dsl, str):
+            parsed = self._coerce_json_object(raw_dsl)
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    def _inject_strategy_draft_into_validate_call_output(
+        self,
+        *,
+        validate_call: dict[str, Any],
+        output_payload: dict[str, Any],
+        strategy_draft_id: str,
+        draft_expires_at: str,
+        draft_ttl_seconds: int,
+    ) -> None:
+        next_payload = dict(output_payload)
+        next_payload["strategy_draft_id"] = strategy_draft_id
+        next_payload["draft_expires_at"] = draft_expires_at
+        next_payload["draft_ttl_seconds"] = draft_ttl_seconds
+
+        existing_output = validate_call.get("output")
+        if isinstance(existing_output, dict):
+            validate_call["output"] = next_payload
+            return
+        validate_call["output"] = json.dumps(next_payload, ensure_ascii=False)
 
     def _extract_strategy_draft_id_from_mcp_calls(
         self,
@@ -1500,6 +1691,9 @@ class ChatOrchestrator:
         if output is None:
             output = candidate.get("response")
         next_output = output if output is not None else existing.get("output")
+        output_failure_error = self._extract_mcp_output_failure_error(next_output)
+        if output_failure_error:
+            next_status = "failure"
 
         tool_name = candidate.get("name")
         if isinstance(tool_name, str):
@@ -1514,7 +1708,11 @@ class ChatOrchestrator:
                 else "mcp_call"
             )
 
-        next_error = error_text or self._normalize_mcp_error(existing.get("error"))
+        next_error = (
+            error_text
+            or output_failure_error
+            or self._normalize_mcp_error(existing.get("error"))
+        )
 
         next_record: dict[str, Any] = {
             "type": "mcp_call",
@@ -1605,6 +1803,26 @@ class ChatOrchestrator:
         text = text.strip()
         return text or None
 
+    def _extract_mcp_output_failure_error(self, value: Any) -> str | None:
+        payload = self._coerce_json_object(value)
+        if not isinstance(payload, dict):
+            return None
+
+        has_error = payload.get("error") is not None
+        output_failed = payload.get("ok") is False or has_error
+        if not output_failed:
+            return None
+
+        nested_error = self._normalize_mcp_error(payload.get("error"))
+        if nested_error:
+            return nested_error
+
+        for key in ("message", "detail", "description", "code"):
+            text = self._normalize_mcp_error(payload.get(key))
+            if text:
+                return text
+        return "MCP tool response marked as failed."
+
     def _build_persistable_mcp_tool_calls(
         self,
         *,
@@ -1669,12 +1887,52 @@ class ChatOrchestrator:
                 str(item.get("name", "")).strip(),
                 self._stable_json_signature(item.get("arguments")),
             )
-            if status == "failure" and (
+            if status == "failure" and self._is_retryable_mcp_failure(item) and (
                 signature in success_signatures or signature[0] in success_names
             ):
                 continue
             filtered.append(item)
         return filtered
+
+    @staticmethod
+    def _is_retryable_mcp_failure(item: dict[str, Any]) -> bool:
+        retryable_hints = (
+            "timeout",
+            "timed out",
+            "connection reset",
+            "connection aborted",
+            "remoteprotocolerror",
+            "session terminated",
+            "status=408",
+            "status=424",
+            "status=429",
+            "status=500",
+            "status=502",
+            "status=503",
+            "status=504",
+            "temporarily unavailable",
+            "try again",
+        )
+
+        parts: list[str] = []
+        error_text = ChatOrchestrator._normalize_mcp_error(item.get("error"))
+        if error_text:
+            parts.append(error_text)
+
+        output_payload = ChatOrchestrator._coerce_json_object(item.get("output"))
+        if isinstance(output_payload, dict):
+            nested_error = ChatOrchestrator._normalize_mcp_error(output_payload.get("error"))
+            if nested_error:
+                parts.append(nested_error)
+            for key in ("message", "detail", "description"):
+                text = ChatOrchestrator._normalize_mcp_error(output_payload.get(key))
+                if text:
+                    parts.append(text)
+
+        blob = " ".join(part.lower() for part in parts if part)
+        if not blob:
+            return False
+        return any(hint in blob for hint in retryable_hints)
 
     @staticmethod
     def _stable_json_signature(value: Any) -> str:
@@ -2089,6 +2347,7 @@ class ChatOrchestrator:
         user_id: UUID,
         session_id: UUID,
         phase: str,
+        request_id: str | None = None,
     ) -> list[dict[str, Any]] | None:
         if not tools:
             return tools
@@ -2101,6 +2360,7 @@ class ChatOrchestrator:
             ttl_seconds=settings.mcp_context_ttl_seconds,
             trace_id=trace_id,
             phase=phase,
+            request_id=request_id,
         )
 
         decorated: list[dict[str, Any]] = []
@@ -2423,11 +2683,36 @@ class ChatOrchestrator:
         )
 
     def _sse(self, event: str, payload: dict[str, Any]) -> str:
-        record_chat_debug_trace(
-            "orchestrator_to_frontend_sse",
-            {
-                "event": event,
-                "payload": payload,
-            },
+        trace = get_chat_debug_trace()
+        compact_trace = (
+            trace is not None
+            and trace.enabled
+            and isinstance(trace.mode, str)
+            and trace.mode.strip().lower() == CHAT_TRACE_MODE_COMPACT
         )
+        if not (
+            compact_trace
+            and (
+                self._is_delta_trace_token(event)
+                or self._is_delta_trace_token(payload.get("type"))
+                or self._is_delta_trace_token(payload.get("openai_type"))
+                or (
+                    isinstance(payload.get("payload"), dict)
+                    and self._is_delta_trace_token(payload.get("payload", {}).get("type"))
+                )
+            )
+        ):
+            record_chat_debug_trace(
+                "orchestrator_to_frontend_sse",
+                {
+                    "event": event,
+                    "payload": payload,
+                },
+            )
         return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    @staticmethod
+    def _is_delta_trace_token(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        return "delta" in value.strip().lower()

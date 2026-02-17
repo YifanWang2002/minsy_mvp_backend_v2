@@ -26,6 +26,7 @@ def log_mcp_tool_result(
     ok: bool,
     error_code: str | None = None,
     error_message: str | None = None,
+    error_context: dict[str, Any] | None = None,
 ) -> None:
     """Emit a compact, consistent log line for each MCP tool response."""
     prefix = f"mcp.{category} tool={tool} ok={ok}"
@@ -35,12 +36,35 @@ def log_mcp_tool_result(
 
     resolved_code = error_code or "UNKNOWN_ERROR"
     resolved_message = (error_message or "").strip()
+    context_text = ""
+    if isinstance(error_context, dict) and error_context:
+        try:
+            context_text = json.dumps(
+                error_context,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                default=str,
+            )
+        except TypeError:
+            context_text = str(error_context)
     if resolved_message:
+        if context_text:
+            logger.warning(
+                "%s error_code=%s error_message=%s error_context=%s",
+                prefix,
+                resolved_code,
+                resolved_message,
+                context_text,
+            )
+            return
         logger.warning(
             "%s error_code=%s error_message=%s",
             prefix,
             resolved_code,
             resolved_message,
         )
+        return
+    if context_text:
+        logger.warning("%s error_code=%s error_context=%s", prefix, resolved_code, context_text)
         return
     logger.warning("%s error_code=%s", prefix, resolved_code)

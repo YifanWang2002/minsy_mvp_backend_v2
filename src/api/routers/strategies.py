@@ -401,7 +401,12 @@ async def _upsert_confirmed_strategy(
                         "code": item.code,
                         "message": item.message,
                         "path": item.path,
+                        "path_pointer": getattr(item, "pointer", ""),
+                        "stage": getattr(item, "stage", ""),
                         "value": item.value,
+                        "expected": getattr(item, "expected", None),
+                        "actual": getattr(item, "actual", None),
+                        "suggestion": getattr(item, "suggestion", ""),
                     }
                     for item in exc.errors
                 ],

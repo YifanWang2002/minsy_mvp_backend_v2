@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -809,6 +809,217 @@ async def test_strategy_phase_auto_wraps_validate_draft_id_from_nested_data(
         item for item in genui_payloads if item.get("type") == "strategy_ref"
     )
     assert strategy_ref.get("strategy_draft_id") == strategy_draft_id
+
+
+@pytest.mark.asyncio
+async def test_strategy_phase_backfills_draft_ref_when_validate_response_omits_draft_id(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    dsl_payload = load_strategy_payload(EXAMPLE_PATH)
+
+    class _McpMissingDraftIdStreamer:
+        async def stream_events(
+            self,
+            *,
+            model: str,
+            input_text: str,
+            instructions: str | None = None,
+            previous_response_id: str | None = None,
+            tools: list[dict[str, object]] | None = None,
+            tool_choice: dict[str, object] | None = None,
+            reasoning: dict[str, object] | None = None,
+        ) -> AsyncIterator[dict[str, object]]:
+            del (
+                model,
+                input_text,
+                instructions,
+                previous_response_id,
+                tools,
+                tool_choice,
+                reasoning,
+            )
+            validate_output = {
+                "category": "strategy",
+                "tool": "strategy_validate_dsl",
+                "ok": True,
+                "errors": [],
+                "dsl_version": "1.0.0",
+            }
+            yield {
+                "type": "response.output_item.done",
+                "sequence_number": 1,
+                "item": {
+                    "type": "mcp_call",
+                    "id": "call_strategy_validate_no_draft",
+                    "name": "strategy_validate_dsl",
+                    "status": "completed",
+                    "arguments": {
+                        "dsl_json": json.dumps(dsl_payload, ensure_ascii=False),
+                        "session_id": "",
+                    },
+                    "output": json.dumps(validate_output),
+                },
+            }
+            yield {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp_{uuid4().hex}",
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+
+    streamer = _McpMissingDraftIdStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="draft strategy dsl")
+    genui_payloads: list[dict[str, object]] = []
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") != "genui":
+            continue
+        candidate = envelope.get("payload")
+        if isinstance(candidate, dict):
+            genui_payloads.append(candidate)
+
+    strategy_ref = next(
+        item for item in genui_payloads if item.get("type") == "strategy_ref"
+    )
+    draft_id = strategy_ref.get("strategy_draft_id")
+    assert isinstance(draft_id, str)
+    UUID(draft_id)
+    assert strategy_ref.get("source") == "strategy_validate_dsl_backfill"
+
+
+@pytest.mark.asyncio
+async def test_strategy_phase_backfills_incomplete_strategy_ref_payload_from_model_text(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_rt_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=init_all_artifacts(),
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    dsl_payload = load_strategy_payload(EXAMPLE_PATH)
+
+    class _McpMissingDraftIdWithIncompleteRefStreamer:
+        async def stream_events(
+            self,
+            *,
+            model: str,
+            input_text: str,
+            instructions: str | None = None,
+            previous_response_id: str | None = None,
+            tools: list[dict[str, object]] | None = None,
+            tool_choice: dict[str, object] | None = None,
+            reasoning: dict[str, object] | None = None,
+        ) -> AsyncIterator[dict[str, object]]:
+            del (
+                model,
+                input_text,
+                instructions,
+                previous_response_id,
+                tools,
+                tool_choice,
+                reasoning,
+            )
+            yield {
+                "type": "response.output_text.delta",
+                "sequence_number": 1,
+                "delta": (
+                    "Draft ready.\n\n"
+                    '<AGENT_UI_JSON>{"type":"strategy_ref","display_mode":"draft",'
+                    '"source":"strategy_validate_dsl"}</AGENT_UI_JSON>'
+                ),
+            }
+            validate_output = {
+                "category": "strategy",
+                "tool": "strategy_validate_dsl",
+                "ok": True,
+                "errors": [],
+                "dsl_version": "1.0.0",
+            }
+            yield {
+                "type": "response.output_item.done",
+                "sequence_number": 2,
+                "item": {
+                    "type": "mcp_call",
+                    "id": "call_strategy_validate_no_draft_incomplete_ref",
+                    "name": "strategy_validate_dsl",
+                    "status": "completed",
+                    "arguments": {
+                        "dsl_json": json.dumps(dsl_payload, ensure_ascii=False),
+                        "session_id": "",
+                    },
+                    "output": json.dumps(validate_output),
+                },
+            }
+            yield {
+                "type": "response.completed",
+                "response": {
+                    "id": f"resp_{uuid4().hex}",
+                    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+                },
+            }
+
+    streamer = _McpMissingDraftIdWithIncompleteRefStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+
+    payload = ChatSendRequest(session_id=session.id, message="draft strategy dsl")
+    genui_payloads: list[dict[str, object]] = []
+    async for chunk in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
+        envelope = _parse_sse_payload(chunk)
+        if not isinstance(envelope, dict):
+            continue
+        if envelope.get("type") != "genui":
+            continue
+        candidate = envelope.get("payload")
+        if isinstance(candidate, dict):
+            genui_payloads.append(candidate)
+
+    strategy_ref = next(
+        item for item in genui_payloads if item.get("type") == "strategy_ref"
+    )
+    draft_id = strategy_ref.get("strategy_draft_id")
+    assert isinstance(draft_id, str)
+    UUID(draft_id)
+    assert strategy_ref.get("source") == "strategy_validate_dsl_backfill"
 
 
 @pytest.mark.asyncio

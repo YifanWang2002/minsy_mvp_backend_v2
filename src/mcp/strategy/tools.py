@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+import os
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -29,13 +31,14 @@ from src.engine.strategy import (
     upsert_strategy_dsl,
     validate_strategy_payload,
 )
+from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
 from src.mcp.context_auth import (
     McpContextClaims,
     decode_mcp_context_token,
     extract_mcp_context_token,
 )
-from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
 from src.models import database as db_module
+from src.models.redis import get_redis_client, init_redis
 
 TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
@@ -63,6 +66,14 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     IndicatorCategory.VOLUME.value: "Volume and money-flow indicators.",
     IndicatorCategory.UTILS.value: "Utility/statistical indicators.",
 }
+_VALIDATION_RETRY_COUNTER_KEY_PREFIX = "strategy:validation_retry:"
+_VALIDATION_RETRY_COUNTER_TTL_SECONDS = 60 * 10
+_MAX_VALIDATION_FAILURES_PER_REQUEST = 2
+_ALLOW_IN_MEMORY_VALIDATION_RETRY_FALLBACK = (
+    os.getenv("ALLOW_IN_MEMORY_VALIDATION_RETRY_FALLBACK", "").strip().lower()
+    in {"1", "true", "yes"}
+)
+_IN_MEMORY_VALIDATION_RETRY_COUNTS: dict[str, tuple[int, datetime, str]] = {}
 
 
 def _payload(
@@ -72,6 +83,7 @@ def _payload(
     data: dict[str, Any] | None = None,
     error_code: str | None = None,
     error_message: str | None = None,
+    error_context: dict[str, Any] | None = None,
 ) -> str:
     body: dict[str, Any] = {
         "category": "strategy",
@@ -96,6 +108,7 @@ def _payload(
         ok=ok,
         error_code=resolved_error_code,
         error_message=resolved_error_message,
+        error_context=error_context,
     )
     return to_json(body)
 
@@ -132,16 +145,229 @@ def _parse_uuid(value: str, field_name: str) -> UUID:
         raise ValueError(f"Invalid {field_name}: {value}") from exc
 
 
+def _truncate_text(value: str, *, limit: int = 220) -> str:
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."
+
+
+def _preview_value(value: Any, *, limit: int = 220) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _truncate_text(value, limit=limit)
+    try:
+        compact = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+    except TypeError:
+        compact = str(value)
+    compact = compact.strip()
+    if not compact:
+        return None
+    return _truncate_text(compact, limit=limit)
+
+
+def _sanitize_json_like_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return value
+    return str(value)
+
+
 def _validation_errors_to_dict(errors: tuple[Any, ...]) -> list[dict[str, Any]]:
-    return [
+    output: list[dict[str, Any]] = []
+    for item in errors:
+        path = str(getattr(item, "path", "") or "")
+        pointer = str(getattr(item, "pointer", "") or "")
+        value = getattr(item, "value", None)
+        expected = _sanitize_json_like_value(getattr(item, "expected", None))
+        actual = _sanitize_json_like_value(getattr(item, "actual", None))
+        suggestion = str(getattr(item, "suggestion", "") or "").strip()
+        entry: dict[str, Any] = {
+            "code": str(getattr(item, "code", "") or ""),
+            "message": str(getattr(item, "message", "") or ""),
+            "path": path,
+            "path_pointer": pointer,
+            "stage": str(getattr(item, "stage", "") or ""),
+            "value": value,
+            "value_preview": _preview_value(value),
+            "expected": expected,
+            "actual": actual,
+            "suggestion": suggestion,
+        }
+        output.append(entry)
+    return output
+
+
+def _build_validation_signature(errors: list[dict[str, Any]]) -> str:
+    if not errors:
+        return "none"
+    compact = [
         {
-            "code": item.code,
-            "message": item.message,
-            "path": item.path,
-            "value": item.value,
+            "code": item.get("code", ""),
+            "path": item.get("path", ""),
+            "msg": _truncate_text(str(item.get("message", "")), limit=80),
         }
         for item in errors
     ]
+    serialized = json.dumps(compact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+
+
+def _top_validation_codes(errors: list[dict[str, Any]], *, limit: int = 5) -> list[dict[str, Any]]:
+    counter = Counter(
+        code
+        for code in (str(item.get("code", "")).strip() for item in errors)
+        if code
+    )
+    top = counter.most_common(max(limit, 1))
+    return [{"code": code, "count": count} for code, count in top]
+
+
+def _build_validation_summary(
+    *,
+    errors: list[dict[str, Any]],
+    request_id: str | None,
+    retry_count: int | None,
+    retry_limit_reached: bool,
+    last_signature: str | None,
+) -> dict[str, Any]:
+    primary_error = errors[0] if errors else None
+    summary: dict[str, Any] = {
+        "error_count": len(errors),
+        "top_codes": _top_validation_codes(errors),
+        "primary_error": primary_error,
+        "error_signature": _build_validation_signature(errors),
+        "retry_limit": _MAX_VALIDATION_FAILURES_PER_REQUEST,
+        "retry_limit_reached": retry_limit_reached,
+    }
+    if request_id:
+        summary["request_id"] = request_id
+    if retry_count is not None:
+        summary["retry_count"] = retry_count
+    if last_signature:
+        summary["previous_error_signature"] = last_signature
+        summary["same_error_repeated"] = last_signature == summary["error_signature"]
+    return summary
+
+
+def _validation_log_context(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "error_count": summary.get("error_count"),
+        "top_codes": summary.get("top_codes"),
+        "error_signature": summary.get("error_signature"),
+        "retry_count": summary.get("retry_count"),
+        "retry_limit": summary.get("retry_limit"),
+        "retry_limit_reached": summary.get("retry_limit_reached"),
+        "same_error_repeated": summary.get("same_error_repeated"),
+        "request_id": summary.get("request_id"),
+    }
+
+
+def _use_in_memory_validation_retry_fallback() -> bool:
+    if _ALLOW_IN_MEMORY_VALIDATION_RETRY_FALLBACK:
+        return True
+    return "PYTEST_CURRENT_TEST" in os.environ
+
+
+async def _get_ready_redis_client():
+    try:
+        return get_redis_client()
+    except RuntimeError:
+        await init_redis()
+        return get_redis_client()
+
+
+def _validation_retry_counter_key(request_id: str) -> str:
+    return f"{_VALIDATION_RETRY_COUNTER_KEY_PREFIX}{request_id}"
+
+
+async def _track_validation_retry_state(
+    *,
+    request_id: str | None,
+    signature: str,
+) -> tuple[int | None, bool, str | None]:
+    if not request_id:
+        return None, False, None
+
+    try:
+        redis = await _get_ready_redis_client()
+        key = _validation_retry_counter_key(request_id)
+        previous_signature_raw = await redis.hget(key, "last_signature")
+        previous_signature = (
+            previous_signature_raw.strip()
+            if isinstance(previous_signature_raw, str) and previous_signature_raw.strip()
+            else None
+        )
+        count_raw = await redis.hincrby(key, "count", 1)
+        await redis.hset(
+            key,
+            mapping={
+                "last_signature": signature,
+                "updated_at": utc_now_iso(),
+            },
+        )
+        await redis.expire(key, _VALIDATION_RETRY_COUNTER_TTL_SECONDS)
+        count = int(count_raw)
+        return count, count >= _MAX_VALIDATION_FAILURES_PER_REQUEST, previous_signature
+    except Exception:  # noqa: BLE001
+        if not _use_in_memory_validation_retry_fallback():
+            return None, False, None
+
+    now = datetime.now(UTC)
+    key = request_id
+    count = 1
+    previous_signature: str | None = None
+    cached = _IN_MEMORY_VALIDATION_RETRY_COUNTS.get(key)
+    if cached is not None:
+        previous_count, expires_at, last_signature = cached
+        if expires_at > now:
+            count = previous_count + 1
+            previous_signature = last_signature
+    expires_at = now + timedelta(seconds=_VALIDATION_RETRY_COUNTER_TTL_SECONDS)
+    _IN_MEMORY_VALIDATION_RETRY_COUNTS[key] = (count, expires_at, signature)
+    return count, count >= _MAX_VALIDATION_FAILURES_PER_REQUEST, previous_signature
+
+
+async def _build_validation_failure_envelope(
+    *,
+    errors: tuple[Any, ...],
+    dsl_version: str = "",
+    claims: McpContextClaims | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    serialized_errors = _validation_errors_to_dict(errors)
+    signature = _build_validation_signature(serialized_errors)
+    request_id = claims.request_id if claims is not None else None
+    retry_count, retry_limit_reached, previous_signature = await _track_validation_retry_state(
+        request_id=request_id,
+        signature=signature,
+    )
+    summary = _build_validation_summary(
+        errors=serialized_errors,
+        request_id=request_id,
+        retry_count=retry_count,
+        retry_limit_reached=retry_limit_reached,
+        last_signature=previous_signature,
+    )
+    data: dict[str, Any] = {
+        "errors": serialized_errors,
+        "validation": summary,
+    }
+    if dsl_version.strip():
+        data["dsl_version"] = dsl_version.strip()
+    error_message = "Strategy DSL validation failed."
+    if retry_limit_reached:
+        retry_count_text = retry_count if retry_count is not None else "many"
+        error_message = (
+            "Strategy DSL validation failed. "
+            f"Retry limit reached in this request ({retry_count_text} failures)."
+        )
+    return data, summary, error_message
 
 
 def _payload_hash(payload: dict[str, Any]) -> str:
@@ -345,8 +571,11 @@ def _resolve_session_uuid(
     required: bool,
 ) -> UUID | None:
     explicit_session_uuid: UUID | None = None
-    if session_id.strip():
-        explicit_session_uuid = _parse_uuid(session_id, "session_id")
+    raw_session_id = session_id.strip()
+    if _is_placeholder_session_id(raw_session_id):
+        raw_session_id = ""
+    if raw_session_id:
+        explicit_session_uuid = _parse_uuid(raw_session_id, "session_id")
 
     context_session_uuid = claims.session_id if claims is not None else None
     if (
@@ -360,6 +589,33 @@ def _resolve_session_uuid(
     if required and resolved is None:
         raise ValueError("session_id is required (argument or MCP context).")
     return resolved
+
+
+def _is_placeholder_session_id(value: str) -> bool:
+    normalized = value.strip().lower()
+    if not normalized:
+        return True
+    if normalized in {
+        "-",
+        "--",
+        "—",
+        "–",
+        "_",
+        "__",
+        "none",
+        "null",
+        "nil",
+        "n/a",
+        "na",
+        "undefined",
+        "(none)",
+        "<none>",
+    }:
+        return True
+    # Common UI placeholders that may be rendered with dash-like characters.
+    if all(ch in {"-", "—", "–", "_", " "} for ch in normalized):
+        return True
+    return False
 
 
 async def _assert_session_matches_context_user(
@@ -659,15 +915,18 @@ async def strategy_validate_dsl(
 
     validation = validate_strategy_payload(payload)
     if not validation.is_valid:
+        data, summary, error_message = await _build_validation_failure_envelope(
+            errors=validation.errors,
+            dsl_version=str(payload.get("dsl_version", "")),
+            claims=claims,
+        )
         return _payload(
             tool="strategy_validate_dsl",
             ok=False,
-            data={
-                "errors": _validation_errors_to_dict(validation.errors),
-                "dsl_version": payload.get("dsl_version", ""),
-            },
+            data=data,
             error_code="STRATEGY_VALIDATION_FAILED",
-            error_message="Strategy DSL validation failed.",
+            error_message=error_message,
+            error_context=_validation_log_context(summary),
         )
 
     response_data: dict[str, Any] = {
@@ -752,12 +1011,18 @@ async def strategy_upsert_dsl(
                 auto_commit=True,
             )
     except StrategyDslValidationException as exc:
+        data, summary, error_message = await _build_validation_failure_envelope(
+            errors=tuple(exc.errors),
+            dsl_version=str(payload.get("dsl_version", "")),
+            claims=claims,
+        )
         return _payload(
             tool="strategy_upsert_dsl",
             ok=False,
-            data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+            data=data,
             error_code="STRATEGY_VALIDATION_FAILED",
-            error_message="Strategy DSL validation failed.",
+            error_message=error_message,
+            error_context=_validation_log_context(summary),
         )
     except StrategyStorageNotFoundError as exc:
         return _payload(
@@ -1006,12 +1271,17 @@ async def strategy_patch_dsl(
             error_message=str(exc),
         )
     except StrategyDslValidationException as exc:
+        data, summary, error_message = await _build_validation_failure_envelope(
+            errors=tuple(exc.errors),
+            claims=claims,
+        )
         return _payload(
             tool="strategy_patch_dsl",
             ok=False,
-            data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+            data=data,
             error_code="STRATEGY_VALIDATION_FAILED",
-            error_message="Strategy DSL validation failed.",
+            error_message=error_message,
+            error_context=_validation_log_context(summary),
         )
     except StrategyStorageNotFoundError as exc:
         return _payload(
@@ -1321,12 +1591,17 @@ async def strategy_rollback_dsl(
             error_message=str(exc),
         )
     except StrategyDslValidationException as exc:
+        data, summary, error_message = await _build_validation_failure_envelope(
+            errors=tuple(exc.errors),
+            claims=claims,
+        )
         return _payload(
             tool="strategy_rollback_dsl",
             ok=False,
-            data={"errors": _validation_errors_to_dict(tuple(exc.errors))},
+            data=data,
             error_code="STRATEGY_VALIDATION_FAILED",
-            error_message="Strategy DSL validation failed.",
+            error_message=error_message,
+            error_context=_validation_log_context(summary),
         )
     except StrategyStorageNotFoundError as exc:
         return _payload(

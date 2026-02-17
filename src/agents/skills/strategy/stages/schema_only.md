@@ -3,7 +3,7 @@ Stage objective:
 - Produce first-draft strategy DSL, validate it, and hand off `strategy_draft_id` for frontend review/confirmation.
 - Output should include:
   1) concise rationale text
-  2) `strategy_validate_dsl(dsl_json)`
+  2) `strategy_validate_dsl(dsl_json, session_id=tool_compat_session_id)` when `tool_compat_session_id` is available
   3) one `strategy_ref` GenUI payload with `strategy_draft_id`
 - Do not call persistence tools that require confirmed strategy ownership at this stage.
 - Do not print the full DSL JSON in plain text unless the user explicitly asks for raw JSON.

@@ -21,6 +21,7 @@ def test_create_and_decode_mcp_context_token_roundtrip() -> None:
         ttl_seconds=120,
         trace_id="trace_abc",
         phase="strategy",
+        request_id="turn_123",
     )
     claims = decode_mcp_context_token(token)
 
@@ -28,6 +29,7 @@ def test_create_and_decode_mcp_context_token_roundtrip() -> None:
     assert claims.session_id == session_id
     assert claims.trace_id == "trace_abc"
     assert claims.phase == "strategy"
+    assert claims.request_id == "turn_123"
     assert claims.expires_at > claims.issued_at
 
 

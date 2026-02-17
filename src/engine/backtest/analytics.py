@@ -212,9 +212,13 @@ def build_compact_performance_payload(result: Any) -> dict[str, Any]:
 def compute_entry_hour_pnl_heatmap(result: Any) -> dict[str, Any]:
     prepared = _prepare_backtest_data(result)
     trades = prepared.trades
+    entry_times = pd.to_datetime(trades.get("entry_time"), utc=True, errors="coerce")
+    if not isinstance(entry_times, pd.Series):
+        entry_times = pd.Series(index=trades.index, dtype="datetime64[ns, UTC]")
     rows: list[dict[str, Any]] = []
     for hour in range(24):
-        subset = trades[trades["entry_time"].dt.hour == hour]
+        mask = (entry_times.dt.hour == hour).fillna(False)
+        subset = trades[mask]
         rows.append(_aggregate_trade_bucket(str(hour), subset, "entry_hour"))
     return {
         "heatmap": rows,
@@ -225,9 +229,13 @@ def compute_entry_hour_pnl_heatmap(result: Any) -> dict[str, Any]:
 def compute_entry_weekday_pnl(result: Any) -> dict[str, Any]:
     prepared = _prepare_backtest_data(result)
     trades = prepared.trades
+    entry_times = pd.to_datetime(trades.get("entry_time"), utc=True, errors="coerce")
+    if not isinstance(entry_times, pd.Series):
+        entry_times = pd.Series(index=trades.index, dtype="datetime64[ns, UTC]")
     rows: list[dict[str, Any]] = []
     for weekday, name in enumerate(_WEEKDAY_NAMES):
-        subset = trades[trades["entry_time"].dt.weekday == weekday]
+        mask = (entry_times.dt.weekday == weekday).fillna(False)
+        subset = trades[mask]
         rows.append(_aggregate_trade_bucket(name, subset, "entry_weekday"))
     return {
         "weekday_stats": rows,
@@ -505,19 +513,19 @@ def _prepare_backtest_data(result: Any) -> _PreparedBacktestData:
 
 def _empty_trades_frame() -> pd.DataFrame:
     return pd.DataFrame(
-        columns=[
-            "side",
-            "entry_time",
-            "exit_time",
-            "entry_price",
-            "exit_price",
-            "quantity",
-            "bars_held",
-            "exit_reason",
-            "pnl",
-            "pnl_pct",
-            "commission",
-        ]
+        {
+            "side": pd.Series(dtype="object"),
+            "entry_time": pd.Series(dtype="datetime64[ns, UTC]"),
+            "exit_time": pd.Series(dtype="datetime64[ns, UTC]"),
+            "entry_price": pd.Series(dtype="float64"),
+            "exit_price": pd.Series(dtype="float64"),
+            "quantity": pd.Series(dtype="float64"),
+            "bars_held": pd.Series(dtype="int64"),
+            "exit_reason": pd.Series(dtype="object"),
+            "pnl": pd.Series(dtype="float64"),
+            "pnl_pct": pd.Series(dtype="float64"),
+            "commission": pd.Series(dtype="float64"),
+        }
     )
 
 

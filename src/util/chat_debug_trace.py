@@ -14,7 +14,10 @@ from src.util.logger import logger
 
 CHAT_TRACE_HEADER_ENABLED = "x-minsy-debug-trace"
 CHAT_TRACE_HEADER_ID = "x-minsy-debug-trace-id"
+CHAT_TRACE_HEADER_MODE = "x-minsy-debug-trace-mode"
 CHAT_TRACE_RESPONSE_HEADER_ID = "X-Minsy-Debug-Trace-Id"
+CHAT_TRACE_MODE_VERBOSE = "verbose"
+CHAT_TRACE_MODE_COMPACT = "compact"
 
 _TRUE_VALUES = {"1", "true", "on", "yes", "y"}
 _FALSE_VALUES = {"0", "false", "off", "no", "n"}
@@ -50,6 +53,17 @@ def _sanitize_trace_id(value: str | None) -> str | None:
     return normalized
 
 
+def _parse_trace_mode(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized == CHAT_TRACE_MODE_VERBOSE:
+        return CHAT_TRACE_MODE_VERBOSE
+    if normalized == CHAT_TRACE_MODE_COMPACT:
+        return CHAT_TRACE_MODE_COMPACT
+    return None
+
+
 def _to_jsonable(value: Any) -> Any:
     if value is None or isinstance(value, str | int | float | bool):
         return value
@@ -80,6 +94,7 @@ def _to_jsonable(value: Any) -> Any:
 class ChatDebugTrace:
     enabled: bool
     trace_id: str | None = None
+    mode: str = CHAT_TRACE_MODE_VERBOSE
 
     def record(self, *, stage: str, payload: dict[str, Any] | None = None) -> None:
         if not self.enabled or not self.trace_id:
@@ -99,16 +114,22 @@ class ChatDebugTrace:
 def build_chat_debug_trace(
     *,
     default_enabled: bool,
+    default_mode: str,
     header_value: str | None,
     requested_trace_id: str | None,
+    requested_mode: str | None,
 ) -> ChatDebugTrace:
+    resolved_mode = _parse_trace_mode(requested_mode) or _parse_trace_mode(default_mode)
+    if resolved_mode is None:
+        resolved_mode = CHAT_TRACE_MODE_VERBOSE
+
     override = _parse_bool_override(header_value)
     enabled = default_enabled if override is None else override
     if not enabled:
-        return ChatDebugTrace(enabled=False)
+        return ChatDebugTrace(enabled=False, mode=resolved_mode)
 
     trace_id = _sanitize_trace_id(requested_trace_id) or f"trace_{uuid4().hex}"
-    return ChatDebugTrace(enabled=True, trace_id=trace_id)
+    return ChatDebugTrace(enabled=True, trace_id=trace_id, mode=resolved_mode)
 
 
 def set_chat_debug_trace(trace: ChatDebugTrace | None) -> contextvars.Token[ChatDebugTrace | None]:

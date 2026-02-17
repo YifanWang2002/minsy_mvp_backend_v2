@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Mapping
 from uuid import UUID
 
 import jwt
@@ -26,6 +26,7 @@ class McpContextClaims:
     expires_at: datetime
     trace_id: str | None = None
     phase: str | None = None
+    request_id: str | None = None
 
 
 def _utc_now() -> datetime:
@@ -54,6 +55,7 @@ def create_mcp_context_token(
     ttl_seconds: int | None = None,
     trace_id: str | None = None,
     phase: str | None = None,
+    request_id: str | None = None,
 ) -> str:
     """Create a short-lived signed token for MCP server-side context resolution."""
 
@@ -73,6 +75,8 @@ def create_mcp_context_token(
         payload["trace_id"] = trace_id.strip()
     if isinstance(phase, str) and phase.strip():
         payload["phase"] = phase.strip()
+    if isinstance(request_id, str) and request_id.strip():
+        payload["rid"] = request_id.strip()
 
     return jwt.encode(
         payload,
@@ -126,6 +130,11 @@ def decode_mcp_context_token(token: str) -> McpContextClaims:
         if isinstance(payload.get("phase"), str) and payload.get("phase").strip()
         else None
     )
+    request_id = (
+        payload.get("rid").strip()
+        if isinstance(payload.get("rid"), str) and payload.get("rid").strip()
+        else None
+    )
 
     return McpContextClaims(
         user_id=user_id,
@@ -134,6 +143,7 @@ def decode_mcp_context_token(token: str) -> McpContextClaims:
         expires_at=expires_at,
         trace_id=trace_id,
         phase=phase,
+        request_id=request_id,
     )
 
 
@@ -148,4 +158,3 @@ def extract_mcp_context_token(headers: Mapping[str, str] | None) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
-

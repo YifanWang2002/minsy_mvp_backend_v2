@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from src.engine.feature.indicators import IndicatorRegistry
-from src.engine.strategy.errors import StrategyDslError
+from src.engine.strategy.errors import StrategyDslError, normalize_strategy_error
 
 _FACTOR_ID_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 
@@ -525,6 +525,47 @@ def _validate_stop_specs(
                 )
 
 
+def _semantic_suggestion(error: StrategyDslError) -> str:
+    code = str(error.code).strip().upper()
+    if code == "UNSUPPORTED_DSL_VERSION":
+        return "Use DSL major version 1.x."
+    if code == "FACTOR_ID_FORMAT_ERROR":
+        return "Use lowercase snake_case factor id, e.g. ema_20."
+    if code == "FACTOR_ID_MISMATCH":
+        return "Rename factor id to match type/params convention."
+    if code == "UNSUPPORTED_FACTOR_TYPE":
+        return "Use factor types from indicator catalog."
+    if code == "UNSUPPORTED_FACTOR_PARAM":
+        return "Remove unknown params or rename to supported ones."
+    if code == "INVALID_FACTOR_PARAM_VALUE":
+        return "Adjust factor parameter type/range to indicator contract."
+    if code in {"UNKNOWN_FACTOR_REF", "INVALID_OUTPUT_NAME"}:
+        return "Reference an existing factor/output and use dot notation for multi-output factors."
+    if code == "TEMPORAL_NOT_SUPPORTED":
+        return "Avoid temporal blocks in v1 runtime."
+    if code == "FUTURE_LOOK":
+        return "Use offset <= 0 to avoid future data leakage."
+    if code == "MISSING_ATR_REF":
+        return "Set atr_ref to a factor whose type is atr."
+    if code == "BRACKET_RR_CONFLICT":
+        return "For bracket_rr, set exactly one of stop or take."
+    if code == "NO_TRADE_SIDE":
+        return "Define trade.long or trade.short."
+    return "Adjust DSL fields to satisfy semantic validation rules."
+
+
+def _finalize_semantic_errors(errors: list[StrategyDslError]) -> list[StrategyDslError]:
+    return [
+        normalize_strategy_error(
+            item,
+            stage="semantic",
+            actual=item.value,
+            suggestion=_semantic_suggestion(item),
+        )
+        for item in errors
+    ]
+
+
 def validate_strategy_semantics(
     payload: dict[str, Any],
     *,
@@ -587,7 +628,7 @@ def validate_strategy_semantics(
 
     trade = payload.get("trade")
     if not isinstance(trade, dict):
-        return errors
+        return _finalize_semantic_errors(errors)
 
     if "long" not in trade and "short" not in trade:
         errors.append(
@@ -637,4 +678,4 @@ def validate_strategy_semantics(
                     allow_temporal=allow_temporal,
                 )
 
-    return errors
+    return _finalize_semantic_errors(errors)

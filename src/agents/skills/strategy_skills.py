@@ -120,6 +120,7 @@ def build_strategy_dynamic_state(
     missing_fields: list[str] | None = None,
     collected_fields: dict[str, str] | None = None,
     pre_strategy_fields: dict[str, str] | None = None,
+    session_id: str | None = None,
 ) -> str:
     """Build `[SESSION STATE]` block for strategy phase."""
 
@@ -134,11 +135,35 @@ def build_strategy_dynamic_state(
 
     collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
     pre_scope = ", ".join(f"{key}={value}" for key, value in pre.items() if value) or "none"
+    strategy_id = str(fields.get("strategy_id", "")).strip() or "none"
+    strategy_market = str(fields.get("strategy_market", "")).strip() or "none"
+    strategy_primary_symbol = str(fields.get("strategy_primary_symbol", "")).strip() or "none"
+    raw_tickers_csv = str(fields.get("strategy_tickers_csv", "")).strip()
+    if raw_tickers_csv:
+        strategy_tickers_csv = raw_tickers_csv
+    else:
+        raw_tickers = fields.get("strategy_tickers")
+        if isinstance(raw_tickers, list):
+            strategy_tickers_csv = ",".join(
+                str(item).strip() for item in raw_tickers if str(item).strip()
+            ) or "none"
+        else:
+            strategy_tickers_csv = "none"
+    strategy_timeframe = str(fields.get("strategy_timeframe", "")).strip() or "none"
+    tool_compat_session_id = (
+        session_id.strip() if isinstance(session_id, str) and session_id.strip() else "none"
+    )
 
     return (
         "[SESSION STATE]\n"
         f"- pre_strategy_scope: {pre_scope}\n"
         f"- already_collected: {collected}\n"
+        f"- confirmed_strategy_id: {strategy_id}\n"
+        f"- strategy_market: {strategy_market}\n"
+        f"- strategy_primary_symbol: {strategy_primary_symbol}\n"
+        f"- strategy_tickers_csv: {strategy_tickers_csv}\n"
+        f"- strategy_timeframe: {strategy_timeframe}\n"
+        f"- tool_compat_session_id: {tool_compat_session_id}\n"
         f"- still_missing: {missing_str}\n"
         f"- has_missing_fields: {str(has_missing).lower()}\n"
         f"- next_missing_field: {next_missing}\n"

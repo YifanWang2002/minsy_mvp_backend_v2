@@ -59,6 +59,7 @@ class StrategyHandler:
             missing_fields=missing,
             collected_fields=profile,
             pre_strategy_fields=pre_profile,
+            session_id=str(ctx.session_id),
         )
         return PromptPieces(
             instructions=instructions,
