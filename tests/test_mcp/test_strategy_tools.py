@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -9,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload
+from src.mcp.context_auth import McpContextClaims
 from src.mcp.strategy import tools as strategy_tools
 from src.models.session import Session as AgentSession
 from src.models.user import User
@@ -50,6 +52,22 @@ async def _create_session(db_session: AsyncSession, email: str) -> AgentSession:
     db_session.add(session)
     await db_session.flush()
     return session
+
+
+def _claims_for(
+    *,
+    user_id: Any,
+    session_id: Any | None,
+) -> McpContextClaims:
+    now = datetime.now(UTC)
+    return McpContextClaims(
+        user_id=user_id,
+        session_id=session_id,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+        trace_id="test-trace",
+        phase="strategy",
+    )
 
 
 @pytest.mark.asyncio
@@ -497,3 +515,83 @@ async def test_strategy_version_history_tools_cover_list_diff_get_and_rollback(
     missing_revision_payload = _extract_payload(missing_revision_call)
     assert missing_revision_payload["ok"] is False
     assert missing_revision_payload["error"]["code"] == "STRATEGY_REVISION_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_strategy_get_tool_accepts_context_without_session_argument(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_ctx_get@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(
+        strategy_tools,
+        "_resolve_context_claims",
+        lambda _ctx: _claims_for(user_id=session.user_id, session_id=session.id),
+    )
+
+    mcp = FastMCP("test-strategy-tools-context-get")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    upsert_call = await mcp.call_tool(
+        "strategy_upsert_dsl",
+        {
+            "session_id": str(session.id),
+            "dsl_json": json.dumps(payload),
+        },
+    )
+    upsert_payload = _extract_payload(upsert_call)
+    assert upsert_payload["ok"] is True
+
+    get_call = await mcp.call_tool(
+        "strategy_get_dsl",
+        {"strategy_id": upsert_payload["strategy_id"]},
+    )
+    get_payload = _extract_payload(get_call)
+    assert get_payload["ok"] is True
+    assert get_payload["strategy_id"] == upsert_payload["strategy_id"]
+
+
+@pytest.mark.asyncio
+async def test_strategy_tools_reject_session_mismatch_between_argument_and_context(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(
+        db_session,
+        email="strategy_mcp_ctx_mismatch@example.com",
+    )
+    other_session = await _create_session(
+        db_session,
+        email="strategy_mcp_ctx_mismatch_other@example.com",
+    )
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(
+        strategy_tools,
+        "_resolve_context_claims",
+        lambda _ctx: _claims_for(user_id=session.user_id, session_id=session.id),
+    )
+
+    mcp = FastMCP("test-strategy-tools-context-mismatch")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    call_result = await mcp.call_tool(
+        "strategy_upsert_dsl",
+        {
+            "session_id": str(other_session.id),
+            "dsl_json": json.dumps(payload),
+        },
+    )
+    result_payload = _extract_payload(call_result)
+    assert result_payload["ok"] is False
+    assert result_payload["error"]["code"] == "INVALID_INPUT"

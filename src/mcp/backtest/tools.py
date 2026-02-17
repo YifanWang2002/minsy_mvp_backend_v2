@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from src.engine.backtest import (
     BacktestJobNotFoundError,
@@ -24,6 +24,11 @@ from src.engine.backtest.analytics import (
     compute_monthly_return_table,
     compute_rolling_metrics,
     compute_underwater_curve,
+)
+from src.mcp.context_auth import (
+    McpContextClaims,
+    decode_mcp_context_token,
+    extract_mcp_context_token,
 )
 from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
 from src.models import database as db_module
@@ -94,6 +99,20 @@ async def _new_db_session():
         await db_module.init_postgres(ensure_schema=False)
     assert db_module.AsyncSessionLocal is not None
     return db_module.AsyncSessionLocal()
+
+
+def _resolve_context_claims(ctx: Context | None) -> McpContextClaims | None:
+    if ctx is None:
+        return None
+    try:
+        request = ctx.request_context.request
+    except Exception:  # noqa: BLE001
+        return None
+    headers = getattr(request, "headers", None)
+    token = extract_mcp_context_token(headers)
+    if token is None:
+        return None
+    return decode_mcp_context_token(token)
 
 
 def _view_payload(view: Any) -> dict[str, Any]:
@@ -175,6 +194,7 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         commission_rate: float = 0.0,
         slippage_bps: float = 0.0,
         run_now: bool = False,
+        ctx: Context | None = None,
     ) -> str:
         try:
             strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
@@ -183,6 +203,15 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                 tool="backtest_create_job",
                 ok=False,
                 error_code="INVALID_UUID",
+                error_message=str(exc),
+            )
+        try:
+            claims = _resolve_context_claims(ctx)
+        except ValueError as exc:
+            return _payload(
+                tool="backtest_create_job",
+                ok=False,
+                error_code="INVALID_INPUT",
                 error_message=str(exc),
             )
 
@@ -196,11 +225,16 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                     initial_capital=initial_capital,
                     commission_rate=commission_rate,
                     slippage_bps=slippage_bps,
+                    user_id=claims.user_id if claims is not None else None,
                     auto_commit=True,
                 )
                 # Keep accepting run_now for backward compatibility, but execution is always queued.
                 await schedule_backtest_job(receipt.job_id)
-                view = await get_backtest_job_view(db, job_id=receipt.job_id)
+                view = await get_backtest_job_view(
+                    db,
+                    job_id=receipt.job_id,
+                    user_id=claims.user_id if claims is not None else None,
+                )
         except BacktestStrategyNotFoundError as exc:
             return _payload(
                 tool="backtest_create_job",
@@ -223,7 +257,7 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def backtest_get_job(job_id: str) -> str:
+    async def backtest_get_job(job_id: str, ctx: Context | None = None) -> str:
         try:
             job_uuid = _parse_uuid(job_id, "job_id")
         except ValueError as exc:
@@ -233,10 +267,23 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                 error_code="INVALID_UUID",
                 error_message=str(exc),
             )
+        try:
+            claims = _resolve_context_claims(ctx)
+        except ValueError as exc:
+            return _payload(
+                tool="backtest_get_job",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
 
         try:
             async with await _new_db_session() as db:
-                view = await get_backtest_job_view(db, job_id=job_uuid)
+                view = await get_backtest_job_view(
+                    db,
+                    job_id=job_uuid,
+                    user_id=claims.user_id if claims is not None else None,
+                )
         except BacktestJobNotFoundError as exc:
             return _payload(
                 tool="backtest_get_job",
@@ -258,7 +305,12 @@ def register_backtest_tools(mcp: FastMCP) -> None:
             data=_view_payload(view),
         )
 
-    async def _load_completed_result(tool: str, job_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    async def _load_completed_result(
+        tool: str,
+        job_id: str,
+        *,
+        ctx: Context | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
         try:
             job_uuid = _parse_uuid(job_id, "job_id")
         except ValueError as exc:
@@ -268,10 +320,23 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                 error_code="INVALID_UUID",
                 error_message=str(exc),
             )
+        try:
+            claims = _resolve_context_claims(ctx)
+        except ValueError as exc:
+            return None, _payload(
+                tool=tool,
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
 
         try:
             async with await _new_db_session() as db:
-                view = await get_backtest_job_view(db, job_id=job_uuid)
+                view = await get_backtest_job_view(
+                    db,
+                    job_id=job_uuid,
+                    user_id=claims.user_id if claims is not None else None,
+                )
         except BacktestJobNotFoundError as exc:
             return None, _payload(
                 tool=tool,
@@ -294,10 +359,14 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         return result, None
 
     @mcp.tool()
-    async def backtest_entry_hour_pnl_heatmap(job_id: str) -> str:
+    async def backtest_entry_hour_pnl_heatmap(
+        job_id: str,
+        ctx: Context | None = None,
+    ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_entry_hour_pnl_heatmap",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload
@@ -308,10 +377,14 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def backtest_entry_weekday_pnl(job_id: str) -> str:
+    async def backtest_entry_weekday_pnl(
+        job_id: str,
+        ctx: Context | None = None,
+    ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_entry_weekday_pnl",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload
@@ -322,10 +395,14 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def backtest_monthly_return_table(job_id: str) -> str:
+    async def backtest_monthly_return_table(
+        job_id: str,
+        ctx: Context | None = None,
+    ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_monthly_return_table",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload
@@ -336,10 +413,14 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def backtest_holding_period_pnl_bins(job_id: str) -> str:
+    async def backtest_holding_period_pnl_bins(
+        job_id: str,
+        ctx: Context | None = None,
+    ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_holding_period_pnl_bins",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload
@@ -350,10 +431,14 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def backtest_long_short_breakdown(job_id: str) -> str:
+    async def backtest_long_short_breakdown(
+        job_id: str,
+        ctx: Context | None = None,
+    ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_long_short_breakdown",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload
@@ -364,10 +449,14 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def backtest_exit_reason_breakdown(job_id: str) -> str:
+    async def backtest_exit_reason_breakdown(
+        job_id: str,
+        ctx: Context | None = None,
+    ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_exit_reason_breakdown",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload
@@ -381,10 +470,12 @@ def register_backtest_tools(mcp: FastMCP) -> None:
     async def backtest_underwater_curve(
         job_id: str,
         max_points: int = _MAX_CURVE_POINTS,
+        ctx: Context | None = None,
     ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_underwater_curve",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload
@@ -400,10 +491,12 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         job_id: str,
         window_bars: int = 0,
         max_points: int = _MAX_CURVE_POINTS,
+        ctx: Context | None = None,
     ) -> str:
         result, error_payload = await _load_completed_result(
             "backtest_rolling_metrics",
             job_id,
+            ctx=ctx,
         )
         if error_payload is not None:
             return error_payload

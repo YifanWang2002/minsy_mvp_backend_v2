@@ -48,6 +48,8 @@ class Settings(BaseSettings):
         default="https://mcp.minsyai.com/mcp",
         alias="MCP_SERVER_URL_PROD",
     )
+    mcp_context_secret: str | None = Field(default=None, alias="MCP_CONTEXT_SECRET")
+    mcp_context_ttl_seconds: int = Field(default=300, alias="MCP_CONTEXT_TTL_SECONDS")
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
@@ -80,6 +82,27 @@ class Settings(BaseSettings):
     )
     celery_task_acks_late: bool = Field(default=True, alias="CELERY_TASK_ACKS_LATE")
     celery_task_always_eager: bool = Field(default=False, alias="CELERY_TASK_ALWAYS_EAGER")
+    celery_timezone: str = Field(default="UTC", alias="CELERY_TIMEZONE")
+
+    postgres_backup_enabled: bool = Field(default=True, alias="POSTGRES_BACKUP_ENABLED")
+    postgres_backup_dir: str = Field(default="backups/postgres", alias="POSTGRES_BACKUP_DIR")
+    postgres_backup_retention_count: int = Field(
+        default=14,
+        alias="POSTGRES_BACKUP_RETENTION_COUNT",
+    )
+    postgres_backup_hour_utc: int = Field(default=3, alias="POSTGRES_BACKUP_HOUR_UTC")
+    postgres_backup_minute_utc: int = Field(default=0, alias="POSTGRES_BACKUP_MINUTE_UTC")
+    postgres_pg_dump_bin: str = Field(default="pg_dump", alias="POSTGRES_PG_DUMP_BIN")
+
+    user_email_csv_export_enabled: bool = Field(
+        default=True,
+        alias="USER_EMAIL_CSV_EXPORT_ENABLED",
+    )
+    user_email_csv_path: str = Field(default="exports/user_emails.csv", alias="USER_EMAIL_CSV_PATH")
+    user_email_csv_export_interval_minutes: int = Field(
+        default=60,
+        alias="USER_EMAIL_CSV_EXPORT_INTERVAL_MINUTES",
+    )
 
     cors_origins: list[str] = Field(
         default_factory=lambda: [
@@ -129,6 +152,34 @@ class Settings(BaseSettings):
             return [item.strip() for item in normalized.split(",") if item.strip()]
         return value
 
+    @field_validator("postgres_backup_retention_count")
+    @classmethod
+    def _validate_backup_retention(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("POSTGRES_BACKUP_RETENTION_COUNT must be >= 1.")
+        return value
+
+    @field_validator("postgres_backup_hour_utc")
+    @classmethod
+    def _validate_backup_hour(cls, value: int) -> int:
+        if not 0 <= value <= 23:
+            raise ValueError("POSTGRES_BACKUP_HOUR_UTC must be in [0, 23].")
+        return value
+
+    @field_validator("postgres_backup_minute_utc")
+    @classmethod
+    def _validate_backup_minute(cls, value: int) -> int:
+        if not 0 <= value <= 59:
+            raise ValueError("POSTGRES_BACKUP_MINUTE_UTC must be in [0, 59].")
+        return value
+
+    @field_validator("user_email_csv_export_interval_minutes")
+    @classmethod
+    def _validate_email_export_interval(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("USER_EMAIL_CSV_EXPORT_INTERVAL_MINUTES must be >= 1.")
+        return value
+
     @property
     def database_url(self) -> str:
         user = quote_plus(self.postgres_user)
@@ -175,6 +226,13 @@ class Settings(BaseSettings):
     def backtest_mcp_server_url(self) -> str:
         """Backward-compatible alias for backtest MCP URL."""
         return self.mcp_server_url
+
+    @property
+    def effective_mcp_context_secret(self) -> str:
+        """Signing secret for MCP context token propagation."""
+        if isinstance(self.mcp_context_secret, str) and self.mcp_context_secret.strip():
+            return self.mcp_context_secret.strip()
+        return self.secret_key
 
 
 @lru_cache

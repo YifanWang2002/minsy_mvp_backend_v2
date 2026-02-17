@@ -345,6 +345,7 @@ async def _persist_next_strategy_version(
     columns = _derive_strategy_columns(next_payload)
     strategy.session_id = session_id
     strategy.version = current_version + 1
+    strategy.updated_at = datetime.now(UTC)
     for field, value in columns.items():
         setattr(strategy, field, value)
     await db.flush()

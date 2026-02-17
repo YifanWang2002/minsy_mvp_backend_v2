@@ -15,6 +15,7 @@ from src.api.schemas.events import MessageItem, SessionDetailResponse, SessionLi
 from src.dependencies import get_db
 from src.models.session import Session
 from src.models.user import User
+from src.services.session_title_service import read_session_title_from_metadata
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -34,16 +35,21 @@ async def list_sessions(
 
     stmt = select(Session).where(*filters).order_by(Session.updated_at.desc()).limit(limit)
     sessions = (await db.scalars(stmt)).all()
-    return [
-        SessionListItem(
-            session_id=session.id,
-            current_phase=session.current_phase,
-            status=session.status,
-            updated_at=session.updated_at,
-            archived_at=session.archived_at,
+    output: list[SessionListItem] = []
+    for session in sessions:
+        title_payload = read_session_title_from_metadata(dict(session.metadata_ or {}))
+        output.append(
+            SessionListItem(
+                session_id=session.id,
+                current_phase=session.current_phase,
+                status=session.status,
+                updated_at=session.updated_at,
+                archived_at=session.archived_at,
+                session_title=title_payload.title,
+                session_title_record=title_payload.record,
+            )
         )
-        for session in sessions
-    ]
+    return output
 
 
 @router.get("/{session_id}", response_model=SessionDetailResponse)
@@ -62,11 +68,14 @@ async def get_session(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
 
     ordered_messages = sorted(session.messages, key=lambda item: item.created_at)
+    title_payload = read_session_title_from_metadata(dict(session.metadata_ or {}))
     return SessionDetailResponse(
         session_id=session.id,
         current_phase=session.current_phase,
         status=session.status,
         archived_at=session.archived_at,
+        session_title=title_payload.title,
+        session_title_record=title_payload.record,
         artifacts=dict(session.artifacts or {}),
         metadata=dict(session.metadata_ or {}),
         last_activity_at=session.last_activity_at,

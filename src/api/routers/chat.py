@@ -14,6 +14,7 @@ from src.config import settings
 from src.dependencies import get_db, get_responses_event_streamer
 from src.models.user import User
 from src.services.openai_stream_service import ResponsesEventStreamer
+from src.services.session_title_service import read_session_title_from_metadata
 from src.util.chat_debug_trace import (
     CHAT_TRACE_HEADER_ENABLED,
     CHAT_TRACE_HEADER_ID,
@@ -46,11 +47,14 @@ async def new_thread(
     )
     await db.commit()
     await db.refresh(session)
+    title_payload = read_session_title_from_metadata(dict(session.metadata_ or {}))
     return ThreadResponse(
         session_id=session.id,
         phase=session.current_phase,
         status=session.status,
         kyc_status=_resolve_kyc_status(user),
+        session_title=title_payload.title,
+        session_title_record=title_payload.record,
     )
 
 

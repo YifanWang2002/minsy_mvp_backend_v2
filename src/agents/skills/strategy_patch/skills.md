@@ -21,15 +21,15 @@ Use this workflow when the user asks to revise an existing strategy and a `strat
 - Keep updates deterministic and version-safe.
 
 ## Tool Sequence
-1. `strategy_get_dsl(session_id, strategy_id)` to fetch latest `dsl_json` and `metadata.version`.
+1. `strategy_get_dsl(strategy_id)` to fetch latest `dsl_json` and `metadata.version`.
 2. Build minimal update operations only for fields that changed.
-3. `strategy_patch_dsl(session_id, strategy_id, <update_ops>, expected_version)`.
+3. `strategy_patch_dsl(strategy_id, <update_ops>, expected_version)`.
 
 ## Version History Helpers
-- `strategy_list_versions(session_id, strategy_id, limit)` returns latest revision metadata.
-- `strategy_get_version_dsl(session_id, strategy_id, version)` returns a specific historical DSL.
-- `strategy_diff_versions(session_id, strategy_id, from_version, to_version)` returns structured update operations between versions.
-- `strategy_rollback_dsl(session_id, strategy_id, target_version, expected_version)` restores by creating a new latest version.
+- `strategy_list_versions(strategy_id, limit)` returns latest revision metadata.
+- `strategy_get_version_dsl(strategy_id, version)` returns a specific historical DSL.
+- `strategy_diff_versions(strategy_id, from_version, to_version)` returns structured update operations between versions.
+- `strategy_rollback_dsl(strategy_id, target_version, expected_version)` restores by creating a new latest version.
 
 ## Patch Rules
 - Prefer `replace` for value changes.

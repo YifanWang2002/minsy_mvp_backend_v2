@@ -163,19 +163,19 @@ Modes: `fixed_qty` (+ `qty`), `fixed_cash` (+ `cash`), `pct_equity` (+ `pct` as 
 ## Workflow After Generation
 
 1. You build a complete JSON strategy draft.
-2. Call `strategy_validate_dsl(session_id=..., dsl_json=...)`.
+2. Call `strategy_validate_dsl(dsl_json=...)`.
 3. If valid, tool returns temporary `strategy_draft_id`; emit `strategy_ref` for frontend rendering.
 4. User reviews/edits and confirms → frontend sends DSL to backend confirm API.
 5. Backend returns formal `strategy_id`.
 6. User provides `strategy_id` → you call MCP tools:
-   - `strategy_validate_dsl(session_id=..., dsl_json=...)` → validate edits before persistence
-   - `strategy_get_dsl(session_id=..., strategy_id=...)` → fetch latest payload + version
-   - `strategy_patch_dsl(session_id=..., strategy_id=..., patch_json=..., expected_version=...)` → persist minimal changes
-   - `strategy_list_versions(session_id=..., strategy_id=..., limit=...)` → inspect revision history
-   - `strategy_diff_versions(session_id=..., strategy_id=..., from_version=..., to_version=...)` → compare changes
-   - `strategy_get_version_dsl(session_id=..., strategy_id=..., version=...)` → fetch historical snapshot
-   - `strategy_rollback_dsl(session_id=..., strategy_id=..., target_version=..., expected_version=...)` → rollback by creating a new latest version
-   - `strategy_upsert_dsl(session_id=..., strategy_id=..., dsl_json=...)` → fallback full-payload persistence
+   - `strategy_validate_dsl(dsl_json=...)` → validate edits before persistence
+   - `strategy_get_dsl(strategy_id=...)` → fetch latest payload + version
+   - `strategy_patch_dsl(strategy_id=..., patch_json=..., expected_version=...)` → persist minimal changes
+   - `strategy_list_versions(strategy_id=..., limit=...)` → inspect revision history
+   - `strategy_diff_versions(strategy_id=..., from_version=..., to_version=...)` → compare changes
+   - `strategy_get_version_dsl(strategy_id=..., version=...)` → fetch historical snapshot
+   - `strategy_rollback_dsl(strategy_id=..., target_version=..., expected_version=...)` → rollback by creating a new latest version
+   - `strategy_upsert_dsl(strategy_id=..., dsl_json=...)` → fallback full-payload persistence
    - `backtest_create_job(strategy_id=..., ...)` and `backtest_get_job(job_id=...)` → run and review performance in the strategy iteration loop
 7. Iterate based on results.
 

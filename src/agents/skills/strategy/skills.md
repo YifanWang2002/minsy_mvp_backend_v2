@@ -18,7 +18,7 @@ Reply in **{{LANG_NAME}}**.
 - When no `strategy_id` yet:
   1) produce short rationale text
   2) build one complete DSL JSON draft internally
-  3) call `strategy_validate_dsl` with `session_id=session_id_for_tool_calls`
+  3) call `strategy_validate_dsl` (MCP session context is injected automatically)
   4) if validate succeeds and returns `strategy_draft_id`, emit exactly one `<AGENT_UI_JSON>` block:
      `{"type":"strategy_ref","strategy_draft_id":"...","display_mode":"draft","source":"strategy_validate_dsl"}`
   5) do NOT print full DSL JSON in plain text unless user explicitly asks for raw JSON
@@ -47,7 +47,7 @@ Reply in **{{LANG_NAME}}**.
 
 ## Backtest Data Availability Guardrail (MUST)
 - Before every `backtest_create_job`, first try:
-  1) `strategy_get_dsl(session_id, strategy_id)` to read `dsl_json.universe.market` and `dsl_json.universe.tickers`
+  1) `strategy_get_dsl(strategy_id)` to read `dsl_json.universe.market` and `dsl_json.universe.tickers`
   2) `get_symbol_data_coverage(market, symbol)` for the symbol you are about to backtest (use the first ticker unless user requests another)
 - Use coverage response `metadata.available_timerange.start/end` as hard bounds for backtest dates.
 - Never submit `backtest_create_job` with `end_date` later than `metadata.available_timerange.end`.
@@ -58,10 +58,10 @@ Reply in **{{LANG_NAME}}**.
 - Only ask user to retry/re-save/export DSL when both sources are unavailable: `strategy_get_dsl` failed and no usable confirmed save context exists in session state.
 
 ## MCP Tool Policy
-- Use `session_id_for_tool_calls` from `[SESSION STATE]` as the `session_id` argument for all `strategy_*` tools.
+- Strategy/backtest ownership context is injected by MCP headers. Do not manually add `session_id` unless you are handling a backward-compatibility edge case.
 - When `strategy_patch_dsl` is available, execute the patch via MCP; do not ask the user to apply backend patches manually.
 - Prefer this order:
-  1) pre-confirm draft: `strategy_validate_dsl(session_id, dsl_json)` and return `strategy_ref` by `strategy_draft_id`
+  1) pre-confirm draft: `strategy_validate_dsl(dsl_json)` and return `strategy_ref` by `strategy_draft_id`
   2) post-confirm updates: `strategy_get_dsl` -> `strategy_patch_dsl`
   3) post-confirm backtest: `strategy_get_dsl` -> `get_symbol_data_coverage` -> `backtest_create_job` -> `backtest_get_job`
 - In this phase, only use:
@@ -86,15 +86,15 @@ Reply in **{{LANG_NAME}}**.
   - `backtest_rolling_metrics`
   - `get_symbol_data_coverage`
   - `get_indicator_catalog`
-  - `get_indicator_detail`
-- `strategy_upsert_dsl` requires `session_id` and `dsl_json`.
-- `strategy_get_dsl` requires `session_id` and `strategy_id`.
-- `strategy_list_tunable_params` requires `session_id` and `strategy_id`.
-- `strategy_patch_dsl` requires `session_id`, `strategy_id`, update operations payload, optional `expected_version`.
-- `strategy_list_versions` requires `session_id`, `strategy_id`, optional `limit`.
-- `strategy_get_version_dsl` requires `session_id`, `strategy_id`, `version`.
-- `strategy_diff_versions` requires `session_id`, `strategy_id`, `from_version`, `to_version`.
-- `strategy_rollback_dsl` requires `session_id`, `strategy_id`, `target_version`, optional `expected_version`.
+- `get_indicator_detail`
+- `strategy_upsert_dsl` requires `dsl_json`; `session_id` is optional compatibility input.
+- `strategy_get_dsl` requires `strategy_id`; `session_id` is optional compatibility input.
+- `strategy_list_tunable_params` requires `strategy_id`; `session_id` is optional compatibility input.
+- `strategy_patch_dsl` requires `strategy_id`, update operations payload, optional `expected_version`; `session_id` is optional compatibility input.
+- `strategy_list_versions` requires `strategy_id`, optional `limit`; `session_id` is optional compatibility input.
+- `strategy_get_version_dsl` requires `strategy_id`, `version`; `session_id` is optional compatibility input.
+- `strategy_diff_versions` requires `strategy_id`, `from_version`, `to_version`; `session_id` is optional compatibility input.
+- `strategy_rollback_dsl` requires `strategy_id`, `target_version`, optional `expected_version`; `session_id` is optional compatibility input.
 - `get_symbol_data_coverage` requires `market` and `symbol`.
 - Keep patches minimal: prefer `replace`/`add`/`remove` and include `test` guards when practical.
 - Use `get_indicator_catalog` to inspect available factor categories and registry contracts.

@@ -10,6 +10,8 @@ from src.api.middleware.rate_limit import RateLimiter
 from src.api.schemas.auth_schemas import (
     AuthResponse,
     AuthUser,
+    ChangePasswordRequest,
+    DetailResponse,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
@@ -23,6 +25,10 @@ from src.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 me_rate_limiter = RateLimiter(limit=settings.auth_rate_limit, window=settings.auth_rate_window)
+change_password_rate_limiter = RateLimiter(
+    limit=settings.auth_rate_limit,
+    window=settings.auth_rate_window,
+)
 
 
 def _resolve_kyc_status(user: User) -> str:
@@ -93,3 +99,19 @@ async def me(
         kyc_status=_resolve_kyc_status(user),
         created_at=user.created_at,
     )
+
+
+@router.post("/change-password", response_model=DetailResponse)
+async def change_password(
+    payload: ChangePasswordRequest,
+    _: None = Depends(change_password_rate_limiter),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DetailResponse:
+    service = AuthService(db)
+    await service.change_password(
+        user=user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    return DetailResponse(detail="Password updated successfully.")

@@ -93,6 +93,27 @@ class AuthService:
             )
         return self.sign_tokens(user_id)
 
+    async def change_password(
+        self,
+        user: User,
+        current_password: str,
+        new_password: str,
+    ) -> None:
+        """Change user password after verifying the current password."""
+        if not self.verify_password(current_password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Current password is incorrect.",
+            )
+        if current_password == new_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="New password must be different from current password.",
+            )
+
+        user.password_hash = self.hash_password(new_password)
+        await self.db.commit()
+
     def sign_tokens(self, user_id: UUID) -> TokenPair:
         """Sign access token (+24h) and refresh token (+7d)."""
         now = datetime.now(UTC)

@@ -23,6 +23,11 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
 class AuthUser(BaseModel):
     name: str
     kyc_status: str
@@ -48,3 +53,7 @@ class UserResponse(BaseModel):
     name: str
     kyc_status: str
     created_at: datetime
+
+
+class DetailResponse(BaseModel):
+    detail: str

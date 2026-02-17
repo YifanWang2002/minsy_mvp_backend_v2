@@ -147,10 +147,20 @@ POSTGRES_PORT=5432
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=<password>
 POSTGRES_DB=minsy_pgsql
+POSTGRES_BACKUP_ENABLED=true
+POSTGRES_BACKUP_DIR=backups/postgres
+POSTGRES_BACKUP_RETENTION_COUNT=14
+POSTGRES_BACKUP_HOUR_UTC=3
+POSTGRES_BACKUP_MINUTE_UTC=0
+POSTGRES_PG_DUMP_BIN=pg_dump
 
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 REDIS_DB=0
+
+USER_EMAIL_CSV_EXPORT_ENABLED=true
+USER_EMAIL_CSV_PATH=exports/user_emails.csv
+USER_EMAIL_CSV_EXPORT_INTERVAL_MINUTES=60
 
 SECRET_KEY=<jwt_secret>
 JWT_ALGORITHM=HS256
@@ -168,6 +178,20 @@ uv run python -m src.mcp.server --transport streamable-http --host 127.0.0.1 --p
 
 # 3) Celery worker（另一个终端）
 uv run celery -A src.workers.celery_app.celery_app worker -l info -Q backtest
+
+# 4) Celery beat（另一个终端，负责定时备份与邮箱导出）
+uv run celery -A src.workers.celery_app.celery_app beat -l info
+```
+
+#### PostgreSQL 恢复脚本（可执行）
+```bash
+# 示例：把某个全库备份恢复到当前 .env 的数据库
+POSTGRES_HOST=127.0.0.1 \
+POSTGRES_PORT=5432 \
+POSTGRES_USER=postgres \
+POSTGRES_PASSWORD=<password> \
+POSTGRES_DB=minsy_pgsql \
+./scripts/restore_postgres_backup.sh backups/postgres/minsy_pgsql_20260217_030000.dump
 ```
 
 #### 验证方式

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 import pytest
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.backtest.service import execute_backtest_job
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
+from src.mcp.context_auth import McpContextClaims
 from src.mcp.backtest import tools as backtest_tools
 from src.models.session import Session as AgentSession
 from src.models.user import User
@@ -57,6 +59,18 @@ async def _create_strategy(db_session: AsyncSession, email: str):
     payload["universe"]["tickers"] = ["BTCUSDT"]
     created = await upsert_strategy_dsl(db_session, session_id=session.id, dsl_payload=payload)
     return created.strategy
+
+
+def _claims_for(*, user_id: Any, session_id: Any | None) -> McpContextClaims:
+    now = datetime.now(UTC)
+    return McpContextClaims(
+        user_id=user_id,
+        session_id=session_id,
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+        trace_id="test-trace",
+        phase="strategy",
+    )
 
 
 def _sample_frame() -> pd.DataFrame:
@@ -328,3 +342,77 @@ async def test_backtest_tools_failed_run_returns_error_payload(
     assert job_payload["status"] == "failed"
     assert isinstance(job_payload["result"], dict)
     assert job_payload["result"]["error"]["code"] == "BACKTEST_RUN_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_backtest_create_job_rejects_foreign_strategy_when_context_user_mismatch(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = await _create_strategy(db_session, email="mcp_backtest_ctx_owner@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    async def _fake_schedule(job_id):  # noqa: ANN001
+        return None
+
+    monkeypatch.setattr(backtest_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(backtest_tools, "schedule_backtest_job", _fake_schedule)
+    monkeypatch.setattr(
+        backtest_tools,
+        "_resolve_context_claims",
+        lambda _ctx: _claims_for(user_id=uuid4(), session_id=strategy.session_id),
+    )
+
+    mcp = FastMCP("test-backtest-tools-context-owner")
+    backtest_tools.register_backtest_tools(mcp)
+
+    create_call = await mcp.call_tool(
+        "backtest_create_job",
+        {"strategy_id": str(strategy.id)},
+    )
+    create_payload = _extract_payload(create_call)
+    assert create_payload["ok"] is False
+    assert create_payload["error"]["code"] == "STRATEGY_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_backtest_get_job_rejects_foreign_user_when_context_mismatch(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = await _create_strategy(db_session, email="mcp_backtest_ctx_job@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    async def _fake_schedule(job_id):  # noqa: ANN001
+        return None
+
+    monkeypatch.setattr(backtest_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(backtest_tools, "schedule_backtest_job", _fake_schedule)
+    monkeypatch.setattr(backtest_tools, "_resolve_context_claims", lambda _ctx: None)
+
+    mcp = FastMCP("test-backtest-tools-context-job")
+    backtest_tools.register_backtest_tools(mcp)
+
+    create_call = await mcp.call_tool(
+        "backtest_create_job",
+        {"strategy_id": str(strategy.id)},
+    )
+    create_payload = _extract_payload(create_call)
+    assert create_payload["ok"] is True
+
+    monkeypatch.setattr(
+        backtest_tools,
+        "_resolve_context_claims",
+        lambda _ctx: _claims_for(user_id=uuid4(), session_id=strategy.session_id),
+    )
+    get_call = await mcp.call_tool(
+        "backtest_get_job",
+        {"job_id": create_payload["job_id"]},
+    )
+    get_payload = _extract_payload(get_call)
+    assert get_payload["ok"] is False
+    assert get_payload["error"]["code"] == "JOB_NOT_FOUND"

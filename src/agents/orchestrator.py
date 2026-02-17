@@ -37,12 +37,14 @@ from src.agents.skills.pre_strategy_skills import (
 from src.api.schemas.requests import ChatSendRequest
 from src.config import settings
 from src.engine.strategy import validate_strategy_payload
+from src.mcp.context_auth import MCP_CONTEXT_HEADER, create_mcp_context_token
 from src.models.phase_transition import PhaseTransition
 from src.models.session import Message, Session
 from src.models.strategy import Strategy
 from src.models.user import User, UserProfile
 from src.services.openai_stream_service import ResponsesEventStreamer
-from src.util.chat_debug_trace import record_chat_debug_trace
+from src.services.session_title_service import refresh_session_title
+from src.util.chat_debug_trace import get_chat_debug_trace, record_chat_debug_trace
 from src.util.logger import log_agent
 
 _AGENT_UI_TAG = "AGENT_UI_JSON"
@@ -102,6 +104,9 @@ _BACKTEST_FEEDBACK_TOOL_NAMES: tuple[str, ...] = (
     "backtest_exit_reason_breakdown",
     "backtest_underwater_curve",
     "backtest_rolling_metrics",
+)
+_MCP_CONTEXT_ENABLED_SERVER_LABELS: frozenset[str] = frozenset(
+    {"strategy", "backtest", "market_data"}
 )
 
 # Singleton for KYC-specific helpers (profile loading from UserProfile)
@@ -194,6 +199,7 @@ class ChatOrchestrator:
         )
         self.db.add(session)
         await self.db.flush()
+        await refresh_session_title(db=self.db, session=session)
         return session
 
     # ------------------------------------------------------------------
@@ -271,6 +277,7 @@ class ChatOrchestrator:
                 )
             )
             session.last_activity_at = datetime.now(UTC)
+            title_payload = await refresh_session_title(db=self.db, session=session)
             await self.db.commit()
             await self.db.refresh(session)
 
@@ -284,6 +291,8 @@ class ChatOrchestrator:
                     "status": session.status,
                     "kyc_status": await self._fetch_kyc_status(user.id),
                     "missing_fields": [],
+                    "session_title": title_payload.title,
+                    "session_title_record": title_payload.record,
                 },
             )
             log_agent(
@@ -379,6 +388,12 @@ class ChatOrchestrator:
             base_tools=prompt.tools,
             runtime_policy=runtime_policy,
         )
+        tools = self._attach_mcp_context_headers(
+            tools=tools,
+            user_id=user.id,
+            session_id=session.id,
+            phase=phase_before,
+        )
         return _TurnPreparation(
             phase_before=phase_before,
             phase_turn_count=phase_turn_count,
@@ -408,12 +423,15 @@ class ChatOrchestrator:
             "tool_choice": preparation.prompt.tool_choice,
             "reasoning": preparation.prompt.reasoning,
         }
+        trace_stream_request_kwargs = self._redact_stream_request_kwargs_for_trace(
+            stream_request_kwargs
+        )
         record_chat_debug_trace(
             "orchestrator_to_openai_request",
             {
                 "session_id": str(session.id),
                 "phase": preparation.phase_before,
-                **stream_request_kwargs,
+                **trace_stream_request_kwargs,
             },
         )
         try:
@@ -726,6 +744,7 @@ class ChatOrchestrator:
             )
         )
         session.last_activity_at = datetime.now(UTC)
+        title_payload = await refresh_session_title(db=self.db, session=session)
         await self.db.commit()
         await self.db.refresh(session)
 
@@ -781,6 +800,8 @@ class ChatOrchestrator:
                 "status": session.status,
                 "kyc_status": post_process_result.kyc_status,
                 "missing_fields": post_process_result.missing_fields,
+                "session_title": title_payload.title,
+                "session_title_record": title_payload.record,
                 "usage": stream_state.completed_usage,
                 "stream_error": stream_state.stream_error_message,
                 "stream_error_detail": stream_state.stream_error_detail,
@@ -2060,6 +2081,80 @@ class ChatOrchestrator:
                 merged.extend(requested_tools)
 
         return merged or None
+
+    def _attach_mcp_context_headers(
+        self,
+        *,
+        tools: list[dict[str, Any]] | None,
+        user_id: UUID,
+        session_id: UUID,
+        phase: str,
+    ) -> list[dict[str, Any]] | None:
+        if not tools:
+            return tools
+
+        trace = get_chat_debug_trace()
+        trace_id = trace.trace_id if trace and isinstance(trace.trace_id, str) else None
+        token = create_mcp_context_token(
+            user_id=user_id,
+            session_id=session_id,
+            ttl_seconds=settings.mcp_context_ttl_seconds,
+            trace_id=trace_id,
+            phase=phase,
+        )
+
+        decorated: list[dict[str, Any]] = []
+        for item in tools:
+            if not isinstance(item, dict):
+                decorated.append(item)
+                continue
+            if str(item.get("type", "")).strip().lower() != "mcp":
+                decorated.append(dict(item))
+                continue
+            server_label = str(item.get("server_label", "")).strip().lower()
+            if server_label not in _MCP_CONTEXT_ENABLED_SERVER_LABELS:
+                decorated.append(dict(item))
+                continue
+
+            next_tool = dict(item)
+            raw_headers = item.get("headers")
+            headers = dict(raw_headers) if isinstance(raw_headers, dict) else {}
+            headers[MCP_CONTEXT_HEADER] = token
+            next_tool["headers"] = headers
+            decorated.append(next_tool)
+        return decorated
+
+    @staticmethod
+    def _redact_stream_request_kwargs_for_trace(
+        stream_request_kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = copy.deepcopy(stream_request_kwargs)
+        tools = payload.get("tools")
+        if not isinstance(tools, list):
+            return payload
+
+        redacted_tools: list[Any] = []
+        for item in tools:
+            if not isinstance(item, dict):
+                redacted_tools.append(item)
+                continue
+
+            next_tool = dict(item)
+            raw_headers = next_tool.get("headers")
+            if isinstance(raw_headers, dict):
+                sanitized_headers: dict[str, Any] = {}
+                for key, value in raw_headers.items():
+                    normalized_key = str(key).strip().lower()
+                    if normalized_key in {"authorization", MCP_CONTEXT_HEADER} or (
+                        "token" in normalized_key
+                    ):
+                        sanitized_headers[str(key)] = "***"
+                        continue
+                    sanitized_headers[str(key)] = value
+                next_tool["headers"] = sanitized_headers
+            redacted_tools.append(next_tool)
+        payload["tools"] = redacted_tools
+        return payload
 
     @staticmethod
     def _merge_runtime_policies(

@@ -6,10 +6,12 @@ from uuid import UUID, uuid4
 
 import pandas as pd
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.backtest import (
     BacktestJobNotFoundError,
+    BacktestStrategyNotFoundError,
     BacktestJobView,
     create_backtest_job,
     execute_backtest_job,
@@ -19,6 +21,7 @@ from src.engine.backtest import (
 )
 from src.engine.data import DataLoader
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
+from src.models.backtest import BacktestJob
 from src.models.session import Session as AgentSession
 from src.models.user import User
 
@@ -141,6 +144,47 @@ async def test_backtest_job_lifecycle_failed(db_session: AsyncSession, monkeypat
 async def test_backtest_job_view_not_found(db_session: AsyncSession) -> None:
     with pytest.raises(BacktestJobNotFoundError):
         await get_backtest_job_view(db_session, job_id=uuid4())
+
+
+@pytest.mark.asyncio
+async def test_create_backtest_job_rejects_foreign_user_context(
+    db_session: AsyncSession,
+) -> None:
+    strategy = await _create_strategy(db_session, email="bt_service_owner_guard@example.com")
+    with pytest.raises(BacktestStrategyNotFoundError):
+        await create_backtest_job(
+            db_session,
+            strategy_id=strategy.id,
+            user_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_get_backtest_job_view_rejects_foreign_user_context(
+    db_session: AsyncSession,
+) -> None:
+    strategy = await _create_strategy(db_session, email="bt_service_job_guard@example.com")
+    receipt = await create_backtest_job(db_session, strategy_id=strategy.id)
+
+    with pytest.raises(BacktestJobNotFoundError):
+        await get_backtest_job_view(
+            db_session,
+            job_id=receipt.job_id,
+            user_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_backtest_job_snapshots_strategy_version(db_session: AsyncSession) -> None:
+    strategy = await _create_strategy(db_session, email="bt_service_version_snapshot@example.com")
+    receipt = await create_backtest_job(db_session, strategy_id=strategy.id)
+
+    persisted = await db_session.scalar(
+        select(BacktestJob).where(BacktestJob.id == receipt.job_id)
+    )
+    assert persisted is not None
+    assert isinstance(persisted.config, dict)
+    assert persisted.config.get("strategy_version") == int(strategy.version)
 
 
 @pytest.mark.asyncio

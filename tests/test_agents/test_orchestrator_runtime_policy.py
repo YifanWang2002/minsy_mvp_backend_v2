@@ -13,6 +13,7 @@ from src.agents.handler_registry import init_all_artifacts
 from src.agents.orchestrator import ChatOrchestrator
 from src.api.schemas.requests import ChatSendRequest
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
+from src.mcp.context_auth import MCP_CONTEXT_HEADER, decode_mcp_context_token
 from src.models.session import Session
 from src.models.user import User
 
@@ -144,6 +145,25 @@ def _parse_sse_payload(chunk: str) -> dict[str, object] | None:
     return parsed
 
 
+def _build_user_with_strategy_session(email: str) -> tuple[User, Session]:
+    user = User(
+        email=email,
+        password_hash="hash",
+        name="rt",
+    )
+    artifacts = init_all_artifacts()
+    artifacts["strategy"]["profile"] = {"strategy_id": str(uuid4())}
+    artifacts["strategy"]["missing_fields"] = []
+    session = Session(
+        user_id=user.id,
+        current_phase="strategy",
+        status="active",
+        artifacts=artifacts,
+        metadata_={},
+    )
+    return user, session
+
+
 @pytest.mark.asyncio
 async def test_strategy_phase_auto_policy_limits_tools_to_validation(
     db_session,
@@ -188,6 +208,70 @@ async def test_strategy_phase_auto_policy_limits_tools_to_validation(
     instructions = streamer.calls[0]["instructions"]
     assert isinstance(instructions, str)
     assert "Strategy Patch Workflow" not in instructions
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_attaches_mcp_context_header_to_mcp_tools(
+    db_session,
+) -> None:
+    user, session = _build_user_with_strategy_session(
+        f"orchestrator_ctx_{uuid4().hex}@example.com"
+    )
+    db_session.add(user)
+    await db_session.flush()
+    session.user_id = user.id
+    db_session.add(session)
+    await db_session.flush()
+
+    streamer = _CaptureStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+    payload = ChatSendRequest(
+        session_id=session.id,
+        message="run first backtest and iterate",
+    )
+    async for _ in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
+        pass
+
+    assert streamer.calls
+    tools = streamer.calls[0]["tools"]
+    assert isinstance(tools, list) and tools
+
+    mcp_tools = [
+        tool
+        for tool in tools
+        if isinstance(tool, dict) and str(tool.get("type", "")).lower() == "mcp"
+    ]
+    assert mcp_tools
+    for tool in mcp_tools:
+        headers = tool.get("headers")
+        assert isinstance(headers, dict)
+        token = headers.get(MCP_CONTEXT_HEADER)
+        assert isinstance(token, str) and token.strip()
+        claims = decode_mcp_context_token(token)
+        assert claims.user_id == user.id
+        assert claims.session_id == session.id
+
+
+def test_redact_stream_request_kwargs_masks_mcp_context_headers() -> None:
+    original = {
+        "tools": [
+            {
+                "type": "mcp",
+                "server_label": "strategy",
+                "headers": {
+                    "x-minsy-mcp-context": "sensitive-token",
+                    "x-custom": "value",
+                },
+            }
+        ]
+    }
+    redacted = ChatOrchestrator._redact_stream_request_kwargs_for_trace(original)
+
+    assert redacted["tools"][0]["headers"]["x-minsy-mcp-context"] == "***"
+    assert redacted["tools"][0]["headers"]["x-custom"] == "value"
+    assert original["tools"][0]["headers"]["x-minsy-mcp-context"] == "sensitive-token"
 
 
 @pytest.mark.asyncio

@@ -59,7 +59,6 @@ class StrategyHandler:
             missing_fields=missing,
             collected_fields=profile,
             pre_strategy_fields=pre_profile,
-            session_id=str(ctx.session_id) if ctx.session_id is not None else None,
         )
         return PromptPieces(
             instructions=instructions,

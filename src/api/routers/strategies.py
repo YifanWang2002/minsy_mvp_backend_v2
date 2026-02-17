@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,24 +17,43 @@ from src.agents.orchestrator import ChatOrchestrator
 from src.agents.phases import Phase
 from src.api.middleware.auth import get_current_user
 from src.api.schemas.events import (
+    StrategyBacktestSummary,
     StrategyConfirmResponse,
     StrategyDetailResponse,
     StrategyDraftDetailResponse,
+    StrategyListItemResponse,
+    StrategyVersionDiffResponse,
+    StrategyVersionItemResponse,
 )
 from src.api.schemas.requests import ChatSendRequest, StrategyConfirmRequest
 from src.dependencies import get_db, get_responses_event_streamer
 from src.engine.strategy import (
     StrategyDslValidationException,
+    StrategyRevisionNotFoundError,
     StrategyStorageNotFoundError,
+    diff_strategy_versions,
     get_strategy_draft,
     get_strategy_or_raise,
+    get_strategy_version_payload,
+    list_strategy_versions,
     upsert_strategy_dsl,
 )
+from src.models.backtest import BacktestJob
 from src.models.session import Session
+from src.models.strategy import Strategy
 from src.models.user import User
 from src.services.openai_stream_service import ResponsesEventStreamer
+from src.services.session_title_service import refresh_session_title
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
+
+_BACKTEST_STATUS_TO_EXTERNAL: dict[str, str] = {
+    "queued": "pending",
+    "running": "running",
+    "completed": "done",
+    "failed": "failed",
+    "cancelled": "failed",
+}
 
 
 @router.get("/drafts/{strategy_draft_id}", response_model=StrategyDraftDetailResponse)
@@ -76,14 +96,143 @@ async def get_strategy_draft_detail(
     )
 
 
-@router.get("/{strategy_id}", response_model=StrategyDetailResponse)
-async def get_strategy_detail(
-    strategy_id: UUID,
+@router.get("", response_model=list[StrategyListItemResponse])
+async def list_user_strategies(
+    limit: int = Query(default=30, ge=1, le=200),
+    offset: int = Query(default=0, ge=0, le=10_000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> StrategyDetailResponse:
+) -> list[StrategyListItemResponse]:
+    rows = (
+        await db.scalars(
+            select(Strategy)
+            .where(Strategy.user_id == user.id)
+            .order_by(Strategy.updated_at.desc(), Strategy.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+
+    items: list[StrategyListItemResponse] = []
+    for strategy in rows:
+        dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+        latest_backtest = await _resolve_latest_backtest_summary(
+            db,
+            strategy_id=strategy.id,
+            target_version=int(strategy.version),
+            current_version=int(strategy.version),
+        )
+        items.append(
+            StrategyListItemResponse(
+                strategy_id=strategy.id,
+                session_id=strategy.session_id,
+                version=int(strategy.version),
+                status=strategy.status,
+                dsl_json=dsl_payload,
+                metadata=_strategy_metadata(strategy),
+                latest_backtest=latest_backtest,
+            )
+        )
+    return items
+
+
+@router.get("/{strategy_id}/versions", response_model=list[StrategyVersionItemResponse])
+async def list_strategy_versions_with_payload(
+    strategy_id: UUID,
+    limit: int = Query(default=20, ge=1, le=200),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[StrategyVersionItemResponse]:
+    strategy = await _resolve_owned_strategy_or_404(
+        db=db,
+        strategy_id=strategy_id,
+        user_id=user.id,
+    )
+
     try:
-        strategy = await get_strategy_or_raise(db, strategy_id=strategy_id)
+        revisions = await list_strategy_versions(
+            db,
+            session_id=strategy.session_id,
+            strategy_id=strategy.id,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "STRATEGY_INVALID_QUERY",
+                "message": str(exc),
+            },
+        ) from exc
+
+    items: list[StrategyVersionItemResponse] = []
+    for revision in revisions:
+        resolved = await get_strategy_version_payload(
+            db,
+            session_id=strategy.session_id,
+            strategy_id=strategy.id,
+            version=int(revision.version),
+        )
+        backtest = await _resolve_latest_backtest_summary(
+            db,
+            strategy_id=strategy.id,
+            target_version=int(revision.version),
+            current_version=int(strategy.version),
+        )
+        items.append(
+            StrategyVersionItemResponse(
+                strategy_id=strategy.id,
+                version=int(revision.version),
+                dsl_json=resolved.dsl_payload,
+                revision=_revision_metadata(revision),
+                backtest=backtest,
+            )
+        )
+    return items
+
+
+@router.get("/{strategy_id}/diff", response_model=StrategyVersionDiffResponse)
+async def get_strategy_versions_diff(
+    strategy_id: UUID,
+    from_version: int = Query(ge=1),
+    to_version: int = Query(ge=1),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StrategyVersionDiffResponse:
+    strategy = await _resolve_owned_strategy_or_404(
+        db=db,
+        strategy_id=strategy_id,
+        user_id=user.id,
+    )
+
+    try:
+        diff_result = await diff_strategy_versions(
+            db,
+            session_id=strategy.session_id,
+            strategy_id=strategy.id,
+            from_version=from_version,
+            to_version=to_version,
+        )
+        left_payload = await get_strategy_version_payload(
+            db,
+            session_id=strategy.session_id,
+            strategy_id=strategy.id,
+            version=from_version,
+        )
+        right_payload = await get_strategy_version_payload(
+            db,
+            session_id=strategy.session_id,
+            strategy_id=strategy.id,
+            version=to_version,
+        )
+    except StrategyRevisionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "STRATEGY_REVISION_NOT_FOUND",
+                "message": str(exc),
+            },
+        ) from exc
     except StrategyStorageNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -93,16 +242,35 @@ async def get_strategy_detail(
             },
         ) from exc
 
-    if strategy.user_id != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "STRATEGY_NOT_FOUND",
-                "message": "Strategy not found.",
-            },
-        )
+    diff_items = _build_display_diff_items(
+        patch_ops=diff_result.patch_ops,
+        from_payload=left_payload.dsl_payload,
+        to_payload=right_payload.dsl_payload,
+    )
+    return StrategyVersionDiffResponse(
+        strategy_id=diff_result.strategy_id,
+        from_version=diff_result.from_version,
+        to_version=diff_result.to_version,
+        patch_op_count=diff_result.op_count,
+        patch_ops=diff_result.patch_ops,
+        diff_items=diff_items,
+        from_payload_hash=diff_result.from_payload_hash,
+        to_payload_hash=diff_result.to_payload_hash,
+    )
 
-    updated_at = strategy.updated_at if strategy.updated_at is not None else strategy.created_at
+
+@router.get("/{strategy_id}", response_model=StrategyDetailResponse)
+async def get_strategy_detail(
+    strategy_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StrategyDetailResponse:
+    strategy = await _resolve_owned_strategy_or_404(
+        db=db,
+        strategy_id=strategy_id,
+        user_id=user.id,
+    )
+
     dsl_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
     return StrategyDetailResponse(
         strategy_id=strategy.id,
@@ -110,17 +278,7 @@ async def get_strategy_detail(
         version=int(strategy.version),
         status=strategy.status,
         dsl_json=dsl_payload,
-        metadata={
-            "user_id": str(strategy.user_id),
-            "session_id": str(strategy.session_id),
-            "strategy_name": strategy.name,
-            "dsl_version": strategy.dsl_version or "",
-            "version": int(strategy.version),
-            "status": strategy.status,
-            "timeframe": strategy.timeframe,
-            "symbol_count": len(strategy.symbols or []),
-            "last_updated_at": updated_at.isoformat() if updated_at is not None else None,
-        },
+        metadata=_strategy_metadata(strategy),
     )
 
 
@@ -165,6 +323,7 @@ async def confirm_strategy(
         scope_updates=scope_updates,
         advance_to_stress_test=payload.advance_to_stress_test,
     )
+    await refresh_session_title(db=db, session=session)
 
     await db.commit()
     await db.refresh(session)
@@ -269,6 +428,7 @@ def _apply_strategy_confirm_artifacts(
     strategy_block = artifacts.setdefault(Phase.STRATEGY.value, {"profile": {}, "missing_fields": []})
     strategy_profile = dict(strategy_block.get("profile", {}))
     strategy_profile["strategy_id"] = str(receipt.strategy_id)
+    strategy_profile["strategy_name"] = receipt.strategy_name
     strategy_profile.update(scope_updates)
     strategy_profile["strategy_confirmed"] = True
     strategy_profile["strategy_last_confirmed_at"] = receipt.last_updated_at.isoformat()
@@ -281,6 +441,7 @@ def _apply_strategy_confirm_artifacts(
     )
     stress_profile = dict(stress_block.get("profile", {}))
     stress_profile["strategy_id"] = str(receipt.strategy_id)
+    stress_profile["strategy_name"] = receipt.strategy_name
     stress_profile.update(scope_updates)
     stress_profile.pop("backtest_job_id", None)
     stress_profile.pop("backtest_status", None)
@@ -304,6 +465,7 @@ def _apply_strategy_confirm_metadata(
     session.last_activity_at = datetime.now(UTC)
     next_meta = dict(session.metadata_ or {})
     next_meta["strategy_id"] = str(receipt.strategy_id)
+    next_meta["strategy_name"] = receipt.strategy_name
     next_meta["strategy_confirmed_at"] = receipt.last_updated_at.isoformat()
     next_meta.update(scope_updates)
 
@@ -404,6 +566,271 @@ def _parse_sse_payload(chunk: str) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+async def _resolve_owned_strategy_or_404(
+    *,
+    db: AsyncSession,
+    strategy_id: UUID,
+    user_id: UUID,
+) -> Strategy:
+    try:
+        strategy = await get_strategy_or_raise(db, strategy_id=strategy_id)
+    except StrategyStorageNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "STRATEGY_NOT_FOUND",
+                "message": str(exc),
+            },
+        ) from exc
+
+    if strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "STRATEGY_NOT_FOUND",
+                "message": "Strategy not found.",
+            },
+        )
+    return strategy
+
+
+def _strategy_metadata(strategy: Strategy) -> dict[str, Any]:
+    updated_at = strategy.updated_at if strategy.updated_at is not None else strategy.created_at
+    return {
+        "user_id": str(strategy.user_id),
+        "session_id": str(strategy.session_id),
+        "strategy_name": strategy.name,
+        "dsl_version": strategy.dsl_version or "",
+        "version": int(strategy.version),
+        "status": strategy.status,
+        "timeframe": strategy.timeframe,
+        "symbol_count": len(strategy.symbols or []),
+        "last_updated_at": updated_at.isoformat() if updated_at is not None else None,
+    }
+
+
+def _revision_metadata(revision: Any) -> dict[str, Any]:
+    return {
+        "strategy_id": str(revision.strategy_id),
+        "session_id": str(revision.session_id) if revision.session_id else None,
+        "version": int(revision.version),
+        "dsl_version": revision.dsl_version,
+        "payload_hash": revision.payload_hash,
+        "change_type": revision.change_type,
+        "source_version": revision.source_version,
+        "patch_op_count": int(revision.patch_op_count),
+        "created_at": revision.created_at.isoformat(),
+    }
+
+
+async def _resolve_latest_backtest_summary(
+    db: AsyncSession,
+    *,
+    strategy_id: UUID,
+    target_version: int | None,
+    current_version: int | None,
+    max_curve_points: int = 160,
+) -> StrategyBacktestSummary | None:
+    jobs = (
+        await db.scalars(
+            select(BacktestJob)
+            .where(BacktestJob.strategy_id == strategy_id)
+            .order_by(BacktestJob.submitted_at.desc(), BacktestJob.created_at.desc())
+            .limit(200),
+        )
+    ).all()
+    if not jobs:
+        return None
+
+    selected: BacktestJob | None = None
+    if target_version is None:
+        selected = jobs[0]
+    else:
+        for job in jobs:
+            if _parse_backtest_strategy_version(job) == target_version:
+                selected = job
+                break
+        if selected is None and current_version is not None and target_version == current_version:
+            selected = jobs[0]
+
+    if selected is None:
+        return None
+    return _serialize_backtest_summary(selected, max_curve_points=max_curve_points)
+
+
+def _serialize_backtest_summary(
+    job: BacktestJob,
+    *,
+    max_curve_points: int,
+) -> StrategyBacktestSummary:
+    status = _BACKTEST_STATUS_TO_EXTERNAL.get(job.status, "pending")
+    result = job.results if isinstance(job.results, dict) else {}
+    summary = result.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    performance = result.get("performance")
+    if not isinstance(performance, dict):
+        performance = {}
+    metrics = performance.get("metrics")
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    raw_equity = result.get("equity_curve")
+    if not isinstance(raw_equity, list):
+        raw_equity = []
+    normalized_equity = _downsample_equity_curve(raw_equity, max_points=max_curve_points)
+
+    return StrategyBacktestSummary(
+        job_id=job.id,
+        status=status,
+        strategy_version=_parse_backtest_strategy_version(job),
+        total_return_pct=_as_float(summary.get("total_return_pct")),
+        max_drawdown_pct=_as_float(summary.get("max_drawdown_pct")),
+        sharpe_ratio=_as_float(metrics.get("sharpe")),
+        equity_curve=normalized_equity,
+        completed_at=job.completed_at,
+    )
+
+
+def _parse_backtest_strategy_version(job: BacktestJob) -> int | None:
+    config = job.config if isinstance(job.config, dict) else {}
+    raw = config.get("strategy_version")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw > 0 else None
+    if isinstance(raw, float):
+        value = int(raw)
+        return value if value > 0 else None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            value = int(text)
+        except ValueError:
+            return None
+        return value if value > 0 else None
+    return None
+
+
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _downsample_equity_curve(
+    rows: list[Any],
+    *,
+    max_points: int,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in rows:
+        normalized_item = _normalize_equity_curve_point(item)
+        if normalized_item is not None:
+            normalized.append(normalized_item)
+
+    if len(normalized) <= max_points:
+        return normalized
+    step = max(1, math.ceil(len(normalized) / max_points))
+    sampled = [normalized[index] for index in range(0, len(normalized), step)]
+    if sampled and sampled[-1] != normalized[-1]:
+        sampled.append(normalized[-1])
+    if len(sampled) <= max_points:
+        return sampled
+    return [*sampled[: max_points - 1], normalized[-1]]
+
+
+def _normalize_equity_curve_point(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    timestamp = item.get("timestamp")
+    equity = _as_float(item.get("equity"))
+    if not isinstance(timestamp, str) or not timestamp.strip() or equity is None:
+        return None
+    return {
+        "timestamp": timestamp,
+        "equity": equity,
+    }
+
+
+def _build_display_diff_items(
+    *,
+    patch_ops: list[dict[str, Any]],
+    from_payload: dict[str, Any],
+    to_payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for raw_op in patch_ops:
+        if not isinstance(raw_op, dict):
+            continue
+        op_name = str(raw_op.get("op", "")).strip().lower()
+        path = str(raw_op.get("path", "")).strip()
+        if not op_name or not path:
+            continue
+
+        old_value = _json_pointer_get(from_payload, path)
+        new_value = _json_pointer_get(to_payload, path)
+        if op_name == "add":
+            old_value = None
+        elif op_name == "remove":
+            new_value = None
+
+        items.append(
+            {
+                "op": op_name,
+                "path": path,
+                "old_value": old_value,
+                "new_value": new_value,
+            }
+        )
+    return items
+
+
+def _json_pointer_get(payload: Any, pointer: str) -> Any:
+    if pointer == "":
+        return payload
+    if not pointer.startswith("/"):
+        return None
+
+    cursor = payload
+    for raw_token in pointer.split("/")[1:]:
+        token = _decode_pointer_token(raw_token)
+        if isinstance(cursor, dict):
+            if token not in cursor:
+                return None
+            cursor = cursor[token]
+            continue
+        if isinstance(cursor, list):
+            if token == "-":
+                return None
+            try:
+                index = int(token)
+            except ValueError:
+                return None
+            if index < 0 or index >= len(cursor):
+                return None
+            cursor = cursor[index]
+            continue
+        return None
+    return cursor
+
+
+def _decode_pointer_token(token: str) -> str:
+    return token.replace("~1", "/").replace("~0", "~")
 
 
 def _extract_strategy_scope(

@@ -19,6 +19,8 @@ ALL_SETTING_KEYS = [
     "MCP_SERVER_URL_DEV",
     "MCP_SERVER_URL_PROD",
     "MCP_SERVER_URL",
+    "MCP_CONTEXT_SECRET",
+    "MCP_CONTEXT_TTL_SECONDS",
     "POSTGRES_HOST",
     "POSTGRES_PORT",
     "POSTGRES_USER",
@@ -40,6 +42,16 @@ ALL_SETTING_KEYS = [
     "CELERY_WORKER_PREFETCH_MULTIPLIER",
     "CELERY_TASK_ACKS_LATE",
     "CELERY_TASK_ALWAYS_EAGER",
+    "CELERY_TIMEZONE",
+    "POSTGRES_BACKUP_ENABLED",
+    "POSTGRES_BACKUP_DIR",
+    "POSTGRES_BACKUP_RETENTION_COUNT",
+    "POSTGRES_BACKUP_HOUR_UTC",
+    "POSTGRES_BACKUP_MINUTE_UTC",
+    "POSTGRES_PG_DUMP_BIN",
+    "USER_EMAIL_CSV_EXPORT_ENABLED",
+    "USER_EMAIL_CSV_PATH",
+    "USER_EMAIL_CSV_EXPORT_INTERVAL_MINUTES",
     "CORS_ORIGINS",
 ]
 
@@ -168,3 +180,45 @@ def test_mcp_server_url_ignores_legacy_override_key(
 
     settings = Settings(_env_file=env_file)
     assert settings.mcp_server_url == "https://dotenv.prod/mcp"
+
+
+def test_effective_mcp_context_secret_falls_back_to_secret_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=base-secret",
+                "MCP_CONTEXT_SECRET=",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.effective_mcp_context_secret == "base-secret"
+
+
+def test_effective_mcp_context_secret_prefers_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=base-secret",
+                "MCP_CONTEXT_SECRET=mcp-secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.effective_mcp_context_secret == "mcp-secret"

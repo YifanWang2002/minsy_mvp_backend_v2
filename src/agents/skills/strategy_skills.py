@@ -120,7 +120,6 @@ def build_strategy_dynamic_state(
     missing_fields: list[str] | None = None,
     collected_fields: dict[str, str] | None = None,
     pre_strategy_fields: dict[str, str] | None = None,
-    session_id: str | None = None,
 ) -> str:
     """Build `[SESSION STATE]` block for strategy phase."""
 
@@ -132,18 +131,12 @@ def build_strategy_dynamic_state(
     has_missing = bool(missing_fields)
     next_missing = missing_fields[0] if missing_fields else "none"
     missing_str = ", ".join(missing_fields) if missing_fields else "none - all collected"
-    session_id_str = (
-        session_id.strip()
-        if isinstance(session_id, str) and session_id.strip()
-        else "unknown"
-    )
 
     collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
     pre_scope = ", ".join(f"{key}={value}" for key, value in pre.items() if value) or "none"
 
     return (
         "[SESSION STATE]\n"
-        f"- session_id_for_tool_calls: {session_id_str}\n"
         f"- pre_strategy_scope: {pre_scope}\n"
         f"- already_collected: {collected}\n"
         f"- still_missing: {missing_str}\n"

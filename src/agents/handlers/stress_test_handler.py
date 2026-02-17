@@ -64,7 +64,6 @@ class StressTestHandler:
         )
         state_block = build_stress_test_dynamic_state(
             collected_fields=profile,
-            session_id=str(ctx.session_id) if ctx.session_id is not None else None,
         )
         tool_choice = _build_stress_test_tool_choice(profile=profile)
         return PromptPieces(

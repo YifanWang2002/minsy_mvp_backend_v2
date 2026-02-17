@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 from src.engine.feature.indicators import IndicatorCategory, IndicatorRegistry
 from src.engine.strategy import (
@@ -28,6 +28,11 @@ from src.engine.strategy import (
     rollback_strategy_dsl,
     upsert_strategy_dsl,
     validate_strategy_payload,
+)
+from src.mcp.context_auth import (
+    McpContextClaims,
+    decode_mcp_context_token,
+    extract_mcp_context_token,
 )
 from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
 from src.models import database as db_module
@@ -296,14 +301,106 @@ async def _new_db_session():
 async def _get_owned_strategy(
     *,
     db: Any,
-    session_id: UUID,
     strategy_id: UUID,
+    session_id: UUID | None = None,
+    user_id: UUID | None = None,
 ) -> Any:
-    session_user_id = await get_session_user_id(db, session_id=session_id)
+    resolved_user_id = user_id
+    if session_id is not None:
+        session_user_id = await get_session_user_id(db, session_id=session_id)
+        if resolved_user_id is not None and session_user_id != resolved_user_id:
+            raise StrategyStorageNotFoundError(_OWNERSHIP_MISMATCH_ERROR)
+        resolved_user_id = session_user_id
+
+    if resolved_user_id is None:
+        raise StrategyStorageNotFoundError(
+            "Missing strategy ownership context: provide session_id or MCP context."
+        )
+
     strategy = await get_strategy_or_raise(db, strategy_id=strategy_id)
-    if strategy.user_id != session_user_id:
+    if strategy.user_id != resolved_user_id:
         raise StrategyStorageNotFoundError(_OWNERSHIP_MISMATCH_ERROR)
     return strategy
+
+
+def _resolve_context_claims(ctx: Context | None) -> McpContextClaims | None:
+    if ctx is None:
+        return None
+
+    try:
+        request = ctx.request_context.request
+    except Exception:  # noqa: BLE001
+        return None
+    headers = getattr(request, "headers", None)
+    token = extract_mcp_context_token(headers)
+    if token is None:
+        return None
+    return decode_mcp_context_token(token)
+
+
+def _resolve_session_uuid(
+    *,
+    session_id: str,
+    claims: McpContextClaims | None,
+    required: bool,
+) -> UUID | None:
+    explicit_session_uuid: UUID | None = None
+    if session_id.strip():
+        explicit_session_uuid = _parse_uuid(session_id, "session_id")
+
+    context_session_uuid = claims.session_id if claims is not None else None
+    if (
+        explicit_session_uuid is not None
+        and context_session_uuid is not None
+        and explicit_session_uuid != context_session_uuid
+    ):
+        raise ValueError("session_id does not match MCP context session.")
+
+    resolved = explicit_session_uuid or context_session_uuid
+    if required and resolved is None:
+        raise ValueError("session_id is required (argument or MCP context).")
+    return resolved
+
+
+async def _assert_session_matches_context_user(
+    *,
+    db: Any,
+    session_id: UUID | None,
+    claims: McpContextClaims | None,
+) -> None:
+    if session_id is None or claims is None:
+        return
+    session_user_id = await get_session_user_id(db, session_id=session_id)
+    if session_user_id != claims.user_id:
+        raise StrategyStorageNotFoundError(_OWNERSHIP_MISMATCH_ERROR)
+
+
+def _resolve_context_user_id(claims: McpContextClaims | None) -> UUID | None:
+    if claims is None:
+        return None
+    return claims.user_id
+
+
+async def _resolve_owned_strategy(
+    *,
+    db: Any,
+    strategy_id: UUID,
+    session_id: str,
+    ctx: Context | None,
+) -> Any:
+    claims = _resolve_context_claims(ctx)
+    session_uuid = _resolve_session_uuid(
+        session_id=session_id,
+        claims=claims,
+        required=False,
+    )
+    user_uuid = _resolve_context_user_id(claims)
+    return await _get_owned_strategy(
+        db=db,
+        strategy_id=strategy_id,
+        session_id=session_uuid,
+        user_id=user_uuid,
+    )
 
 
 def _parse_expected_version(expected_version: int) -> int | None:
@@ -533,6 +630,7 @@ def get_indicator_catalog(category: str = "") -> str:
 async def strategy_validate_dsl(
     dsl_json: str,
     session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
         payload = _parse_payload(dsl_json)
@@ -544,17 +642,20 @@ async def strategy_validate_dsl(
             error_message=str(exc),
         )
 
-    session_uuid: UUID | None = None
-    if session_id.strip():
-        try:
-            session_uuid = _parse_uuid(session_id, "session_id")
-        except ValueError as exc:
-            return _payload(
-                tool="strategy_validate_dsl",
-                ok=False,
-                error_code="INVALID_INPUT",
-                error_message=str(exc),
-            )
+    try:
+        claims = _resolve_context_claims(ctx)
+        session_uuid = _resolve_session_uuid(
+            session_id=session_id,
+            claims=claims,
+            required=False,
+        )
+    except ValueError as exc:
+        return _payload(
+            tool="strategy_validate_dsl",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
 
     validation = validate_strategy_payload(payload)
     if not validation.is_valid:
@@ -576,6 +677,11 @@ async def strategy_validate_dsl(
     if session_uuid is not None:
         try:
             async with await _new_db_session() as db:
+                await _assert_session_matches_context_user(
+                    db=db,
+                    session_id=session_uuid,
+                    claims=claims,
+                )
                 session_user_id = await get_session_user_id(db, session_id=session_uuid)
             draft = await create_strategy_draft(
                 user_id=session_user_id,
@@ -609,12 +715,18 @@ async def strategy_validate_dsl(
 
 
 async def strategy_upsert_dsl(
-    session_id: str,
     dsl_json: str,
     strategy_id: str = "",
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
+        claims = _resolve_context_claims(ctx)
+        session_uuid = _resolve_session_uuid(
+            session_id=session_id,
+            claims=claims,
+            required=True,
+        )
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id") if strategy_id.strip() else None
         payload = _parse_payload(dsl_json)
     except ValueError as exc:
@@ -627,6 +739,11 @@ async def strategy_upsert_dsl(
 
     try:
         async with await _new_db_session() as db:
+            await _assert_session_matches_context_user(
+                db=db,
+                session_id=session_uuid,
+                claims=claims,
+            )
             result = await upsert_strategy_dsl(
                 db,
                 session_id=session_uuid,
@@ -669,11 +786,11 @@ async def strategy_upsert_dsl(
 
 
 async def strategy_get_dsl(
-    session_id: str,
     strategy_id: str,
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
     except ValueError as exc:
         return _payload(
@@ -685,11 +802,19 @@ async def strategy_get_dsl(
 
     try:
         async with await _new_db_session() as db:
-            strategy = await _get_owned_strategy(
+            strategy = await _resolve_owned_strategy(
                 db=db,
-                session_id=session_uuid,
                 strategy_id=strategy_uuid,
+                session_id=session_id,
+                ctx=ctx,
             )
+    except ValueError as exc:
+        return _payload(
+            tool="strategy_get_dsl",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
     except StrategyStorageNotFoundError as exc:
         return _payload(
             tool="strategy_get_dsl",
@@ -718,11 +843,11 @@ async def strategy_get_dsl(
 
 
 async def strategy_list_tunable_params(
-    session_id: str,
     strategy_id: str,
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
     except ValueError as exc:
         return _payload(
@@ -734,11 +859,19 @@ async def strategy_list_tunable_params(
 
     try:
         async with await _new_db_session() as db:
-            strategy = await _get_owned_strategy(
+            strategy = await _resolve_owned_strategy(
                 db=db,
-                session_id=session_uuid,
                 strategy_id=strategy_uuid,
+                session_id=session_id,
+                ctx=ctx,
             )
+    except ValueError as exc:
+        return _payload(
+            tool="strategy_list_tunable_params",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
     except StrategyStorageNotFoundError as exc:
         return _payload(
             tool="strategy_list_tunable_params",
@@ -819,13 +952,19 @@ async def strategy_list_tunable_params(
 
 
 async def strategy_patch_dsl(
-    session_id: str,
     strategy_id: str,
     patch_json: str,
     expected_version: int = 0,
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
+        claims = _resolve_context_claims(ctx)
+        session_uuid = _resolve_session_uuid(
+            session_id=session_id,
+            claims=claims,
+            required=True,
+        )
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
         patch_ops = _parse_patch_ops(patch_json)
         parsed_expected_version = _parse_expected_version(expected_version)
@@ -839,6 +978,11 @@ async def strategy_patch_dsl(
 
     try:
         async with await _new_db_session() as db:
+            await _assert_session_matches_context_user(
+                db=db,
+                session_id=session_uuid,
+                claims=claims,
+            )
             result = await patch_strategy_dsl(
                 db,
                 session_id=session_uuid,
@@ -897,12 +1041,18 @@ async def strategy_patch_dsl(
 
 
 async def strategy_list_versions(
-    session_id: str,
     strategy_id: str,
     limit: int = 20,
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
+        claims = _resolve_context_claims(ctx)
+        session_uuid = _resolve_session_uuid(
+            session_id=session_id,
+            claims=claims,
+            required=True,
+        )
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
         if not isinstance(limit, int):
             raise ValueError("limit must be an integer")
@@ -918,6 +1068,11 @@ async def strategy_list_versions(
 
     try:
         async with await _new_db_session() as db:
+            await _assert_session_matches_context_user(
+                db=db,
+                session_id=session_uuid,
+                claims=claims,
+            )
             versions = await list_strategy_versions(
                 db,
                 session_id=session_uuid,
@@ -951,12 +1106,18 @@ async def strategy_list_versions(
 
 
 async def strategy_get_version_dsl(
-    session_id: str,
     strategy_id: str,
     version: int,
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
+        claims = _resolve_context_claims(ctx)
+        session_uuid = _resolve_session_uuid(
+            session_id=session_id,
+            claims=claims,
+            required=True,
+        )
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
         if not isinstance(version, int):
             raise ValueError("version must be an integer")
@@ -972,6 +1133,11 @@ async def strategy_get_version_dsl(
 
     try:
         async with await _new_db_session() as db:
+            await _assert_session_matches_context_user(
+                db=db,
+                session_id=session_uuid,
+                claims=claims,
+            )
             resolved = await get_strategy_version_payload(
                 db,
                 session_id=session_uuid,
@@ -1013,13 +1179,19 @@ async def strategy_get_version_dsl(
 
 
 async def strategy_diff_versions(
-    session_id: str,
     strategy_id: str,
     from_version: int,
     to_version: int,
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
+        claims = _resolve_context_claims(ctx)
+        session_uuid = _resolve_session_uuid(
+            session_id=session_id,
+            claims=claims,
+            required=True,
+        )
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
         if not isinstance(from_version, int) or not isinstance(to_version, int):
             raise ValueError("from_version and to_version must be integers")
@@ -1035,6 +1207,11 @@ async def strategy_diff_versions(
 
     try:
         async with await _new_db_session() as db:
+            await _assert_session_matches_context_user(
+                db=db,
+                session_id=session_uuid,
+                claims=claims,
+            )
             diff_result = await diff_strategy_versions(
                 db,
                 session_id=session_uuid,
@@ -1080,13 +1257,19 @@ async def strategy_diff_versions(
 
 
 async def strategy_rollback_dsl(
-    session_id: str,
     strategy_id: str,
     target_version: int,
     expected_version: int = 0,
+    session_id: str = "",
+    ctx: Context | None = None,
 ) -> str:
     try:
-        session_uuid = _parse_uuid(session_id, "session_id")
+        claims = _resolve_context_claims(ctx)
+        session_uuid = _resolve_session_uuid(
+            session_id=session_id,
+            claims=claims,
+            required=True,
+        )
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id")
         if not isinstance(target_version, int):
             raise ValueError("target_version must be an integer")
@@ -1103,6 +1286,11 @@ async def strategy_rollback_dsl(
 
     try:
         async with await _new_db_session() as db:
+            await _assert_session_matches_context_user(
+                db=db,
+                session_id=session_uuid,
+                claims=claims,
+            )
             result = await rollback_strategy_dsl(
                 db,
                 session_id=session_uuid,

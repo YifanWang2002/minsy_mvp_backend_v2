@@ -72,12 +72,15 @@ async def create_backtest_job(
     initial_capital: float = 100_000.0,
     commission_rate: float = 0.0,
     slippage_bps: float = 0.0,
+    user_id: UUID | None = None,
     auto_commit: bool = True,
 ) -> BacktestJobReceipt:
     """Create a queued backtest job."""
 
     strategy = await db.scalar(select(Strategy).where(Strategy.id == strategy_id))
     if strategy is None:
+        raise BacktestStrategyNotFoundError(f"Strategy not found: {strategy_id}")
+    if user_id is not None and strategy.user_id != user_id:
         raise BacktestStrategyNotFoundError(f"Strategy not found: {strategy_id}")
 
     initial_capital_value, commission_rate_value, slippage_bps_value = (
@@ -94,6 +97,9 @@ async def create_backtest_job(
         "initial_capital": initial_capital_value,
         "commission_rate": commission_rate_value,
         "slippage_bps": slippage_bps_value,
+        # Snapshot the strategy version at submission time so historical
+        # analytics can be resolved per version reliably.
+        "strategy_version": int(strategy.version),
     }
     job = BacktestJob(
         strategy_id=strategy.id,
@@ -238,11 +244,14 @@ async def get_backtest_job_view(
     db: AsyncSession,
     *,
     job_id: UUID,
+    user_id: UUID | None = None,
 ) -> BacktestJobView:
     """Get status and optional result payload for one job."""
 
     job = await db.scalar(select(BacktestJob).where(BacktestJob.id == job_id))
     if job is None:
+        raise BacktestJobNotFoundError(f"Backtest job not found: {job_id}")
+    if user_id is not None and job.user_id != user_id:
         raise BacktestJobNotFoundError(f"Backtest job not found: {job_id}")
     return _to_view(job)
 
