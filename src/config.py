@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     """Runtime settings for API, infrastructure and middleware."""
 
     app_name: str = Field(default="Minsy", alias="APP_NAME")
-    app_env: str = Field(default="development", alias="APP_ENV")
+    app_env: str = Field(default="dev", alias="APP_ENV")
     debug: bool = Field(default=True, alias="DEBUG")
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
@@ -43,7 +43,6 @@ class Settings(BaseSettings):
     auth_rate_limit: int = Field(default=30, alias="AUTH_RATE_LIMIT")
     auth_rate_window: int = Field(default=60, alias="AUTH_RATE_WINDOW")
     openai_response_model: str = Field(default="gpt-5.2", alias="OPENAI_RESPONSE_MODEL")
-    mcp_env: str = Field(default="prod", alias="MCP_ENV")
     mcp_server_url_dev: str = Field(
         default="https://dev.minsyai.com/mcp",
         alias="MCP_SERVER_URL_DEV",
@@ -215,11 +214,28 @@ class Settings(BaseSettings):
         return self.redis_url
 
     @property
+    def runtime_env(self) -> str:
+        """Normalized runtime environment key for cross-cutting feature switches."""
+        raw = self.app_env.strip().lower()
+        if raw in {"dev", "development", "local"}:
+            return "dev"
+        if raw in {"prod", "production"}:
+            return "prod"
+        if raw in {"test", "testing"}:
+            return "test"
+        return raw
+
+    @property
+    def is_dev_mode(self) -> bool:
+        """Whether app runs in local/development mode."""
+        return self.runtime_env in {"dev", "test"}
+
+    @property
     def mcp_server_url(self) -> str:
-        mode = self.mcp_env.strip().lower()
-        if mode in {"dev", "development", "local"}:
-            return self.mcp_server_url_dev
-        return self.mcp_server_url_prod
+        """Resolve MCP server URL from the unified APP_ENV mode switch."""
+        if self.runtime_env == "prod":
+            return self.mcp_server_url_prod
+        return self.mcp_server_url_dev
 
     @property
     def strategy_mcp_server_url(self) -> str:

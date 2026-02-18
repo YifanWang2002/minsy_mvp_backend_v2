@@ -132,13 +132,12 @@ brew install ta-lib p7zip
 #### 配置方式（`.env` 示例）
 ```env
 APP_NAME=Minsy
-APP_ENV=development
+APP_ENV=dev
 DEBUG=true
 API_V1_PREFIX=/api/v1
 
 OPENAI_API_KEY=<your_openai_api_key>
 OPENAI_RESPONSE_MODEL=gpt-5
-MCP_ENV=dev
 MCP_SERVER_URL_DEV=http://127.0.0.1:8111/mcp
 MCP_SERVER_URL_PROD=https://mcp.minsyai.com/mcp
 
@@ -157,6 +156,9 @@ POSTGRES_PG_DUMP_BIN=pg_dump
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
 REDIS_DB=0
+
+# APP_ENV=prod 时生效；APP_ENV=dev 会放开 origin 限制
+CORS_ORIGINS=["https://app.minsyai.com"]
 
 USER_EMAIL_CSV_EXPORT_ENABLED=true
 USER_EMAIL_CSV_PATH=exports/user_emails.csv
@@ -399,6 +401,9 @@ backend/
 
 #### `.env`
 - 文件作用：运行时环境变量（OpenAI、MCP、PostgreSQL、Redis、JWT、CORS、Celery 等）。
+
+#### `.env.example`
+- 文件作用：环境变量模板与分组说明；约定 `APP_ENV` 为统一 dev/prod 开关（同时控制 MCP 目标和 CORS 策略）。
 
 #### `.github/workflows/deploy.yml`
 - 文件作用：主分支推送后通过 SSH 部署到 GCP VM，包含依赖同步、Caddy 更新与服务重启。

@@ -15,7 +15,6 @@ ALL_SETTING_KEYS = [
     "LOG_LEVEL",
     "CHAT_DEBUG_TRACE_ENABLED",
     "OPENAI_API_KEY",
-    "MCP_ENV",
     "MCP_SERVER_URL_DEV",
     "MCP_SERVER_URL_PROD",
     "MCP_SERVER_URL",
@@ -131,7 +130,7 @@ def test_mcp_server_url_uses_env_file_values_over_process_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("MCP_ENV", "prod")
+    monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("MCP_SERVER_URL_DEV", "https://process.dev/mcp")
     monkeypatch.setenv("MCP_SERVER_URL_PROD", "https://process.prod/mcp")
     monkeypatch.setenv("MCP_SERVER_URL", "https://process.override/mcp")
@@ -142,7 +141,7 @@ def test_mcp_server_url_uses_env_file_values_over_process_env(
             [
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
-                "MCP_ENV=dev",
+                "APP_ENV=dev",
                 "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
                 "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
             ]
@@ -151,7 +150,7 @@ def test_mcp_server_url_uses_env_file_values_over_process_env(
     )
 
     settings = Settings(_env_file=env_file)
-    assert settings.mcp_env == "dev"
+    assert settings.runtime_env == "dev"
     assert settings.mcp_server_url_dev == "https://dotenv.dev/mcp"
     assert settings.mcp_server_url_prod == "https://dotenv.prod/mcp"
     assert settings.mcp_server_url == "https://dotenv.dev/mcp"
@@ -170,7 +169,7 @@ def test_mcp_server_url_ignores_legacy_override_key(
             [
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
-                "MCP_ENV=prod",
+                "APP_ENV=prod",
                 "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
                 "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
             ]
@@ -180,6 +179,67 @@ def test_mcp_server_url_ignores_legacy_override_key(
 
     settings = Settings(_env_file=env_file)
     assert settings.mcp_server_url == "https://dotenv.prod/mcp"
+
+
+def test_mcp_server_url_is_controlled_by_app_env_not_legacy_mcp_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("MCP_ENV", "prod")
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=dev",
+                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
+                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.mcp_server_url == "https://dotenv.dev/mcp"
+
+
+def test_runtime_env_aliases_and_dev_mode_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=development",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.runtime_env == "dev"
+    assert settings.is_dev_mode is True
+
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=production",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    prod_settings = Settings(_env_file=env_file)
+    assert prod_settings.runtime_env == "prod"
+    assert prod_settings.is_dev_mode is False
 
 
 def test_effective_mcp_context_secret_falls_back_to_secret_key(
