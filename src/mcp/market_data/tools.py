@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
 import time
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from functools import lru_cache
+from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import yfinance as yf
 from mcp.server.fastmcp import FastMCP
+from platformdirs import user_cache_dir
 
 from src.engine import DataLoader
 from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
@@ -88,10 +95,156 @@ _KNOWN_FUTURES_YF_MAP: dict[str, str] = {
     "ZB": "ZB=F",
 }
 
+_YF_GUARD_LOCK = Lock()
+
 
 @lru_cache(maxsize=1)
 def _get_data_loader() -> DataLoader:
     return DataLoader()
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _yf_guard_state_file() -> Path:
+    configured = os.getenv("YF_CACHE_GUARD_STATE_FILE", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path("/tmp/minsy_yfinance_guard_state.json")
+
+
+def _yf_guard_limit() -> int:
+    return max(1, _parse_int_env("YF_CACHE_GUARD_LIMIT", 800))
+
+
+def _yf_guard_buffer() -> int:
+    return max(0, _parse_int_env("YF_CACHE_GUARD_BUFFER", 80))
+
+
+def _yf_guard_trigger(limit: int, buffer: int) -> int:
+    # Trigger a little before hard limit; at least 1.
+    return max(1, limit - min(buffer, limit - 1))
+
+
+def _load_yf_guard_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_yf_guard_state(path: Path, state: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(state, ensure_ascii=True)
+    path.write_text(payload, encoding="utf-8")
+
+
+def _resolve_yfinance_cache_dir() -> Path:
+    configured = os.getenv("YF_CACHE_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path(user_cache_dir()) / "py-yfinance"
+
+
+def _clear_yfinance_cache() -> None:
+    """Clear yfinance persistent + in-memory cache best-effort."""
+    try:
+        from yfinance import cache as yf_cache
+
+        for manager_name in ("_CookieDBManager", "_TzDBManager", "_ISINDBManager"):
+            manager = getattr(yf_cache, manager_name, None)
+            close_db = getattr(manager, "close_db", None)
+            if callable(close_db):
+                close_db()
+    except Exception:  # noqa: BLE001
+        pass
+
+    cache_dir = _resolve_yfinance_cache_dir()
+    for pattern in (
+        "cookies.db*",
+        "tkr-tz.db*",
+        "isin-tkr.db*",
+    ):
+        for cache_file in cache_dir.glob(pattern):
+            try:
+                if cache_file.is_file():
+                    cache_file.unlink(missing_ok=True)
+                elif cache_file.is_dir():
+                    shutil.rmtree(cache_file, ignore_errors=True)
+            except Exception:  # noqa: BLE001
+                continue
+
+    try:
+        from yfinance import data as yf_data
+
+        yf_data_singleton = yf_data.YfData()
+        cache_get = getattr(yf_data_singleton, "cache_get", None)
+        if callable(getattr(cache_get, "cache_clear", None)):
+            cache_get.cache_clear()
+        session = getattr(yf_data_singleton, "_session", None)
+        if session is not None and hasattr(session, "cookies"):
+            session.cookies.clear()
+        yf_data_singleton._cookie = None
+        yf_data_singleton._crumb = None
+        yf_data_singleton._cookie_strategy = "basic"
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _record_yf_request_and_maybe_clear_cache() -> None:
+    """Track yfinance usage locally and clear cache near configured limit."""
+    if not _parse_bool_env("YF_CACHE_GUARD_ENABLED", True):
+        return
+
+    state_file = _yf_guard_state_file()
+    limit = _yf_guard_limit()
+    buffer = _yf_guard_buffer()
+    trigger = _yf_guard_trigger(limit, buffer)
+    today = datetime.now(UTC).date().isoformat()
+
+    with _YF_GUARD_LOCK:
+        state = _load_yf_guard_state(state_file)
+        if str(state.get("date")) != today:
+            state = {
+                "date": today,
+                "count": 0,
+                "limit": limit,
+                "buffer": buffer,
+                "trigger": trigger,
+                "clear_count": 0,
+                "last_clear_utc": "",
+            }
+
+        count = int(state.get("count", 0))
+        count += 1
+        state["count"] = count
+        state["limit"] = limit
+        state["buffer"] = buffer
+        state["trigger"] = trigger
+
+        if count >= trigger:
+            _clear_yfinance_cache()
+            state["count"] = 0
+            state["clear_count"] = int(state.get("clear_count", 0)) + 1
+            state["last_clear_utc"] = utc_now_iso()
+
+        _save_yf_guard_state(state_file, state)
 
 
 def _payload(
@@ -348,18 +501,50 @@ def _ticker_fast_info_summary(
 
 def _is_rate_limit_error(exc: Exception) -> bool:
     error_text = str(exc).lower()
-    return "too many requests" in error_text or "rate limit" in error_text
+    hints = (
+        "too many requests",
+        "rate limit",
+        "status=429",
+        "status code=429",
+        "response code=429",
+        "http 429",
+        "429 client error",
+        "yf ratelimiterror",
+    )
+    return any(hint in error_text for hint in hints)
 
 
 def _retry_yfinance_call(func: Any, *args: Any, **kwargs: Any) -> Any:
     delays = (0.6, 1.2)
     for attempt in range(len(delays) + 1):
         try:
+            _record_yf_request_and_maybe_clear_cache()
             return func(*args, **kwargs)
         except Exception as exc:  # noqa: BLE001
             if attempt >= len(delays) or not _is_rate_limit_error(exc):
                 raise
+            _clear_yfinance_cache()
             time.sleep(delays[attempt])
+
+
+def _retry_optional_yfinance_call(
+    func: Any,
+    *args: Any,
+    default: Any,
+    **kwargs: Any,
+) -> Any:
+    """Best-effort fetch for optional yfinance endpoints.
+
+    Some endpoints (notably ``Ticker.info``) are far more prone to Yahoo 429s
+    than others. For these optional fields we degrade gracefully instead of
+    failing the entire tool call.
+    """
+    try:
+        return _retry_yfinance_call(func, *args, **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        if _is_rate_limit_error(exc):
+            return default
+        raise
 
 
 def _history_to_records(history_df: Any) -> list[dict[str, Any]]:
@@ -538,7 +723,11 @@ def get_symbol_quote(symbol: str, market: str) -> str:
         yfinance_symbol: str,
         ticker: yf.Ticker,
     ) -> str:
-        summary = _retry_yfinance_call(_ticker_info_summary, ticker)
+        summary = _retry_optional_yfinance_call(
+            _ticker_info_summary,
+            ticker,
+            default={},
+        )
         if not summary:
             summary = _ticker_fast_info_summary(
                 ticker,
@@ -713,7 +902,12 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
         yfinance_symbol: str,
         ticker: yf.Ticker,
     ) -> str:
-        info = _coerce_mapping(_retry_yfinance_call(lambda: ticker.info))
+        info = _coerce_mapping(
+            _retry_optional_yfinance_call(
+                lambda: ticker.info,
+                default={},
+            )
+        )
         metadata_source = "info"
         if not info:
             info = _ticker_fast_info_summary(

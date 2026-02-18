@@ -109,6 +109,8 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = Field(
         default_factory=lambda: [
+            "https://app.minsyai.com",
+            "https://dev.minsyai.com",
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:5173",
@@ -117,6 +119,10 @@ class Settings(BaseSettings):
             "http://127.0.0.1:8080",
         ],
         alias="CORS_ORIGINS",
+    )
+    cors_origin_regex: str | None = Field(
+        default=r"^http://(localhost|127\.0\.0\.1)(:\d+)?$",
+        alias="CORS_ORIGIN_REGEX",
     )
 
     model_config = SettingsConfigDict(
@@ -153,6 +159,14 @@ class Settings(BaseSettings):
             if normalized.startswith("["):
                 return json.loads(normalized)
             return [item.strip() for item in normalized.split(",") if item.strip()]
+        return value
+
+    @field_validator("cors_origin_regex", mode="before")
+    @classmethod
+    def _parse_cors_origin_regex(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
         return value
 
     @field_validator("postgres_backup_retention_count")
@@ -212,6 +226,20 @@ class Settings(BaseSettings):
         if isinstance(self.celery_result_backend, str) and self.celery_result_backend.strip():
             return self.celery_result_backend.strip()
         return self.redis_url
+
+    @property
+    def effective_cors_origins(self) -> list[str]:
+        """CORS allow-list with required first-party web origins included."""
+        required = ("https://app.minsyai.com", "https://dev.minsyai.com")
+        merged: list[str] = []
+        seen: set[str] = set()
+        for origin in (*self.cors_origins, *required):
+            normalized = origin.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(normalized)
+        return merged
 
     @property
     def runtime_env(self) -> str:

@@ -23,6 +23,41 @@ jobs:
             export PATH="$HOME/.local/bin:$PATH"
             cd /home/yifan/minsy_mvp_backend_v2
 
+            # ── Pre-deploy backup ────────────────────────────────
+            echo "=== Pre-deploy backup ==="
+            BACKUP_DIR="backups/postgres"
+            EXPORT_DIR="exports"
+            STAMP=$(date -u +"%Y%m%d_%H%M%S")
+            DB_NAME=$(grep -oP '^POSTGRES_DB=\K.*' .env || echo "minsy_pgsql")
+            DB_USER=$(grep -oP '^POSTGRES_USER=\K.*' .env || echo "postgres")
+            DB_HOST=$(grep -oP '^POSTGRES_HOST=\K.*' .env || echo "localhost")
+            DB_PORT=$(grep -oP '^POSTGRES_PORT=\K.*' .env || echo "5432")
+            DB_PASS=$(grep -oP '^POSTGRES_PASSWORD=\K.*' .env || echo "")
+
+            mkdir -p "$BACKUP_DIR" "$EXPORT_DIR"
+
+            BACKUP_FILE="$BACKUP_DIR/${DB_NAME}_predeploy_${STAMP}.dump"
+            PGPASSWORD="$DB_PASS" pg_dump \
+              --format=custom --clean --if-exists --no-owner --no-privileges \
+              --host "$DB_HOST" --port "$DB_PORT" \
+              --username "$DB_USER" --dbname "$DB_NAME" \
+              --file "$BACKUP_FILE" \
+              && echo "DB backup saved: $BACKUP_FILE ($(stat -c%s "$BACKUP_FILE") bytes)" \
+              || echo "WARNING: pg_dump failed, continuing deploy"
+
+            PGPASSWORD="$DB_PASS" psql \
+              -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+              -t -A -c "SELECT email FROM users ORDER BY email" \
+              > "$EXPORT_DIR/user_emails_predeploy_${STAMP}.csv" 2>/dev/null \
+              && echo "User emails exported." \
+              || echo "WARNING: email export failed, continuing deploy"
+
+            # Keep only the latest 14 pre-deploy backups
+            ls -1t "$BACKUP_DIR"/*_predeploy_*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f
+
+            echo "=== Backup complete ==="
+
+            # ── Deploy ───────────────────────────────────────────
             # 备份 .env（不在 git 中管理）
             cp .env .env.bak
 
@@ -47,9 +82,11 @@ jobs:
             sudo systemctl restart minsy-fastapi
             sudo systemctl restart minsy-mcp
             sudo systemctl restart minsy-celery
+            sudo systemctl restart minsy-celery-beat
 
             # 健康检查
             sudo systemctl is-active --quiet minsy-fastapi
             sudo systemctl is-active --quiet minsy-mcp
             sudo systemctl is-active --quiet minsy-celery
+            sudo systemctl is-active --quiet minsy-celery-beat
             echo "Deploy success."

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -175,6 +176,100 @@ def _make_non_mapping_info_yfinance_ticker_class() -> type:
     return NonMappingInfoTicker
 
 
+def _make_rate_limited_info_yfinance_ticker_class() -> type:
+    class RateLimitedInfoTicker:
+        def __init__(self, symbol: str) -> None:
+            self.symbol = symbol
+
+        @property
+        def info(self) -> dict[str, Any]:
+            raise RuntimeError("Too Many Requests. Rate limited")
+
+        @property
+        def fast_info(self) -> dict[str, Any]:
+            return {
+                "lastPrice": 321.0,
+                "open": 319.0,
+                "dayHigh": 325.0,
+                "dayLow": 315.0,
+                "lastVolume": 123456.0,
+                "currency": "USD",
+                "exchange": "NMS",
+            }
+
+        def history(self, **_: Any) -> pd.DataFrame:
+            index = pd.date_range("2025-01-01 00:00:00", periods=2, freq="1d", tz="UTC")
+            return pd.DataFrame(
+                {
+                    "Open": [318.0, 320.0],
+                    "High": [323.0, 326.0],
+                    "Low": [316.0, 319.0],
+                    "Close": [322.0, 324.0],
+                    "Volume": [111111.0, 222222.0],
+                },
+                index=index,
+            )
+
+    return RateLimitedInfoTicker
+
+
+def test_yf_cache_guard_clears_cache_when_near_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_file = tmp_path / "yf_guard_state.json"
+    monkeypatch.setenv("YF_CACHE_GUARD_ENABLED", "1")
+    monkeypatch.setenv("YF_CACHE_GUARD_LIMIT", "3")
+    monkeypatch.setenv("YF_CACHE_GUARD_BUFFER", "1")
+    monkeypatch.setenv("YF_CACHE_GUARD_STATE_FILE", str(state_file))
+
+    clear_calls: list[str] = []
+    monkeypatch.setattr(market_tools, "_clear_yfinance_cache", lambda: clear_calls.append("cleared"))
+
+    market_tools._record_yf_request_and_maybe_clear_cache()
+    assert clear_calls == []
+    first = market_tools._load_yf_guard_state(state_file)
+    assert int(first["count"]) == 1
+    assert int(first["trigger"]) == 2
+
+    market_tools._record_yf_request_and_maybe_clear_cache()
+    second = market_tools._load_yf_guard_state(state_file)
+    assert clear_calls == ["cleared"]
+    assert int(second["count"]) == 0
+    assert int(second["clear_count"]) == 1
+    assert isinstance(second.get("last_clear_utc"), str) and second["last_clear_utc"]
+
+
+def test_yf_cache_guard_resets_counter_on_new_day(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_file = tmp_path / "yf_guard_state.json"
+    monkeypatch.setenv("YF_CACHE_GUARD_ENABLED", "1")
+    monkeypatch.setenv("YF_CACHE_GUARD_LIMIT", "100")
+    monkeypatch.setenv("YF_CACHE_GUARD_BUFFER", "20")
+    monkeypatch.setenv("YF_CACHE_GUARD_STATE_FILE", str(state_file))
+    monkeypatch.setattr(market_tools, "_clear_yfinance_cache", lambda: None)
+
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+    stale = {
+        "date": yesterday,
+        "count": 99,
+        "limit": 100,
+        "buffer": 20,
+        "trigger": 80,
+        "clear_count": 7,
+        "last_clear_utc": "2026-01-01T00:00:00Z",
+    }
+    market_tools._save_yf_guard_state(state_file, stale)
+
+    market_tools._record_yf_request_and_maybe_clear_cache()
+    refreshed = market_tools._load_yf_guard_state(state_file)
+    assert refreshed["date"] != yesterday
+    assert int(refreshed["count"]) == 1
+    assert int(refreshed["clear_count"]) == 0
+
+
 @pytest.mark.asyncio
 async def test_local_data_tools(loader_with_mock_parquet: DataLoader, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
@@ -289,6 +384,36 @@ async def test_quote_and_metadata_handle_non_mapping_info(
     assert metadata_payload["ok"] is True
     assert metadata_payload["metadata_source"] == "fast_info"
     assert metadata_payload["metadata"]["regularMarketPrice"] == 456.78
+
+
+@pytest.mark.asyncio
+async def test_quote_and_metadata_fallback_when_info_rate_limited(
+    loader_with_mock_parquet: DataLoader,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_tools, "_get_data_loader", lambda: loader_with_mock_parquet)
+    rate_limited_ticker = _make_rate_limited_info_yfinance_ticker_class()
+    monkeypatch.setattr(market_tools.yf, "Ticker", rate_limited_ticker)
+
+    mcp = FastMCP("test-market-data-rate-limited-info-fallback")
+    market_tools.register_market_data_tools(mcp)
+
+    quote_call = await mcp.call_tool(
+        "get_symbol_quote",
+        {"market": "stock", "symbol": "AAPL"},
+    )
+    quote_payload = _extract_payload(quote_call)
+    assert quote_payload["ok"] is True
+    assert quote_payload["quote"]["regularMarketPrice"] == 321.0
+
+    metadata_call = await mcp.call_tool(
+        "get_symbol_metadata",
+        {"market": "stock", "symbol": "AAPL"},
+    )
+    metadata_payload = _extract_payload(metadata_call)
+    assert metadata_payload["ok"] is True
+    assert metadata_payload["metadata_source"] == "fast_info"
+    assert metadata_payload["metadata"]["regularMarketPrice"] == 321.0
 
 
 @pytest.mark.asyncio
