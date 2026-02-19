@@ -8,6 +8,7 @@ from src.models.session import Message, Session
 from src.models.strategy import Strategy
 from src.models.strategy_revision import StrategyRevision
 from src.models.user import User, UserProfile
+from src.models.user_settings import UserSetting
 
 __all__ = [
     "BacktestJob",
@@ -20,4 +21,5 @@ __all__ = [
     "StrategyRevision",
     "User",
     "UserProfile",
+    "UserSetting",
 ]

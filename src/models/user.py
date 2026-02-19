@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from src.models.deployment import Deployment
     from src.models.session import Session
     from src.models.strategy import Strategy
+    from src.models.user_settings import UserSetting
 
 
 class User(Base):
@@ -32,6 +33,11 @@ class User(Base):
         server_default=text("true"),
     )
 
+    settings: Mapped[UserSetting | None] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
     profiles: Mapped[list[UserProfile]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",

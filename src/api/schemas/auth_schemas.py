@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -53,6 +54,25 @@ class UserResponse(BaseModel):
     name: str
     kyc_status: str
     created_at: datetime
+
+
+ThemeModeValue = Literal["light", "dark", "system"]
+LocaleValue = Literal["en", "zh"]
+FontScaleValue = Literal["small", "default", "large"]
+
+
+class UserPreferencesResponse(BaseModel):
+    theme_mode: ThemeModeValue
+    locale: LocaleValue
+    font_scale: FontScaleValue
+    has_persisted: bool
+    updated_at: datetime | None = None
+
+
+class UpdateUserPreferencesRequest(BaseModel):
+    theme_mode: ThemeModeValue
+    locale: LocaleValue
+    font_scale: FontScaleValue
 
 
 class DetailResponse(BaseModel):

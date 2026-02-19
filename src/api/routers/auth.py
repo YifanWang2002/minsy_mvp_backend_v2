@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.middleware.auth import get_current_user
@@ -16,11 +17,19 @@ from src.api.schemas.auth_schemas import (
     RefreshRequest,
     RegisterRequest,
     TokenResponse,
+    UpdateUserPreferencesRequest,
+    UserPreferencesResponse,
     UserResponse,
 )
 from src.config import settings
 from src.dependencies import get_db
 from src.models.user import User
+from src.models.user_settings import (
+    DEFAULT_FONT_SCALE,
+    DEFAULT_LOCALE,
+    DEFAULT_THEME_MODE,
+    UserSetting,
+)
 from src.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -35,6 +44,24 @@ def _resolve_kyc_status(user: User) -> str:
     if user.profiles:
         return user.profiles[0].kyc_status
     return "incomplete"
+
+
+def _build_preferences_response(setting: UserSetting | None) -> UserPreferencesResponse:
+    if setting is None:
+        return UserPreferencesResponse(
+            theme_mode=DEFAULT_THEME_MODE,
+            locale=DEFAULT_LOCALE,
+            font_scale=DEFAULT_FONT_SCALE,
+            has_persisted=False,
+            updated_at=None,
+        )
+    return UserPreferencesResponse(
+        theme_mode=setting.theme_mode,
+        locale=setting.locale,
+        font_scale=setting.font_scale,
+        has_persisted=True,
+        updated_at=setting.updated_at,
+    )
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
@@ -99,6 +126,37 @@ async def me(
         kyc_status=_resolve_kyc_status(user),
         created_at=user.created_at,
     )
+
+
+@router.get("/preferences", response_model=UserPreferencesResponse)
+async def get_preferences(
+    _: None = Depends(me_rate_limiter),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserPreferencesResponse:
+    setting = await db.scalar(select(UserSetting).where(UserSetting.user_id == user.id))
+    return _build_preferences_response(setting)
+
+
+@router.put("/preferences", response_model=UserPreferencesResponse)
+async def put_preferences(
+    payload: UpdateUserPreferencesRequest,
+    _: None = Depends(me_rate_limiter),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserPreferencesResponse:
+    setting = await db.scalar(select(UserSetting).where(UserSetting.user_id == user.id))
+    if setting is None:
+        setting = UserSetting(user_id=user.id)
+        db.add(setting)
+
+    setting.theme_mode = payload.theme_mode
+    setting.locale = payload.locale
+    setting.font_scale = payload.font_scale
+
+    await db.commit()
+    await db.refresh(setting)
+    return _build_preferences_response(setting)
 
 
 @router.post("/change-password", response_model=DetailResponse)

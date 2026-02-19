@@ -47,6 +47,7 @@ def _import_all_models() -> None:
     import src.models.strategy  # noqa: F401
     import src.models.strategy_revision  # noqa: F401
     import src.models.user  # noqa: F401
+    import src.models.user_settings  # noqa: F401
 
 
 async def _ensure_sessions_phase_constraint() -> None:
