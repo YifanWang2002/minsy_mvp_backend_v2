@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from urllib.parse import quote_plus
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import (
@@ -351,7 +352,46 @@ class Settings(BaseSettings):
             normalized = candidate.strip()
             if normalized:
                 return normalized
+        derived = self._derive_domain_mcp_server_url_from_legacy_base(domain=domain)
+        if isinstance(derived, str):
+            normalized = derived.strip()
+            if normalized:
+                return normalized
         return self.mcp_server_url
+
+    def _derive_domain_mcp_server_url_from_legacy_base(self, *, domain: str) -> str | None:
+        """Auto-derive split-domain MCP URLs for minsyai hosts from legacy /mcp base."""
+        legacy_url = self.mcp_server_url.strip()
+        if not legacy_url:
+            return None
+
+        domain_path_map: dict[str, str] = {
+            "strategy": "strategy",
+            "backtest": "backtest",
+            "market_data": "market",
+            "stress": "stress",
+            "trading": "trading",
+        }
+        domain_path = domain_path_map.get(domain)
+        if domain_path is None:
+            return None
+
+        parsed = urlsplit(legacy_url)
+        host = parsed.netloc.strip().lower()
+        if host not in {"dev.minsyai.com", "mcp.minsyai.com"}:
+            return None
+        if parsed.path.rstrip("/") != "/mcp":
+            return None
+
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                f"/{domain_path}/mcp",
+                parsed.query,
+                parsed.fragment,
+            )
+        )
 
     @property
     def strategy_mcp_server_url(self) -> str:

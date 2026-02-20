@@ -27,10 +27,28 @@ async def lifespan(_: FastAPI):
     ensure_market_data()
 
     logger.info(
-        "Runtime AI config: model=%s, mcp_server=%s",
+        (
+            "Runtime AI config: model=%s, mcp_server_legacy=%s, "
+            "mcp_strategy=%s, mcp_backtest=%s, mcp_market=%s, mcp_stress=%s, mcp_trading=%s"
+        ),
         settings.openai_response_model,
         settings.mcp_server_url,
+        settings.strategy_mcp_server_url,
+        settings.backtest_mcp_server_url,
+        settings.market_data_mcp_server_url,
+        settings.stress_mcp_server_url,
+        settings.trading_mcp_server_url,
     )
+    core_domain_urls = {
+        "strategy": settings.strategy_mcp_server_url,
+        "backtest": settings.backtest_mcp_server_url,
+        "market_data": settings.market_data_mcp_server_url,
+    }
+    if len(set(core_domain_urls.values())) < len(core_domain_urls):
+        logger.warning(
+            "MCP core domain URLs overlap unexpectedly: %s",
+            core_domain_urls,
+        )
     await init_postgres()
     await init_redis()
     log_success("Infrastructure initialized.")

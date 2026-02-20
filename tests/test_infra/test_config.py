@@ -277,6 +277,32 @@ def test_domain_mcp_server_urls_prefer_domain_specific_values(
     assert settings.mcp_server_url == "https://dotenv.prod/mcp"
 
 
+def test_domain_mcp_server_urls_auto_derive_for_minsyai_legacy_host(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=prod",
+                "MCP_SERVER_URL_PROD=https://mcp.minsyai.com/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.strategy_mcp_server_url == "https://mcp.minsyai.com/strategy/mcp"
+    assert settings.backtest_mcp_server_url == "https://mcp.minsyai.com/backtest/mcp"
+    assert settings.market_data_mcp_server_url == "https://mcp.minsyai.com/market/mcp"
+    assert settings.stress_mcp_server_url == "https://mcp.minsyai.com/stress/mcp"
+    assert settings.trading_mcp_server_url == "https://mcp.minsyai.com/trading/mcp"
+
+
 def test_runtime_env_aliases_and_dev_mode_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
