@@ -10,6 +10,7 @@ from telegram.error import TelegramError
 
 from src.config import settings
 from src.services.social_connector_service import SocialConnectorService
+from src.services.telegram_test_batches import TelegramTestBatchService
 from src.util.logger import logger
 
 
@@ -34,8 +35,14 @@ class TelegramService:
 
         if update is None:
             return
+        if update.inline_query is not None:
+            await self._handle_inline_query(update)
+            return
         if update.callback_query is not None:
             await self._handle_callback_query(update)
+            return
+        if update.message is not None and update.message.web_app_data is not None:
+            await self._handle_web_app_data(update)
             return
         if update.message is not None and isinstance(update.message.text, str):
             await self._handle_text_message(update)
@@ -76,6 +83,14 @@ class TelegramService:
         )
 
         locale = self.social_service.normalize_locale((binding.metadata_ or {}).get("locale"))
+        handled = await self._test_batch_service().handle_connected_text_message(
+            update=update,
+            binding=binding,
+            text=cleaned,
+            locale=locale,
+        )
+        if handled:
+            return
         ack_text = "收到你的消息了。" if locale == "zh" else "Message received."
         await self._safe_send_message(chat_id=chat_id, text=ack_text)
 
@@ -99,7 +114,7 @@ class TelegramService:
 
         locale = self.social_service.normalize_locale((intent.metadata_ or {}).get("locale"))
         try:
-            await self.social_service.upsert_telegram_binding(
+            binding = await self.social_service.upsert_telegram_binding(
                 user_id=intent.user_id,
                 telegram_chat_id=chat_id,
                 telegram_user_id=str(from_user.id) if from_user is not None else chat_id,
@@ -111,6 +126,11 @@ class TelegramService:
             return
 
         await self._send_greeting(chat_id=chat_id, locale=locale)
+        await self._test_batch_service().send_post_connect_batches(
+            chat_id=chat_id,
+            locale=locale,
+            binding=binding,
+        )
 
     async def _send_greeting(self, *, chat_id: str, locale: str) -> None:
         is_zh = locale == "zh"
@@ -146,6 +166,13 @@ class TelegramService:
 
         data = (callback.data or "").strip().lower()
         locale = self.social_service.normalize_locale((binding.metadata_ or {}).get("locale"))
+        handled = await self._test_batch_service().handle_callback_query(
+            update=update,
+            binding=binding,
+            locale=locale,
+        )
+        if handled:
+            return
         if data in {"pref:cat", "pref:dog"}:
             value = data.split(":", 1)[1]
             await self.social_service.record_telegram_activity(
@@ -167,6 +194,40 @@ class TelegramService:
 
         fallback = "暂不支持该操作。" if locale == "zh" else "This action is not supported yet."
         await self._safe_answer_callback(callback_query_id=callback.id, text=fallback)
+
+    async def _handle_web_app_data(self, update: Update) -> None:
+        message = update.message
+        if message is None:
+            return
+
+        chat_id = str(message.chat.id)
+        binding = await self.social_service.get_telegram_binding_for_chat(
+            telegram_chat_id=chat_id,
+            require_connected=True,
+        )
+        if binding is None:
+            await self._safe_send_message(
+                chat_id=chat_id,
+                text="Please connect your account from Minsy Settings first.",
+            )
+            return
+
+        locale = self.social_service.normalize_locale((binding.metadata_ or {}).get("locale"))
+        handled = await self._test_batch_service().handle_web_app_data(
+            update=update,
+            binding=binding,
+            locale=locale,
+        )
+        if handled:
+            return
+
+    async def _handle_inline_query(self, update: Update) -> None:
+        inline_query = update.inline_query
+        if inline_query is None:
+            return
+
+        locale = self.social_service.normalize_locale(getattr(inline_query.from_user, "language_code", "en"))
+        await self._test_batch_service().handle_inline_query(update=update, locale=locale)
 
     async def _safe_send_message(
         self,
@@ -214,3 +275,10 @@ class TelegramService:
                 raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
             self._bot = Bot(token=token)
         return self._bot
+
+    def _test_batch_service(self) -> TelegramTestBatchService:
+        return TelegramTestBatchService(
+            db=self.db,
+            social_service=self.social_service,
+            bot=self._bot_client(),
+        )

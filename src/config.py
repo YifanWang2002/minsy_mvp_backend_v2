@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     telegram_bot_username: str = Field(default="", alias="TELEGRAM_BOT_USERNAME")
     telegram_webhook_secret_token: str = Field(default="", alias="TELEGRAM_WEBHOOK_SECRET_TOKEN")
     telegram_connect_ttl_seconds: int = Field(default=600, alias="TELEGRAM_CONNECT_TTL_SECONDS")
+    telegram_test_batches_enabled: bool = Field(
+        default=True,
+        alias="TELEGRAM_TEST_BATCHES_ENABLED",
+    )
+    telegram_webapp_base_url: str = Field(
+        default="https://app.minsyai.com",
+        alias="TELEGRAM_WEBAPP_BASE_URL",
+    )
+    telegram_test_payment_provider_token: str = Field(
+        default="",
+        alias="TELEGRAM_TEST_PAYMENT_PROVIDER_TOKEN",
+    )
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")

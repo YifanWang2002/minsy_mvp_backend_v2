@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.middleware.auth import get_current_user
@@ -21,6 +22,7 @@ from src.dependencies import get_db
 from src.models.user import User
 from src.services.social_connector_service import SocialConnectorService
 from src.services.telegram_service import TelegramService
+from src.services.telegram_test_batches import build_telegram_test_chart_html
 from src.util.logger import logger
 
 router = APIRouter(prefix="/social", tags=["social_connectors"])
@@ -158,3 +160,24 @@ def _validate_webhook_secret(raw_header: str | None) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Telegram webhook secret token.",
         )
+
+
+@router.get(
+    "/connectors/telegram/test-webapp/chart",
+    response_class=HTMLResponse,
+)
+async def telegram_test_webapp_chart(
+    symbol: str = Query(default="NASDAQ:AAPL"),
+    interval: str = Query(default="1d"),
+    locale: str = Query(default="en"),
+    theme: str = Query(default="light"),
+    signal_id: str = Query(default="unknown"),
+) -> HTMLResponse:
+    html = build_telegram_test_chart_html(
+        symbol=symbol,
+        interval=interval,
+        locale=locale,
+        theme=theme,
+        signal_id=signal_id,
+    )
+    return HTMLResponse(content=html)
