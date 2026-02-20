@@ -813,21 +813,31 @@ class TelegramTestBatchService:
         )
 
         message_text = (
-            f"Inline 模式机会卡片\n标的: {symbol}\nSignal ID: {signal_id}\n图表: {chart_url}"
+            f"⚡ Inline 机会卡片\n📌 标的: {symbol}\n🆔 Signal: {signal_id}\n📊 图表: {chart_url}"
             if locale == "zh"
-            else f"Inline signal card\nSymbol: {symbol}\nSignal ID: {signal_id}\nChart: {chart_url}"
+            else f"⚡ Inline Signal Card\n📌 Symbol: {symbol}\n🆔 Signal: {signal_id}\n📊 Chart: {chart_url}"
         )
 
         result = InlineQueryResultArticle(
             id=f"signal-{signal_id}",
-            title=(f"{symbol} 交易机会" if locale == "zh" else f"{symbol} Trading Signal"),
-            description=("发送机会卡片到当前对话" if locale == "zh" else "Send signal card to this chat"),
+            title=(f"🚨 {symbol} 交易机会" if locale == "zh" else f"🚨 {symbol} Trading Opportunity"),
+            description=(
+                "发送机会卡片到当前聊天"
+                if locale == "zh"
+                else "Send this opportunity card to current chat"
+            ),
             input_message_content=InputTextMessageContent(message_text=message_text),
             reply_markup=InlineKeyboardMarkup(
                 [
                     [
-                        InlineKeyboardButton(text="✅ 开单", callback_data=f"trade_open:{signal_id}"),
-                        InlineKeyboardButton(text="🙈 忽略", callback_data=f"trade_ignore:{signal_id}"),
+                        InlineKeyboardButton(
+                            text=("✅ 开单" if locale == "zh" else "✅ Open"),
+                            callback_data=f"trade_open:{signal_id}",
+                        ),
+                        InlineKeyboardButton(
+                            text=("🙈 忽略" if locale == "zh" else "🙈 Ignore"),
+                            callback_data=f"trade_ignore:{signal_id}",
+                        ),
                     ],
                     [
                         InlineKeyboardButton(
@@ -877,33 +887,47 @@ class TelegramTestBatchService:
 
     async def _batch_flow_intro(self, *, chat_id: str, locale: str) -> None:
         text = (
-            "✅ Telegram 连接完成。\n"
-            "以下测试批次与 Minsy 实际流程一致：\n"
-            "KYC → Pre-Strategy → Strategy → Deployment。\n"
-            "这些仅用于验证 Telegram 交互，不会改动你的正式策略数据。"
+            "🎉 Telegram 连接成功！\n\n"
+            "接下来会按真实流程推送测试批次：\n"
+            "🧾 KYC → 🧭 Pre-Strategy → 🧠 Strategy → 🚀 Deployment\n\n"
+            "🛡️ 说明：这些消息仅用于验证 Telegram 体验，不会改动你的正式策略数据。"
             if locale == "zh"
-            else "✅ Telegram connected.\n"
-            "The following test batches mirror Minsy's real flow:\n"
-            "KYC → Pre-Strategy → Strategy → Deployment.\n"
-            "These are test-only Telegram interactions and do not change production strategy data."
+            else "🎉 Telegram connected successfully!\n\n"
+            "You will now receive test batches that mirror the real journey:\n"
+            "🧾 KYC → 🧭 Pre-Strategy → 🧠 Strategy → 🚀 Deployment\n\n"
+            "🛡️ Note: these are test interactions only and won't modify production strategy data."
         )
         await self._safe_send_message(chat_id=chat_id, text=text)
 
     async def _batch_pre_strategy_scope(self, *, chat_id: str, locale: str) -> None:
         question = (
-            "接下来进入策略准备阶段。告诉我你想交易的市场（target_market）："
+            "🧭 进入 Pre-Strategy 阶段\n"
+            "请选择目标市场 `target_market`："
             if locale == "zh"
-            else "Next, let's define your strategy scope. Choose your target market:"
+            else "🧭 Entering Pre-Strategy\n"
+            "Please choose your target market (`target_market`):"
         )
         markup = InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton(text="美股 us_stocks", callback_data="flow_market:us_stocks"),
-                    InlineKeyboardButton(text="加密 crypto", callback_data="flow_market:crypto"),
+                    InlineKeyboardButton(
+                        text=("🇺🇸 美股 us_stocks" if locale == "zh" else "🇺🇸 US Stocks"),
+                        callback_data="flow_market:us_stocks",
+                    ),
+                    InlineKeyboardButton(
+                        text=("🪙 加密 crypto" if locale == "zh" else "🪙 Crypto"),
+                        callback_data="flow_market:crypto",
+                    ),
                 ],
                 [
-                    InlineKeyboardButton(text="外汇 forex", callback_data="flow_market:forex"),
-                    InlineKeyboardButton(text="期货 futures", callback_data="flow_market:futures"),
+                    InlineKeyboardButton(
+                        text=("💱 外汇 forex" if locale == "zh" else "💱 Forex"),
+                        callback_data="flow_market:forex",
+                    ),
+                    InlineKeyboardButton(
+                        text=("📉 期货 futures" if locale == "zh" else "📉 Futures"),
+                        callback_data="flow_market:futures",
+                    ),
                 ],
             ]
         )
@@ -911,26 +935,29 @@ class TelegramTestBatchService:
 
     async def _send_frequency_prompt(self, *, chat_id: str, locale: str) -> None:
         question = (
-            "请选择你希望的机会频率（opportunity_frequency_bucket）："
+            "⏱️ 请选择机会频率 `opportunity_frequency_bucket`："
             if locale == "zh"
-            else "Choose your opportunity frequency (opportunity_frequency_bucket):"
+            else "⏱️ Choose opportunity frequency (`opportunity_frequency_bucket`):"
         )
         markup = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        text="每月几次",
+                        text=("📆 每月几次" if locale == "zh" else "📆 Few per month"),
                         callback_data="flow_frequency:few_per_month",
                     ),
                     InlineKeyboardButton(
-                        text="每周几次",
+                        text=("🗓️ 每周几次" if locale == "zh" else "🗓️ Few per week"),
                         callback_data="flow_frequency:few_per_week",
                     ),
                 ],
                 [
-                    InlineKeyboardButton(text="每日", callback_data="flow_frequency:daily"),
                     InlineKeyboardButton(
-                        text="日内多次",
+                        text=("☀️ 每日" if locale == "zh" else "☀️ Daily"),
+                        callback_data="flow_frequency:daily",
+                    ),
+                    InlineKeyboardButton(
+                        text=("⚡ 日内多次" if locale == "zh" else "⚡ Multiple per day"),
                         callback_data="flow_frequency:multiple_per_day",
                     ),
                 ],
@@ -940,20 +967,29 @@ class TelegramTestBatchService:
 
     async def _send_holding_period_prompt(self, *, chat_id: str, locale: str) -> None:
         question = (
-            "请选择持仓周期（holding_period_bucket）："
+            "🕒 请选择持仓周期 `holding_period_bucket`："
             if locale == "zh"
-            else "Choose your holding period (holding_period_bucket):"
+            else "🕒 Choose holding period (`holding_period_bucket`):"
         )
         markup = InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton(text="超短 intraday_scalp", callback_data="flow_holding:intraday_scalp"),
-                    InlineKeyboardButton(text="日内 intraday", callback_data="flow_holding:intraday"),
+                    InlineKeyboardButton(
+                        text=("⚡ 超短 intraday_scalp" if locale == "zh" else "⚡ Intraday scalp"),
+                        callback_data="flow_holding:intraday_scalp",
+                    ),
+                    InlineKeyboardButton(
+                        text=("📌 日内 intraday" if locale == "zh" else "📌 Intraday"),
+                        callback_data="flow_holding:intraday",
+                    ),
                 ],
                 [
-                    InlineKeyboardButton(text="数日 swing_days", callback_data="flow_holding:swing_days"),
                     InlineKeyboardButton(
-                        text="数周+ position_weeks_plus",
+                        text=("🌙 数日 swing_days" if locale == "zh" else "🌙 Swing days"),
+                        callback_data="flow_holding:swing_days",
+                    ),
+                    InlineKeyboardButton(
+                        text=("🧱 数周+ position_weeks_plus" if locale == "zh" else "🧱 Weeks+"),
                         callback_data="flow_holding:position_weeks_plus",
                     ),
                 ],
@@ -973,8 +1009,14 @@ class TelegramTestBatchService:
         keyboard = InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton(text="✅ 开单", callback_data=f"trade_open:{signal_id}"),
-                    InlineKeyboardButton(text="🙈 忽略", callback_data=f"trade_ignore:{signal_id}"),
+                    InlineKeyboardButton(
+                        text=("✅ 开单" if locale == "zh" else "✅ Open"),
+                        callback_data=f"trade_open:{signal_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text=("🙈 忽略" if locale == "zh" else "🙈 Ignore"),
+                        callback_data=f"trade_ignore:{signal_id}",
+                    ),
                 ],
                 [
                     InlineKeyboardButton(
@@ -1011,13 +1053,15 @@ class TelegramTestBatchService:
 
     async def _batch_chat_intro(self, *, chat_id: str, locale: str) -> None:
         text = (
-            "进入 Strategy 阶段：先验证 DSL 生成 strategy_draft_id，前端确认后继续回测迭代。\n"
-            "你现在可以直接发消息给我，我会调用真实 OpenAI API 回复。\n"
-            "命令：/reset、/signal、/testall、/postflow、/help。"
+            "🧠 已进入 Strategy 阶段\n"
+            "先验证 DSL 生成 `strategy_draft_id`，前端确认后继续回测与迭代。\n\n"
+            "💬 现在你可以直接和我聊天，我会调用真实 OpenAI API 回复。\n"
+            "⌨️ 命令：/reset、/signal、/testall、/postflow、/help。"
             if locale == "zh"
-            else "Entering Strategy phase: validate DSL first, generate strategy_draft_id, then keep iterating with backtests.\n"
-            "You can chat with me now and I will reply via the real OpenAI API.\n"
-            "Commands: /reset, /signal, /testall, /postflow, /help."
+            else "🧠 Strategy phase is live.\n"
+            "First validate DSL and generate `strategy_draft_id`, then keep iterating with backtests.\n\n"
+            "💬 You can chat with me now. Replies use the real OpenAI API.\n"
+            "⌨️ Commands: /reset, /signal, /testall, /postflow, /help."
         )
         markup = InlineKeyboardMarkup(
             [
@@ -1033,9 +1077,11 @@ class TelegramTestBatchService:
 
     async def _batch_deployment_status(self, *, chat_id: str, locale: str) -> None:
         text = (
-            "进入 Deployment 阶段测试：请选择 deployment_status（ready / deployed / blocked）。"
+            "🚀 Deployment 阶段测试\n"
+            "请选择 `deployment_status`：ready / deployed / blocked"
             if locale == "zh"
-            else "Deployment phase test: choose deployment_status (ready / deployed / blocked)."
+            else "🚀 Deployment phase test\n"
+            "Choose `deployment_status`: ready / deployed / blocked"
         )
         markup = InlineKeyboardMarkup(
             [
@@ -1056,15 +1102,15 @@ class TelegramTestBatchService:
         backtest_id: str,
     ) -> None:
         text = (
-            "<b>Backtest 已完成</b>\n"
+            "✅ <b>Backtest 已完成</b>\n"
             f"backtest_id: <code>{escape(backtest_id)}</code>\n"
-            "结果摘要: 年化 21.4%, 最大回撤 9.8%, Sharpe 1.57。\n"
-            "你现在可以继续聊天，让我帮你做下一轮策略迭代。"
+            "📈 结果摘要: 年化 21.4% | 最大回撤 9.8% | Sharpe 1.57\n"
+            "💡 你可以继续聊天，让我帮你做下一轮策略迭代。"
             if locale == "zh"
-            else "<b>Backtest Completed</b>\n"
+            else "✅ <b>Backtest Completed</b>\n"
             f"backtest_id: <code>{escape(backtest_id)}</code>\n"
-            "Summary: Annualized 21.4%, Max DD 9.8%, Sharpe 1.57.\n"
-            "You can continue chatting now for the next strategy iteration."
+            "📈 Summary: Annualized 21.4% | Max DD 9.8% | Sharpe 1.57\n"
+            "💡 You can continue chatting now for the next strategy iteration."
         )
         markup = InlineKeyboardMarkup(
             [
@@ -1095,15 +1141,17 @@ class TelegramTestBatchService:
         position_id: str,
     ) -> None:
         text = (
-            "<b>实盘开仓提醒</b>\n"
+            "🟢 <b>实盘开仓提醒</b>\n"
             f"position_id: <code>{escape(position_id)}</code>\n"
             "symbol: <code>NASDAQ:AAPL</code>\n"
-            "方向: <b>LONG</b> | 数量: <code>100</code> | 开仓价: <code>186.25</code>"
+            "方向: <b>LONG</b> | 数量: <code>100</code> | 开仓价: <code>186.25</code>\n"
+            "⚠️ 测试提醒，不会触发真实下单。"
             if locale == "zh"
-            else "<b>Live Open-Position Alert</b>\n"
+            else "🟢 <b>Live Open-Position Alert</b>\n"
             f"position_id: <code>{escape(position_id)}</code>\n"
             "symbol: <code>NASDAQ:AAPL</code>\n"
-            "Side: <b>LONG</b> | Qty: <code>100</code> | Entry: <code>186.25</code>"
+            "Side: <b>LONG</b> | Qty: <code>100</code> | Entry: <code>186.25</code>\n"
+            "⚠️ Test notification only; no real execution."
         )
         markup = InlineKeyboardMarkup(
             [
@@ -1134,11 +1182,11 @@ class TelegramTestBatchService:
         position_id: str,
     ) -> None:
         text = (
-            "<b>实盘平仓回执</b>\n"
+            "🔴 <b>实盘平仓回执</b>\n"
             f"position_id: <code>{escape(position_id)}</code>\n"
             "平仓价: <code>188.74</code> | PnL: <code>+1.34%</code> | 原因: 信号反转"
             if locale == "zh"
-            else "<b>Live Close-Position Receipt</b>\n"
+            else "🔴 <b>Live Close-Position Receipt</b>\n"
             f"position_id: <code>{escape(position_id)}</code>\n"
             "Exit: <code>188.74</code> | PnL: <code>+1.34%</code> | Reason: signal reversal"
         )
@@ -1167,12 +1215,12 @@ class TelegramTestBatchService:
         regime_id: str,
     ) -> None:
         text = (
-            "<b>Market Regime 变动提醒</b>\n"
+            "🌪️ <b>Market Regime 变动提醒</b>\n"
             f"regime_event_id: <code>{escape(regime_id)}</code>\n"
             "旧状态: <code>risk_on</code> → 新状态: <code>risk_off</code>\n"
             "建议: 降低仓位上限并提高止损保护。"
             if locale == "zh"
-            else "<b>Market Regime Change Alert</b>\n"
+            else "🌪️ <b>Market Regime Change Alert</b>\n"
             f"regime_event_id: <code>{escape(regime_id)}</code>\n"
             "Transition: <code>risk_on</code> → <code>risk_off</code>\n"
             "Suggestion: reduce position cap and tighten protection."
@@ -1425,18 +1473,20 @@ class TelegramTestBatchService:
     def _build_trade_signal_text(*, locale: str, signal_id: str) -> str:
         if locale == "zh":
             return (
-                "<b>Strategy 阶段交易机会</b>\n"
+                "🚨 <b>Strategy 阶段交易机会</b>\n"
                 f"Signal ID: <code>{escape(signal_id)}</code>\n"
                 "标的: <code>NASDAQ:AAPL</code>（示例）\n"
                 "来源: <b>DSL + 回测筛选后机会</b>\n"
-                "动作: 选择 <b>开单</b> / <b>忽略</b>，并通过 WebApp 查看 TradingView 图表。"
+                "动作: 选择 <b>开单</b> / <b>忽略</b>，并通过 WebApp 查看 TradingView 图表。\n"
+                "🧪 注：这是功能测试消息，不触发真实交易。"
             )
         return (
-            "<b>Strategy Phase Opportunity</b>\n"
+            "🚨 <b>Strategy Phase Opportunity</b>\n"
             f"Signal ID: <code>{escape(signal_id)}</code>\n"
             "Symbol: <code>NASDAQ:AAPL</code> (sample)\n"
             "Source: <b>post-DSL and backtest candidate</b>\n"
-            "Action: choose <b>Open</b> / <b>Ignore</b>, then inspect the TradingView WebApp chart."
+            "Action: choose <b>Open</b> / <b>Ignore</b>, then inspect the TradingView WebApp chart.\n"
+            "🧪 Note: this is a feature-test signal; no real trade execution."
         )
 
     @staticmethod
@@ -1445,14 +1495,14 @@ class TelegramTestBatchService:
         if locale == "zh":
             status = "已开单" if action == "open" else "已忽略"
             return (
-                "<b>机会状态已更新</b>\n"
+                "✅ <b>机会状态已更新</b>\n"
                 f"Signal ID: <code>{escape(signal_id)}</code>\n"
                 f"状态: <b>{status}</b>\n"
                 f"时间: <code>{timestamp}</code>"
             )
         status_en = "Opened" if action == "open" else "Ignored"
         return (
-            "<b>Signal Status Updated</b>\n"
+            "✅ <b>Signal Status Updated</b>\n"
             f"Signal ID: <code>{escape(signal_id)}</code>\n"
             f"Status: <b>{status_en}</b>\n"
             f"Time: <code>{timestamp}</code>"
@@ -1462,22 +1512,22 @@ class TelegramTestBatchService:
     def _build_help_text(*, locale: str) -> str:
         if locale == "zh":
             return (
-                "可用测试命令:\n"
+                "🧰 可用测试命令：\n"
                 "/reset - 重置 OpenAI 对话上下文\n"
                 "/signal - 立即推送一条 Strategy 交易机会\n"
                 "/testall - 重放连接后的全部测试批次\n"
                 "/postflow - 仅重放 Strategy 后续提醒（backtest/实盘/regime）\n"
                 "/help - 查看命令列表\n"
-                "你也可以直接发送任意文本进行对话。"
+                "\n💬 也可以直接发送任意文本与我对话。"
             )
         return (
-            "Available test commands:\n"
+            "🧰 Available test commands:\n"
             "/reset - reset OpenAI conversation context\n"
             "/signal - push one Strategy opportunity now\n"
             "/testall - replay all post-connect test batches\n"
             "/postflow - replay post-strategy alerts only (backtest/live/regime)\n"
             "/help - show this command list\n"
-            "You can also send any text to chat."
+            "\n💬 You can also send any text to chat."
         )
 
     async def _safe_send_message(
@@ -1654,39 +1704,48 @@ def build_telegram_test_chart_html(
         "autosize": True,
     }
 
-    title = "Minsy Telegram TradingView 测试" if safe_locale == "zh" else "Minsy Telegram TradingView Test"
-    action_label = "✅ 回传开单参数" if safe_locale == "zh" else "✅ Send Trade Params"
+    title = "Minsy TradingView" if safe_locale == "en" else "Minsy 图表"
 
     return f"""<!doctype html>
 <html lang="{safe_locale}">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
     <title>{escape(title)}</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-      html, body {{ margin: 0; padding: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
-      .page {{ min-height: 100%; display: flex; flex-direction: column; background: #f8fafc; color: #0f172a; }}
-      .header {{ padding: 12px 14px; font-size: 14px; border-bottom: 1px solid #e2e8f0; }}
-      .chart-wrap {{ flex: 1; min-height: 360px; }}
-      .footer {{ padding: 12px 14px 18px; border-top: 1px solid #e2e8f0; display: grid; gap: 10px; }}
-      button {{ border: 0; border-radius: 10px; background: #0ea5e9; color: white; font-size: 15px; padding: 11px 14px; }}
-      .meta {{ font-size: 12px; color: #64748b; }}
+      html, body {{
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: {"#0f172a" if safe_theme == "dark" else "#ffffff"};
+      }}
+      .chart-root {{
+        width: 100vw;
+        height: 100vh;
+      }}
+      .tradingview-widget-container,
+      .tradingview-widget-container__widget {{
+        width: 100%;
+        height: 100%;
+      }}
+      .tradingview-widget-copyright {{
+        display: none !important;
+      }}
     </style>
   </head>
   <body>
-    <div class="page">
-      <div class="header">Signal ID: <b>{safe_signal}</b> | Symbol: <b>{escape(safe_symbol)}</b> | Interval: <b>{escape(safe_interval)}</b></div>
-      <div class="chart-wrap">
-        <div class="tradingview-widget-container" style="height:100%;width:100%">
-          <div class="tradingview-widget-container__widget" style="height:calc(100% - 32px);width:100%"></div>
-          <div class="tradingview-widget-copyright"><a href="https://www.tradingview.com/symbols/NASDAQ-AAPL/" rel="noopener nofollow" target="_blank"><span class="blue-text">AAPL stock chart</span></a><span class="trademark"> by TradingView</span></div>
-          <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>{json.dumps(widget_config, ensure_ascii=False)}</script>
-        </div>
-      </div>
-      <div class="footer">
-        <button id="sendDataBtn">{escape(action_label)}</button>
-        <div class="meta">Web App Data: symbol={escape(safe_symbol)}, interval={escape(safe_interval)}, signal_id={safe_signal}</div>
+    <div
+      class="chart-root"
+      data-signal-id="{safe_signal}"
+      data-symbol="{escape(safe_symbol)}"
+      data-interval="{escape(safe_interval)}"
+    >
+      <div class="tradingview-widget-container">
+        <div class="tradingview-widget-container__widget"></div>
+        <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>{json.dumps(widget_config, ensure_ascii=False)}</script>
       </div>
     </div>
     <script>
@@ -1695,23 +1754,6 @@ def build_telegram_test_chart_html(
         tg.ready();
         tg.expand();
       }}
-
-      document.getElementById('sendDataBtn').addEventListener('click', function () {{
-        const payload = {{
-          type: 'trade_confirm',
-          signal_id: '{safe_signal}',
-          symbol: '{escape(safe_symbol)}',
-          interval: '{escape(safe_interval)}',
-          ts_utc: new Date().toISOString(),
-        }};
-        if (tg) {{
-          tg.sendData(JSON.stringify(payload));
-          if (tg.HapticFeedback) {{
-            tg.HapticFeedback.notificationOccurred('success');
-          }}
-          tg.close();
-        }}
-      }});
     </script>
   </body>
 </html>

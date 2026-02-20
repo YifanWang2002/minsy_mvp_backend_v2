@@ -146,7 +146,7 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         assert len(dummy_bot.sent_messages) >= 5
         assert "已连接 Minsy Telegram 测试通道" in dummy_bot.sent_messages[0]["text"]
         assert any(
-            "KYC → Pre-Strategy → Strategy → Deployment" in msg.get("text", "")
+            "Pre-Strategy" in msg.get("text", "") and "Deployment" in msg.get("text", "")
             for msg in dummy_bot.sent_messages
         )
         assert any("Strategy 阶段交易机会" in msg.get("text", "") for msg in dummy_bot.sent_messages)
@@ -357,3 +357,82 @@ def test_telegram_test_chart_webapp_endpoint() -> None:
         assert "tradingview-widget-container" in response.text
         assert "embed-widget-advanced-chart.js" in response.text
         assert "sig_demo" in response.text
+
+
+def test_trade_buttons_follow_user_locale(monkeypatch) -> None:
+    dummy_bot = _DummyBot()
+    chat_id = int(str(uuid4().int)[:9])
+    base_update_id = int(str(uuid4().int)[:9])
+
+    async def _fake_openai_response(
+        self: TelegramTestBatchService,  # noqa: ARG001
+        *,
+        user_text: str,  # noqa: ARG001
+        previous_response_id: str | None,  # noqa: ARG001
+        locale: str,  # noqa: ARG001
+    ) -> tuple[str, str | None]:
+        return "ok", "resp_test_2"
+
+    monkeypatch.setattr(settings, "telegram_enabled", True)
+    monkeypatch.setattr(settings, "telegram_bot_token", "123456:test-token")
+    monkeypatch.setattr(settings, "telegram_bot_username", "MinsyUnitTestBot")
+    monkeypatch.setattr(settings, "telegram_webhook_secret_token", "unit-test-secret")
+    monkeypatch.setattr(settings, "telegram_test_batches_enabled", True)
+    monkeypatch.setattr(settings, "telegram_webapp_base_url", "https://app.minsyai.com")
+    monkeypatch.setattr(settings, "telegram_test_payment_provider_token", "")
+    monkeypatch.setattr(TelegramService, "_bot_client", lambda self: dummy_bot)
+    monkeypatch.setattr(
+        TelegramTestBatchService,
+        "_request_openai_response",
+        _fake_openai_response,
+    )
+
+    with TestClient(app) as client:
+        access_token = _register_and_get_access_token(client)
+        auth_headers = {"Authorization": f"Bearer {access_token}"}
+
+        preference_response = client.put(
+            "/api/v1/auth/preferences",
+            headers=auth_headers,
+            json={"theme_mode": "system", "locale": "en", "font_scale": "default"},
+        )
+        assert preference_response.status_code == 200
+
+        link_response = client.post(
+            "/api/v1/social/connectors/telegram/connect-link",
+            headers=auth_headers,
+            json={"locale": "zh"},
+        )
+        assert link_response.status_code == 200
+        connect_url = link_response.json()["connect_url"]
+        parsed = urlparse(connect_url)
+        token = parse_qs(parsed.query)["start"][0]
+
+        start_update = {
+            "update_id": base_update_id,
+            "message": {
+                "message_id": 30,
+                "date": 1739999999,
+                "text": f"/start {token}",
+                "chat": {"id": chat_id, "type": "private"},
+                "from": {
+                    "id": chat_id,
+                    "is_bot": False,
+                    "first_name": "Tester",
+                    "username": "telegram_tester_en",
+                },
+            },
+        }
+        start_response = client.post(
+            "/api/v1/social/webhooks/telegram",
+            headers=_telegram_headers(),
+            json=start_update,
+        )
+        assert start_response.status_code == 200
+
+        trade_message = next(
+            msg for msg in dummy_bot.sent_messages if "Strategy Phase Opportunity" in msg.get("text", "")
+        )
+        trade_markup = trade_message["reply_markup"]
+        assert trade_markup.inline_keyboard[0][0].text == "✅ Open"
+        assert trade_markup.inline_keyboard[0][1].text == "🙈 Ignore"
