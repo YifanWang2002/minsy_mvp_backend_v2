@@ -58,7 +58,8 @@ def _create_strategy_phase_session(
 
 
 def test_openai_stream_strategy_phase_uses_real_prompt_and_skills() -> None:
-    assert settings.strategy_mcp_server_url == "https://dev.minsyai.com/mcp"
+    assert settings.strategy_mcp_server_url.startswith("https://dev.minsyai.com/")
+    assert settings.strategy_mcp_server_url.endswith("/mcp")
     with TestClient(app) as client:
         token = _register_and_get_token(client)
         headers = {"Authorization": f"Bearer {token}"}

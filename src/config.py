@@ -51,6 +51,46 @@ class Settings(BaseSettings):
         default="https://mcp.minsyai.com/mcp",
         alias="MCP_SERVER_URL_PROD",
     )
+    mcp_server_url_strategy_dev: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_STRATEGY_DEV",
+    )
+    mcp_server_url_strategy_prod: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_STRATEGY_PROD",
+    )
+    mcp_server_url_backtest_dev: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_BACKTEST_DEV",
+    )
+    mcp_server_url_backtest_prod: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_BACKTEST_PROD",
+    )
+    mcp_server_url_market_data_dev: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_MARKET_DATA_DEV",
+    )
+    mcp_server_url_market_data_prod: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_MARKET_DATA_PROD",
+    )
+    mcp_server_url_stress_dev: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_STRESS_DEV",
+    )
+    mcp_server_url_stress_prod: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_STRESS_PROD",
+    )
+    mcp_server_url_trading_dev: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_TRADING_DEV",
+    )
+    mcp_server_url_trading_prod: str | None = Field(
+        default=None,
+        alias="MCP_SERVER_URL_TRADING_PROD",
+    )
     mcp_context_secret: str | None = Field(default=None, alias="MCP_CONTEXT_SECRET")
     mcp_context_ttl_seconds: int = Field(default=300, alias="MCP_CONTEXT_TTL_SECONDS")
     telegram_enabled: bool = Field(default=True, alias="TELEGRAM_ENABLED")
@@ -70,6 +110,20 @@ class Settings(BaseSettings):
         default="",
         alias="TELEGRAM_TEST_PAYMENT_PROVIDER_TOKEN",
     )
+
+    # Alpaca (paper trading first; live kept as future toggle via base URL)
+    alpaca_api_key: str = Field(default="", alias="ALPACA_API_KEY")
+    alpaca_api_secret: str = Field(default="", alias="ALPACA_API_SECRET")
+    alpaca_trading_base_url: str = Field(
+        default="https://paper-api.alpaca.markets",
+        alias="ALPACA_TRADING_BASE_URL",
+    )
+    alpaca_market_data_base_url: str = Field(
+        default="https://data.alpaca.markets",
+        alias="ALPACA_MARKET_DATA_BASE_URL",
+    )
+    alpaca_stocks_feed: str = Field(default="iex", alias="ALPACA_STOCKS_FEED")
+    alpaca_crypto_feed: str = Field(default="us", alias="ALPACA_CRYPTO_FEED")
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
@@ -289,15 +343,40 @@ class Settings(BaseSettings):
             return self.mcp_server_url_prod
         return self.mcp_server_url_dev
 
-    @property
-    def strategy_mcp_server_url(self) -> str:
-        """Backward-compatible alias for strategy MCP URL."""
+    def _resolve_domain_mcp_server_url(self, *, domain: str) -> str:
+        suffix = "prod" if self.runtime_env == "prod" else "dev"
+        attr_name = f"mcp_server_url_{domain}_{suffix}"
+        candidate = getattr(self, attr_name, None)
+        if isinstance(candidate, str):
+            normalized = candidate.strip()
+            if normalized:
+                return normalized
         return self.mcp_server_url
 
     @property
+    def strategy_mcp_server_url(self) -> str:
+        """Strategy-domain MCP URL, fallback to legacy unified URL."""
+        return self._resolve_domain_mcp_server_url(domain="strategy")
+
+    @property
     def backtest_mcp_server_url(self) -> str:
-        """Backward-compatible alias for backtest MCP URL."""
-        return self.mcp_server_url
+        """Backtest-domain MCP URL, fallback to legacy unified URL."""
+        return self._resolve_domain_mcp_server_url(domain="backtest")
+
+    @property
+    def market_data_mcp_server_url(self) -> str:
+        """Market-data-domain MCP URL, fallback to legacy unified URL."""
+        return self._resolve_domain_mcp_server_url(domain="market_data")
+
+    @property
+    def stress_mcp_server_url(self) -> str:
+        """Stress-domain MCP URL, fallback to legacy unified URL."""
+        return self._resolve_domain_mcp_server_url(domain="stress")
+
+    @property
+    def trading_mcp_server_url(self) -> str:
+        """Trading-domain MCP URL, fallback to legacy unified URL."""
+        return self._resolve_domain_mcp_server_url(domain="trading")
 
     @property
     def effective_mcp_context_secret(self) -> str:

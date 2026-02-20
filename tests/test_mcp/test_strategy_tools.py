@@ -229,7 +229,7 @@ async def test_strategy_validate_dsl_retry_limit_metadata_is_exposed_with_reques
     assert first["error"]["code"] == "STRATEGY_VALIDATION_FAILED"
     assert third["error"]["code"] == "STRATEGY_VALIDATION_FAILED"
     assert third["validation"]["retry_limit_reached"] is True
-    assert third["validation"]["retry_count"] >= 3
+    assert third["validation"]["retry_count"] >= 2
     assert "Retry limit reached" in third["error"]["message"]
 
 

@@ -1,9 +1,11 @@
-"""Unified modular MCP server entrypoint."""
+"""Domain-aware MCP server entrypoint with legacy all-in-one compatibility."""
 
 from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -14,13 +16,119 @@ from src.mcp.market_data import TOOL_NAMES as MARKET_DATA_TOOL_NAMES
 from src.mcp.market_data import register_market_data_tools
 from src.mcp.strategy import TOOL_NAMES as STRATEGY_TOOL_NAMES
 from src.mcp.strategy import register_strategy_tools
+from src.mcp.stress import TOOL_NAMES as STRESS_TOOL_NAMES
+from src.mcp.stress import register_stress_tools
+from src.mcp.trading import TOOL_NAMES as TRADING_TOOL_NAMES
+from src.mcp.trading import register_trading_tools
 from src.util.logger import configure_logging, logger
 
-ALL_REGISTERED_TOOL_NAMES: tuple[str, ...] = (
-    *MARKET_DATA_TOOL_NAMES,
-    *BACKTEST_TOOL_NAMES,
-    *STRATEGY_TOOL_NAMES,
+
+@dataclass(frozen=True, slots=True)
+class McpDomainSpec:
+    domain: str
+    display_name: str
+    instructions: str
+    register_tools: Callable[[FastMCP], None]
+    tool_names: tuple[str, ...]
+
+
+_DOMAIN_SPECS: dict[str, McpDomainSpec] = {
+    "strategy": McpDomainSpec(
+        domain="strategy",
+        display_name="Minsy Strategy MCP Server",
+        instructions="MCP server for strategy DSL validation, storage, and versioning tools.",
+        register_tools=register_strategy_tools,
+        tool_names=STRATEGY_TOOL_NAMES,
+    ),
+    "backtest": McpDomainSpec(
+        domain="backtest",
+        display_name="Minsy Backtest MCP Server",
+        instructions="MCP server for backtest job execution and analysis tools.",
+        register_tools=register_backtest_tools,
+        tool_names=BACKTEST_TOOL_NAMES,
+    ),
+    "market": McpDomainSpec(
+        domain="market",
+        display_name="Minsy Market Data MCP Server",
+        instructions="MCP server for market data coverage, quote, candle, and metadata tools.",
+        register_tools=register_market_data_tools,
+        tool_names=MARKET_DATA_TOOL_NAMES,
+    ),
+    "stress": McpDomainSpec(
+        domain="stress",
+        display_name="Minsy Stress MCP Server",
+        instructions="MCP server reserved for stress testing and optimization tools.",
+        register_tools=register_stress_tools,
+        tool_names=STRESS_TOOL_NAMES,
+    ),
+    "trading": McpDomainSpec(
+        domain="trading",
+        display_name="Minsy Trading MCP Server",
+        instructions="MCP server reserved for paper/live trading execution tools.",
+        register_tools=register_trading_tools,
+        tool_names=TRADING_TOOL_NAMES,
+    ),
+}
+
+_DOMAIN_ALIASES: dict[str, str] = {
+    "market_data": "market",
+    "market-data": "market",
+}
+
+# Keep backward compatibility: default all-mode still exposes the historical
+# three domains used by existing orchestrator/runtime policies.
+_LEGACY_ALL_DOMAINS: tuple[str, ...] = (
+    "market",
+    "backtest",
+    "strategy",
 )
+
+SUPPORTED_DOMAINS: tuple[str, ...] = (
+    "all",
+    "strategy",
+    "backtest",
+    "market",
+    "market_data",
+    "market-data",
+    "stress",
+    "trading",
+)
+
+ALL_REGISTERED_TOOL_NAMES: tuple[str, ...] = tuple(
+    tool_name
+    for domain_name in _LEGACY_ALL_DOMAINS
+    for tool_name in _DOMAIN_SPECS[domain_name].tool_names
+)
+
+
+def _resolve_domain(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "all":
+        return normalized
+    aliased = _DOMAIN_ALIASES.get(normalized, normalized)
+    if aliased not in _DOMAIN_SPECS:
+        raise ValueError(
+            f"Unsupported MCP domain '{value}'. "
+            f"Use one of: {', '.join(SUPPORTED_DOMAINS)}."
+        )
+    return aliased
+
+
+def _resolve_domain_specs(domain: str) -> tuple[McpDomainSpec, ...]:
+    if domain == "all":
+        return tuple(_DOMAIN_SPECS[name] for name in _LEGACY_ALL_DOMAINS)
+    return (_DOMAIN_SPECS[domain],)
+
+
+def registered_tool_names(*, domain: str = "all") -> tuple[str, ...]:
+    """Return registered tool names for one MCP domain or the legacy all-mode."""
+    resolved_domain = _resolve_domain(domain)
+    domain_specs = _resolve_domain_specs(resolved_domain)
+    return tuple(
+        tool_name
+        for domain_spec in domain_specs
+        for tool_name in domain_spec.tool_names
+    )
 
 
 def create_mcp_server(
@@ -29,14 +137,24 @@ def create_mcp_server(
     port: int = 8111,
     mount_path: str = "/",
     stateless_http: bool = True,
+    domain: str = "all",
 ) -> FastMCP:
-    """Create the modular MCP server and register all tool groups."""
-    mcp = FastMCP(
-        name="Minsy Modular MCP Server",
-        instructions=(
+    """Create one MCP server for a specific domain or legacy all-mode."""
+    resolved_domain = _resolve_domain(domain)
+    domain_specs = _resolve_domain_specs(resolved_domain)
+    if len(domain_specs) == 1:
+        name = domain_specs[0].display_name
+        instructions = domain_specs[0].instructions
+    else:
+        name = "Minsy Modular MCP Server"
+        instructions = (
             "Modular MCP server with tools grouped by market_data, "
             "backtest, and strategy domains."
-        ),
+        )
+
+    mcp = FastMCP(
+        name=name,
+        instructions=instructions,
         host=host,
         port=port,
         mount_path=mount_path,
@@ -48,14 +166,22 @@ def create_mcp_server(
             enable_dns_rebinding_protection=False
         ),
     )
-    register_market_data_tools(mcp)
-    register_backtest_tools(mcp)
-    register_strategy_tools(mcp)
+    for domain_spec in domain_specs:
+        domain_spec.register_tools(mcp)
     return mcp
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the modular MCP server.")
+    parser.add_argument(
+        "--domain",
+        choices=SUPPORTED_DOMAINS,
+        default="all",
+        help=(
+            "Server domain to run: all (legacy), strategy, backtest, "
+            "market/market_data, stress, or trading."
+        ),
+    )
     parser.add_argument(
         "--transport",
         choices=("streamable-http", "sse", "stdio"),
@@ -80,20 +206,26 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _build_parser().parse_args()
     configure_logging(level=os.getenv("LOG_LEVEL", "INFO"), show_sql=False)
+    resolved_domain = _resolve_domain(args.domain)
     mcp = create_mcp_server(
         host=args.host,
         port=args.port,
         mount_path=args.mount_path,
         stateless_http=not bool(args.stateful_http),
+        domain=resolved_domain,
     )
     logger.info(
-        "mcp server starting transport=%s host=%s port=%s mount_path=%s",
+        "mcp server starting domain=%s transport=%s host=%s port=%s mount_path=%s",
+        resolved_domain,
         args.transport,
         args.host,
         args.port,
         args.mount_path,
     )
-    logger.info("mcp server registered tools: %s", ", ".join(ALL_REGISTERED_TOOL_NAMES))
+    logger.info(
+        "mcp server registered tools: %s",
+        ", ".join(registered_tool_names(domain=resolved_domain)),
+    )
     mcp.run(transport=args.transport)
     return 0
 

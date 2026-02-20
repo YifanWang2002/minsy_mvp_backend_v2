@@ -18,7 +18,7 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import APIError, OpenAI
 
-DEFAULT_SERVER_URL = "https://dev.minsyai.com/mcp"
+DEFAULT_SERVER_URL = "https://dev.minsyai.com/strategy/mcp"
 DEFAULT_MODEL = "gpt-5.2"
 
 
@@ -49,10 +49,21 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Verify MCP list-tools and tool-call via OpenAI Responses API."
     )
+    default_server_url = (
+        os.getenv("MCP_SERVER_URL_STRATEGY")
+        or os.getenv("MCP_SERVER_URL_STRATEGY_DEV")
+        or os.getenv("MCP_SERVER_URL_DEV")
+        or os.getenv("MCP_SERVER_URL")
+        or DEFAULT_SERVER_URL
+    )
     parser.add_argument(
         "--server-url",
-        default=os.getenv("MCP_SERVER_URL", DEFAULT_SERVER_URL),
-        help="MCP endpoint URL. Default: env MCP_SERVER_URL or dev URL.",
+        default=default_server_url,
+        help=(
+            "MCP endpoint URL. Default priority: MCP_SERVER_URL_STRATEGY, "
+            "MCP_SERVER_URL_STRATEGY_DEV, MCP_SERVER_URL_DEV, MCP_SERVER_URL, "
+            f"fallback {DEFAULT_SERVER_URL}."
+        ),
     )
     parser.add_argument(
         "--model",

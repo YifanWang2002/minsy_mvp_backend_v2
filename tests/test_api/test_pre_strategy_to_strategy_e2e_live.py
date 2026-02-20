@@ -338,7 +338,8 @@ def _run_until_required_tools_success(
 
 
 def test_full_pre_strategy_to_strategy_flow_no_manual_session_intervention_live() -> None:
-    assert settings.strategy_mcp_server_url == "https://dev.minsyai.com/mcp"
+    assert settings.strategy_mcp_server_url.startswith("https://dev.minsyai.com/")
+    assert settings.strategy_mcp_server_url.endswith("/mcp")
     with TestClient(app) as client:
         token = _register_and_get_token(client)
         headers = {"Authorization": f"Bearer {token}"}
@@ -499,7 +500,8 @@ def test_full_pre_strategy_to_strategy_flow_no_manual_session_intervention_live(
 
 
 def test_saved_strategy_modification_flow_no_manual_refresh_live() -> None:
-    assert settings.strategy_mcp_server_url == "https://dev.minsyai.com/mcp"
+    assert settings.strategy_mcp_server_url.startswith("https://dev.minsyai.com/")
+    assert settings.strategy_mcp_server_url.endswith("/mcp")
     with TestClient(app) as client:
         token = _register_and_get_token(client)
         headers = {"Authorization": f"Bearer {token}"}
@@ -651,7 +653,8 @@ def test_saved_strategy_modification_flow_no_manual_refresh_live() -> None:
 
 
 def test_full_mcp_tool_coverage_no_manual_actions_live() -> None:
-    assert settings.strategy_mcp_server_url == "https://dev.minsyai.com/mcp"
+    assert settings.strategy_mcp_server_url.startswith("https://dev.minsyai.com/")
+    assert settings.strategy_mcp_server_url.endswith("/mcp")
     with TestClient(app) as client:
         token = _register_and_get_token(client)
         headers = {"Authorization": f"Bearer {token}"}

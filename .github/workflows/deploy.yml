@@ -2,13 +2,17 @@ name: Deploy to GCP VM
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (optional)
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Deploy via SSH
@@ -18,21 +22,28 @@ jobs:
           username: ${{ secrets.GCP_VM_USER }}
           key: ${{ secrets.GCP_VM_SSH_KEY }}
           port: 22
+          script_stop: true
           script: |
-            set -e
-            export PATH="$HOME/.local/bin:$PATH"
-            cd /home/yifan/minsy_mvp_backend_v2
+            set -euo pipefail
+            export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+            APP_DIR="/home/yifan/minsy_mvp_backend_v2"
+            cd "$APP_DIR"
 
             # ── Pre-deploy backup ────────────────────────────────
             echo "=== Pre-deploy backup ==="
             BACKUP_DIR="backups/postgres"
             EXPORT_DIR="exports"
             STAMP=$(date -u +"%Y%m%d_%H%M%S")
-            DB_NAME=$(grep -oP '^POSTGRES_DB=\K.*' .env || echo "minsy_pgsql")
-            DB_USER=$(grep -oP '^POSTGRES_USER=\K.*' .env || echo "postgres")
-            DB_HOST=$(grep -oP '^POSTGRES_HOST=\K.*' .env || echo "localhost")
-            DB_PORT=$(grep -oP '^POSTGRES_PORT=\K.*' .env || echo "5432")
-            DB_PASS=$(grep -oP '^POSTGRES_PASSWORD=\K.*' .env || echo "")
+            DB_NAME="$(grep -E '^POSTGRES_DB=' .env | tail -n1 | cut -d= -f2- || true)"
+            DB_USER="$(grep -E '^POSTGRES_USER=' .env | tail -n1 | cut -d= -f2- || true)"
+            DB_HOST="$(grep -E '^POSTGRES_HOST=' .env | tail -n1 | cut -d= -f2- || true)"
+            DB_PORT="$(grep -E '^POSTGRES_PORT=' .env | tail -n1 | cut -d= -f2- || true)"
+            DB_PASS="$(grep -E '^POSTGRES_PASSWORD=' .env | tail -n1 | cut -d= -f2- || true)"
+            DB_NAME="${DB_NAME:-minsy_pgsql}"
+            DB_USER="${DB_USER:-postgres}"
+            DB_HOST="${DB_HOST:-localhost}"
+            DB_PORT="${DB_PORT:-5432}"
+            DB_PASS="${DB_PASS:-}"
 
             mkdir -p "$BACKUP_DIR" "$EXPORT_DIR"
 
@@ -53,40 +64,72 @@ jobs:
               || echo "WARNING: email export failed, continuing deploy"
 
             # Keep only the latest 14 pre-deploy backups
-            ls -1t "$BACKUP_DIR"/*_predeploy_*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f
+            ls -1t "$BACKUP_DIR"/*_predeploy_*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f || true
 
             echo "=== Backup complete ==="
 
             # ── Deploy ───────────────────────────────────────────
-            # 备份 .env（不在 git 中管理）
-            cp .env .env.bak
+            # 备份 .env（不在 git 中管理，reset 后还原）
+            ENV_BAK=".env.bak.${STAMP}"
+            cp .env "$ENV_BAK"
 
             # 强制与 main 对齐
-            git fetch origin main
+            git fetch --prune origin main
             git reset --hard origin/main
 
             # 还原 .env
-            cp .env.bak .env
+            cp "$ENV_BAK" .env
+            rm -f "$ENV_BAK"
 
             # 使用 uv 同步依赖
-            uv sync
+            uv sync --frozen
 
-            # 同步 Caddyfile 并 reload（仅在变化时）
-            if ! diff -q /etc/caddy/Caddyfile Caddyfile >/dev/null 2>&1; then
-              sudo cp Caddyfile /etc/caddy/Caddyfile
+            # 同步 Caddyfile 并 reload（仅在变化时，先 validate）
+            if ! sudo cmp -s /etc/caddy/Caddyfile Caddyfile; then
+              sudo install -m 644 Caddyfile /etc/caddy/Caddyfile
+              sudo caddy validate --config /etc/caddy/Caddyfile
               sudo systemctl reload caddy
               echo "Caddyfile updated and Caddy reloaded."
             fi
 
-            # 重启应用服务
-            sudo systemctl restart minsy-fastapi
-            sudo systemctl restart minsy-mcp
-            sudo systemctl restart minsy-celery
-            sudo systemctl restart minsy-celery-beat
+            # 若 unit 发生变化，确保 systemd 识别
+            sudo systemctl daemon-reload
 
-            # 健康检查
-            sudo systemctl is-active --quiet minsy-fastapi
-            sudo systemctl is-active --quiet minsy-mcp
-            sudo systemctl is-active --quiet minsy-celery
-            sudo systemctl is-active --quiet minsy-celery-beat
+            # 重启应用服务（MCP 拆分后逐个服务）
+            SERVICES=(
+              minsy-fastapi
+              minsy-mcp-strategy
+              minsy-mcp-backtest
+              minsy-mcp-market
+              minsy-mcp-stress
+              minsy-mcp-trading
+              minsy-celery
+              minsy-celery-beat
+            )
+            for svc in "${SERVICES[@]}"; do
+              sudo systemctl restart "$svc"
+            done
+
+            # systemd active 检查
+            for svc in "${SERVICES[@]}"; do
+              sudo systemctl is-active --quiet "$svc"
+            done
+
+            # 进程健康检查
+            curl -fsS http://127.0.0.1:8000/ >/dev/null
+            check_mcp_port() {
+              local port="$1"
+              local code
+              code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/mcp")"
+              if [ "$code" != "200" ] && [ "$code" != "406" ]; then
+                echo "Unexpected MCP health code on :${port}/mcp => ${code}"
+                return 1
+              fi
+            }
+            check_mcp_port 8111
+            check_mcp_port 8112
+            check_mcp_port 8113
+            check_mcp_port 8114
+            check_mcp_port 8115
+
             echo "Deploy success."

@@ -148,7 +148,7 @@ class PreStrategyHandler:
                     {
                         "type": "mcp",
                         "server_label": "market_data",
-                        "server_url": settings.mcp_server_url,
+                        "server_url": settings.market_data_mcp_server_url,
                         "allowed_tools": [
                             "check_symbol_available",
                             "get_symbol_quote",

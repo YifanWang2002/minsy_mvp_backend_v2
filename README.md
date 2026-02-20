@@ -68,7 +68,7 @@ flowchart LR
 
     subgraph EXT["外部依赖"]
       OAI["OpenAI Responses API"]
-      M["Unified MCP Server\nmarket_data/backtest/strategy"]
+      M["MCP Server Cluster\nstrategy/backtest/market/stress/trading"]
       YF["yfinance"]
       CW["Celery Worker"]
     end
@@ -83,7 +83,8 @@ flowchart LR
 ```
 
 #### 核心模块职责说明
-- `ChatOrchestrator`（`src/agents/orchestrator.py`）：统一处理会话生命周期、OpenAI 流式事件转发、GenUI/状态补丁解析、phase 迁移与消息持久化。
+- `ChatOrchestrator`（`src/agents/orchestrator/core.py`，包入口 `src/agents/orchestrator/__init__.py`）：统一处理会话生命周期、OpenAI 流式事件转发、GenUI/状态补丁解析、phase 迁移与消息持久化。
+- `Orchestrator Package`（`src/agents/orchestrator/*.py`）：按职责拆分为 `core`、`prompt_builder`、`stream_handler`、`postprocessor`、`genui_wrapper`、`fallback` 等模块，并保持 `from src.agents.orchestrator import ChatOrchestrator` 兼容导入。
 - `Phase Handlers`（`src/agents/handlers/*.py`）：按 phase 负责提示词拼装、字段校验、artifact 更新与必要副作用（如 KYC 写入 `UserProfile`）。
 - `Strategy DSL Engine`（`src/engine/strategy/*`）：完成 DSL 的 schema+语义校验、解析、存储、版本管理（patch/diff/rollback）和草稿缓存。
 - `Backtest Engine`（`src/engine/backtest/*`）：执行事件驱动回测，输出交易、权益曲线、统计指标，并由 service 层封装为异步 job。
@@ -140,6 +141,24 @@ OPENAI_API_KEY=<your_openai_api_key>
 OPENAI_RESPONSE_MODEL=gpt-5
 MCP_SERVER_URL_DEV=http://127.0.0.1:8111/mcp
 MCP_SERVER_URL_PROD=https://mcp.minsyai.com/mcp
+MCP_SERVER_URL_STRATEGY_DEV=http://127.0.0.1:8111/mcp
+MCP_SERVER_URL_BACKTEST_DEV=http://127.0.0.1:8112/mcp
+MCP_SERVER_URL_MARKET_DATA_DEV=http://127.0.0.1:8113/mcp
+MCP_SERVER_URL_STRESS_DEV=http://127.0.0.1:8114/mcp
+MCP_SERVER_URL_TRADING_DEV=http://127.0.0.1:8115/mcp
+MCP_SERVER_URL_STRATEGY_PROD=https://mcp.minsyai.com/strategy/mcp
+MCP_SERVER_URL_BACKTEST_PROD=https://mcp.minsyai.com/backtest/mcp
+MCP_SERVER_URL_MARKET_DATA_PROD=https://mcp.minsyai.com/market/mcp
+MCP_SERVER_URL_STRESS_PROD=https://mcp.minsyai.com/stress/mcp
+MCP_SERVER_URL_TRADING_PROD=https://mcp.minsyai.com/trading/mcp
+
+# Alpaca（paper-trading 约定）
+ALPACA_API_KEY=<your_alpaca_api_key>
+ALPACA_API_SECRET=<your_alpaca_api_secret>
+ALPACA_TRADING_BASE_URL=https://paper-api.alpaca.markets
+ALPACA_MARKET_DATA_BASE_URL=https://data.alpaca.markets
+ALPACA_STOCKS_FEED=iex
+ALPACA_CRYPTO_FEED=us
 
 POSTGRES_HOST=127.0.0.1
 POSTGRES_PORT=5432
@@ -175,14 +194,35 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 # 1) API
 uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
-# 2) MCP server（另一个终端）
-uv run python -m src.mcp.server --transport streamable-http --host 127.0.0.1 --port 8111
+# 2) MCP servers（建议分别启动）
+uv run python -m src.mcp.server --domain strategy --transport streamable-http --host 127.0.0.1 --port 8111
+uv run python -m src.mcp.server --domain backtest --transport streamable-http --host 127.0.0.1 --port 8112
+uv run python -m src.mcp.server --domain market --transport streamable-http --host 127.0.0.1 --port 8113
 
-# 3) Celery worker（另一个终端）
+# 可选预留域（后续扩展）
+uv run python -m src.mcp.server --domain stress --transport streamable-http --host 127.0.0.1 --port 8114
+uv run python -m src.mcp.server --domain trading --transport streamable-http --host 127.0.0.1 --port 8115
+
+# 3) 本地 MCP 反向代理（用于 /strategy|/backtest|... 前缀）
+uv run python -m src.mcp.dev_proxy --host 127.0.0.1 --port 8110
+
+# 4) Celery worker（另一个终端）
 uv run celery -A src.workers.celery_app.celery_app worker -l info -Q backtest
 
-# 4) Celery beat（另一个终端，负责定时备份与邮箱导出）
+# 5) Celery beat（另一个终端，负责定时备份与邮箱导出）
 uv run celery -A src.workers.celery_app.celery_app beat -l info
+```
+
+本地 `cloudflared` 建议回源到代理端口（`8110`），而不是直接回源 `8111`：
+
+```yaml
+tunnel: dev-tunnel
+credentials-file: /Users/yifanwang/.cloudflared/<tunnel-id>.json
+
+ingress:
+  - hostname: dev.minsyai.com
+    service: http://127.0.0.1:8110
+  - service: http_status:404
 ```
 
 #### PostgreSQL 恢复脚本（可执行）
@@ -267,7 +307,20 @@ backend/
 │   │   ├── genui_registry.py
 │   │   ├── handler_protocol.py
 │   │   ├── handler_registry.py
-│   │   ├── orchestrator.py
+│   │   ├── orchestrator
+│   │   │   ├── __init__.py
+│   │   │   ├── core.py
+│   │   │   ├── prompt_builder.py
+│   │   │   ├── stream_handler.py
+│   │   │   ├── postprocessor.py
+│   │   │   ├── genui_wrapper.py
+│   │   │   ├── mcp_records.py
+│   │   │   ├── strategy_context.py
+│   │   │   ├── carryover.py
+│   │   │   ├── fallback.py
+│   │   │   ├── constants.py
+│   │   │   ├── types.py
+│   │   │   └── shared.py
 │   │   └── phases.py
 │   ├── api
 │   │   ├── middleware
@@ -446,14 +499,14 @@ backend/
 
 #### `src/agents/genui_registry.py`
 - 文件作用：该模块主要实现：GenUI payload normalizer registry.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `tests/test_agents/test_genui_registry.py`
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `tests/test_agents/test_genui_registry.py`
 - 主要副作用：主要为纯计算/数据转换，无显式外部副作用。
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `register_genui_normalizer(payload_type: str, normalizer: GenUiNormalizer)` | 功能：`register_genui_normalizer` 为该模块公开调用入口之一。 | 输入参数：payload_type: str, normalizer: GenUiNormalizer；输出：None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `tests/test_agents/test_genui_registry.py` |
-| `get_genui_normalizer(payload_type: str)` | 功能：`get_genui_normalizer` 为该模块公开调用入口之一。 | 输入参数：payload_type: str；输出：GenUiNormalizer \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `tests/test_agents/test_genui_registry.py` |
-| `normalize_genui_payloads(payloads: list[dict[str, Any]], *, allow_passthrough_unregistered: bool=True)` | 功能：`normalize_genui_payloads` 为该模块公开调用入口之一。 | 输入参数：payloads: list[dict[str, Any]], *, allow_passthrough_unregistered: bool=True；输出：list[dict[str, Any]]。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `tests/test_agents/test_genui_registry.py` |
+| `register_genui_normalizer(payload_type: str, normalizer: GenUiNormalizer)` | 功能：`register_genui_normalizer` 为该模块公开调用入口之一。 | 输入参数：payload_type: str, normalizer: GenUiNormalizer；输出：None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `tests/test_agents/test_genui_registry.py` |
+| `get_genui_normalizer(payload_type: str)` | 功能：`get_genui_normalizer` 为该模块公开调用入口之一。 | 输入参数：payload_type: str；输出：GenUiNormalizer \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `tests/test_agents/test_genui_registry.py` |
+| `normalize_genui_payloads(payloads: list[dict[str, Any]], *, allow_passthrough_unregistered: bool=True)` | 功能：`normalize_genui_payloads` 为该模块公开调用入口之一。 | 输入参数：payloads: list[dict[str, Any]], *, allow_passthrough_unregistered: bool=True；输出：list[dict[str, Any]]。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `tests/test_agents/test_genui_registry.py` |
 
 #### `src/agents/handler_protocol.py`
 - 文件作用：该模块主要实现：PhaseHandler protocol – the contract every phase agent must satisfy.
@@ -478,13 +531,13 @@ backend/
 
 #### `src/agents/handler_registry.py`
 - 文件作用：该模块主要实现：Phase handler registry – central mapping from Phase -> PhaseHandler.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `tests/test_agents/test_orchestrator_runtime_policy.py`, `tests/test_agents/test_phase_handlers.py`
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `tests/test_agents/test_orchestrator_runtime_policy.py`, `tests/test_agents/test_phase_handlers.py`
 - 主要副作用：主要为纯计算/数据转换，无显式外部副作用。
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `get_handler(phase: str)` | 功能：Look up the handler for *phase*, or ``None`` if not registered. | 输入参数：phase: str；输出：PhaseHandler \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `tests/test_agents/test_orchestrator_runtime_policy.py`, `tests/test_agents/test_phase_handlers.py` |
-| `init_all_artifacts()` | 功能：Build a fresh artifacts dict with every phase's initial block. | 输入参数：无；输出：dict[str, Any]。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `tests/test_agents/test_orchestrator_runtime_policy.py`, `tests/test_agents/test_phase_handlers.py` |
+| `get_handler(phase: str)` | 功能：Look up the handler for *phase*, or ``None`` if not registered. | 输入参数：phase: str；输出：PhaseHandler \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `tests/test_agents/test_orchestrator_runtime_policy.py`, `tests/test_agents/test_phase_handlers.py` |
+| `init_all_artifacts()` | 功能：Build a fresh artifacts dict with every phase's initial block. | 输入参数：无；输出：dict[str, Any]。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `tests/test_agents/test_orchestrator_runtime_policy.py`, `tests/test_agents/test_phase_handlers.py` |
 
 #### `src/agents/handlers/__init__.py`
 - 文件作用：该模块主要实现：Phase handler implementations.
@@ -511,22 +564,22 @@ backend/
 
 #### `src/agents/handlers/kyc_handler.py`
 - 文件作用：该模块主要实现：KYC phase handler – collects 3 risk-profile fields.
-- 模块级调用方（静态导入）：`src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py`
+- 模块级调用方（静态导入）：`src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/`
 - 主要副作用：PostgreSQL/ORM 读写；外部网络请求
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `KYCHandler()` | 功能：Implements :class:`PhaseHandler` for the KYC phase. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.phase_name(self)` | 功能：`phase_name` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.required_fields(self)` | 功能：`required_fields` 为该模块公开调用入口之一。 | 输入参数：self；输出：list[str]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.valid_values(self)` | 功能：`valid_values` 为该模块公开调用入口之一。 | 输入参数：self；输出：dict[str, set[str]]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.build_prompt(self, ctx: PhaseContext, user_message: str)` | 功能：`build_prompt` 为该模块公开调用入口之一。 | 输入参数：self, ctx: PhaseContext, user_message: str；输出：PromptPieces。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.post_process(self, ctx: PhaseContext, raw_patches: list[dict[str, Any]], db: AsyncSession)` | 功能：`post_process` 为该模块公开调用入口之一。 | 输入参数：self, ctx: PhaseContext, raw_patches: list[dict[str, Any]], db: AsyncSession；输出：PostProcessResult。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.filter_genui(self, payload: dict[str, Any], ctx: PhaseContext)` | 功能：`filter_genui` 为该模块公开调用入口之一。 | 输入参数：self, payload: dict[str, Any], ctx: PhaseContext；输出：dict[str, Any] \| None。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.init_artifacts(self)` | 功能：`init_artifacts` 为该模块公开调用入口之一。 | 输入参数：self；输出：dict[str, Any]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.build_phase_entry_guidance(self, ctx: PhaseContext)` | 功能：`build_phase_entry_guidance` 为该模块公开调用入口之一。 | 输入参数：self, ctx: PhaseContext；输出：str \| None。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.build_profile_from_user_profile(self, user_profile: UserProfile \| None)` | 功能：Extract KYC fields from a persisted UserProfile. | 输入参数：self, user_profile: UserProfile \| None；输出：dict[str, str]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
-| `KYCHandler.is_profile_complete(self, user_profile: UserProfile \| None)` | 功能：Return True if all KYC fields are present and valid. | 输入参数：self, user_profile: UserProfile \| None；输出：bool。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator.py` |
+| `KYCHandler()` | 功能：Implements :class:`PhaseHandler` for the KYC phase. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.phase_name(self)` | 功能：`phase_name` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.required_fields(self)` | 功能：`required_fields` 为该模块公开调用入口之一。 | 输入参数：self；输出：list[str]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.valid_values(self)` | 功能：`valid_values` 为该模块公开调用入口之一。 | 输入参数：self；输出：dict[str, set[str]]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.build_prompt(self, ctx: PhaseContext, user_message: str)` | 功能：`build_prompt` 为该模块公开调用入口之一。 | 输入参数：self, ctx: PhaseContext, user_message: str；输出：PromptPieces。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.post_process(self, ctx: PhaseContext, raw_patches: list[dict[str, Any]], db: AsyncSession)` | 功能：`post_process` 为该模块公开调用入口之一。 | 输入参数：self, ctx: PhaseContext, raw_patches: list[dict[str, Any]], db: AsyncSession；输出：PostProcessResult。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.filter_genui(self, payload: dict[str, Any], ctx: PhaseContext)` | 功能：`filter_genui` 为该模块公开调用入口之一。 | 输入参数：self, payload: dict[str, Any], ctx: PhaseContext；输出：dict[str, Any] \| None。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.init_artifacts(self)` | 功能：`init_artifacts` 为该模块公开调用入口之一。 | 输入参数：self；输出：dict[str, Any]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.build_phase_entry_guidance(self, ctx: PhaseContext)` | 功能：`build_phase_entry_guidance` 为该模块公开调用入口之一。 | 输入参数：self, ctx: PhaseContext；输出：str \| None。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.build_profile_from_user_profile(self, user_profile: UserProfile \| None)` | 功能：Extract KYC fields from a persisted UserProfile. | 输入参数：self, user_profile: UserProfile \| None；输出：dict[str, str]。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
+| `KYCHandler.is_profile_complete(self, user_profile: UserProfile \| None)` | 功能：Return True if all KYC fields are present and valid. | 输入参数：self, user_profile: UserProfile \| None；输出：bool。 | PostgreSQL/ORM 读写；外部网络请求 | `src/agents/handler_registry.py`, `src/agents/handlers/__init__.py`, `src/agents/orchestrator/` |
 
 #### `src/agents/handlers/pre_strategy_handler.py`
 - 文件作用：该模块主要实现：Pre-strategy phase handler – collects market/instrument/frequency/holding fields.
@@ -596,10 +649,16 @@ backend/
 | `StubHandler.init_artifacts(self)` | 功能：`init_artifacts` 为该模块公开调用入口之一。 | 输入参数：self；输出：dict[str, Any]。 | PostgreSQL/ORM 读写；文件 I/O | `src/agents/handlers/__init__.py`, `tests/test_agents/test_stub_handler_stage_loading.py` |
 | `StubHandler.build_phase_entry_guidance(self, ctx: PhaseContext)` | 功能：`build_phase_entry_guidance` 为该模块公开调用入口之一。 | 输入参数：self, ctx: PhaseContext；输出：str \| None。 | PostgreSQL/ORM 读写；文件 I/O | `src/agents/handlers/__init__.py`, `tests/test_agents/test_stub_handler_stage_loading.py` |
 
-#### `src/agents/orchestrator.py`
+#### `src/agents/orchestrator/`
 - 文件作用：该模块主要实现：Session orchestrator for chat phases and profile persistence.
 - 模块级调用方（静态导入）：`src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py`
 - 主要副作用：PostgreSQL/ORM 读写；外部网络请求
+- 主要子模块职责：
+  - `core.py`：`ChatOrchestrator` 主入口与会话生命周期。
+  - `prompt_builder.py`：`enriched_input` 构建、runtime policy 与工具集合装配。
+  - `stream_handler.py`：OpenAI 流式事件消费与 SSE 转发。
+  - `postprocessor.py`：`AGENT_STATE_PATCH` / `AGENT_UI_JSON` 提取、handler 后处理、落库尾事件。
+  - `genui_wrapper.py` + `fallback.py`：strategy 自动包装、fallback choice prompt、空回复 fallback。
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
@@ -650,22 +709,22 @@ backend/
 
 #### `src/agents/skills/pre_strategy_skills.py`
 - 文件作用：该模块主要实现：Pre-strategy prompt builders and dynamic enum contracts.
-- 模块级调用方（静态导入）：`src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py`
+- 模块级调用方（静态导入）：`src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py`
 - 主要副作用：文件 I/O
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `get_pre_strategy_market_instrument_map()` | 功能：Return a copy of dynamic market->instrument mapping. | 输入参数：无；输出：dict[str, tuple[str, ...]]。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `get_pre_strategy_valid_values()` | 功能：Return valid enum values for pre-strategy fields. | 输入参数：无；输出：dict[str, set[str]]。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `normalize_market_value(market: str)` | 功能：Normalize market id, respecting DataLoader aliases when possible. | 输入参数：market: str；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `normalize_instrument_value(instrument: str)` | 功能：`normalize_instrument_value` 为该模块公开调用入口之一。 | 输入参数：instrument: str；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `get_market_for_instrument(instrument: str)` | 功能：`get_market_for_instrument` 为该模块公开调用入口之一。 | 输入参数：instrument: str；输出：str \| None。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `get_instruments_for_market(market: str \| None)` | 功能：`get_instruments_for_market` 为该模块公开调用入口之一。 | 输入参数：market: str \| None；输出：tuple[str, ...]。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `format_instrument_label(*, market: str \| None, instrument: str)` | 功能：Build a user-facing label from a local symbol. | 输入参数：*, market: str \| None, instrument: str；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `get_market_data_symbol_for_market_instrument(*, market: str \| None, instrument: str \| None)` | 功能：Convert local symbol into market-data tool symbol by market rules. | 输入参数：*, market: str \| None, instrument: str \| None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `get_tradingview_symbol_for_market_instrument(*, market: str \| None, instrument: str \| None)` | 功能：Convert local symbol into TradingView chart symbol by market rules. | 输入参数：*, market: str \| None, instrument: str \| None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `build_pre_strategy_static_instructions(*, language: str='en', phase_stage: str \| None=None)` | 功能：Return static instructions for pre-strategy collection. | 输入参数：*, language: str='en', phase_stage: str \| None=None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
-| `build_pre_strategy_dynamic_state(*, missing_fields: list[str] \| None=None, collected_fields: dict[str, str] \| None=None, kyc_profile: dict[str, str] \| None=None, symbol_newly_provided_this_turn_hint: bool=False, inferred_instrument_from_user_message: str \| None=None)` | 功能：Return dynamic state for pre-strategy turns. | 输入参数：*, missing_fields: list[str] \| None=None, collected_fields: dict[str, str] \| None=None, kyc_profile: dict[str, str] \| None=None, symbol_newly_provided_this_turn_hint: bool=False, inferred_instrument_from_user_message: str \| None=None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator.py`, `tests/test_agents/test_static_instruction_cache.py` |
+| `get_pre_strategy_market_instrument_map()` | 功能：Return a copy of dynamic market->instrument mapping. | 输入参数：无；输出：dict[str, tuple[str, ...]]。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `get_pre_strategy_valid_values()` | 功能：Return valid enum values for pre-strategy fields. | 输入参数：无；输出：dict[str, set[str]]。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `normalize_market_value(market: str)` | 功能：Normalize market id, respecting DataLoader aliases when possible. | 输入参数：market: str；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `normalize_instrument_value(instrument: str)` | 功能：`normalize_instrument_value` 为该模块公开调用入口之一。 | 输入参数：instrument: str；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `get_market_for_instrument(instrument: str)` | 功能：`get_market_for_instrument` 为该模块公开调用入口之一。 | 输入参数：instrument: str；输出：str \| None。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `get_instruments_for_market(market: str \| None)` | 功能：`get_instruments_for_market` 为该模块公开调用入口之一。 | 输入参数：market: str \| None；输出：tuple[str, ...]。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `format_instrument_label(*, market: str \| None, instrument: str)` | 功能：Build a user-facing label from a local symbol. | 输入参数：*, market: str \| None, instrument: str；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `get_market_data_symbol_for_market_instrument(*, market: str \| None, instrument: str \| None)` | 功能：Convert local symbol into market-data tool symbol by market rules. | 输入参数：*, market: str \| None, instrument: str \| None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `get_tradingview_symbol_for_market_instrument(*, market: str \| None, instrument: str \| None)` | 功能：Convert local symbol into TradingView chart symbol by market rules. | 输入参数：*, market: str \| None, instrument: str \| None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `build_pre_strategy_static_instructions(*, language: str='en', phase_stage: str \| None=None)` | 功能：Return static instructions for pre-strategy collection. | 输入参数：*, language: str='en', phase_stage: str \| None=None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
+| `build_pre_strategy_dynamic_state(*, missing_fields: list[str] \| None=None, collected_fields: dict[str, str] \| None=None, kyc_profile: dict[str, str] \| None=None, symbol_newly_provided_this_turn_hint: bool=False, inferred_instrument_from_user_message: str \| None=None)` | 功能：Return dynamic state for pre-strategy turns. | 输入参数：*, missing_fields: list[str] \| None=None, collected_fields: dict[str, str] \| None=None, kyc_profile: dict[str, str] \| None=None, symbol_newly_provided_this_turn_hint: bool=False, inferred_instrument_from_user_message: str \| None=None；输出：str。 | 文件 I/O | `src/agents/handlers/pre_strategy_handler.py`, `src/agents/orchestrator/`, `tests/test_agents/test_static_instruction_cache.py` |
 
 #### `src/agents/skills/strategy/skills.md`
 - 文件作用：文档文件，保存 strategy 阶段提示词模板与交互协议。
@@ -852,40 +911,40 @@ backend/
 
 #### `src/api/schemas/requests.py`
 - 文件作用：该模块主要实现：Common request schemas for chat/session APIs.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py`
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py`
 - 主要副作用：主要为纯计算/数据转换，无显式外部副作用。
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `NewThreadRequest()` | 功能：Create a new workflow session. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `RuntimePolicy()` | 功能：Per-turn runtime controls for handler prompt/tool exposure. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `RuntimePolicy.validate_phase_stage(cls, value: str \| None)` | 功能：`validate_phase_stage` 为该模块公开调用入口之一。 | 输入参数：cls, value: str \| None；输出：str \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `ChatSendRequest()` | 功能：Send one user message to orchestrator. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `ChatSendRequest.validate_message(cls, value: str)` | 功能：`validate_message` 为该模块公开调用入口之一。 | 输入参数：cls, value: str；输出：str。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `StrategyConfirmRequest()` | 功能：Persist a reviewed strategy DSL and optionally auto-start backtest turn. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `StrategyConfirmRequest.validate_dsl_json(cls, value: Any)` | 功能：`validate_dsl_json` 为该模块公开调用入口之一。 | 输入参数：cls, value: Any；输出：dict[str, Any]。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `StrategyConfirmRequest.validate_language(cls, value: str)` | 功能：`validate_language` 为该模块公开调用入口之一。 | 输入参数：cls, value: str；输出：str。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
-| `StrategyConfirmRequest.validate_auto_message(cls, value: str \| None)` | 功能：`validate_auto_message` 为该模块公开调用入口之一。 | 输入参数：cls, value: str \| None；输出：str \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `NewThreadRequest()` | 功能：Create a new workflow session. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `RuntimePolicy()` | 功能：Per-turn runtime controls for handler prompt/tool exposure. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `RuntimePolicy.validate_phase_stage(cls, value: str \| None)` | 功能：`validate_phase_stage` 为该模块公开调用入口之一。 | 输入参数：cls, value: str \| None；输出：str \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `ChatSendRequest()` | 功能：Send one user message to orchestrator. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `ChatSendRequest.validate_message(cls, value: str)` | 功能：`validate_message` 为该模块公开调用入口之一。 | 输入参数：cls, value: str；输出：str。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `StrategyConfirmRequest()` | 功能：Persist a reviewed strategy DSL and optionally auto-start backtest turn. | 构造参数请见实现与类型标注。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `StrategyConfirmRequest.validate_dsl_json(cls, value: Any)` | 功能：`validate_dsl_json` 为该模块公开调用入口之一。 | 输入参数：cls, value: Any；输出：dict[str, Any]。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `StrategyConfirmRequest.validate_language(cls, value: str)` | 功能：`validate_language` 为该模块公开调用入口之一。 | 输入参数：cls, value: str；输出：str。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
+| `StrategyConfirmRequest.validate_auto_message(cls, value: str \| None)` | 功能：`validate_auto_message` 为该模块公开调用入口之一。 | 输入参数：cls, value: str \| None；输出：str \| None。 | 主要为纯计算/数据转换，无显式外部副作用。 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `tests/test_agents/test_orchestrator_runtime_policy.py` |
 
 #### `src/config.py`
 - 文件作用：该模块主要实现：Application configuration loaded from .env via Pydantic settings.
-- 模块级调用方（静态导入）：`src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块
+- 模块级调用方（静态导入）：`src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块
 - 主要副作用：PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `get_settings()` | 功能：`get_settings` 为该模块公开调用入口之一。 | 输入参数：无；输出：Settings。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings()` | 功能：Runtime settings for API, infrastructure and middleware. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.database_url(self)` | 功能：`database_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.redis_url(self)` | 功能：`redis_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.effective_celery_broker_url(self)` | 功能：`effective_celery_broker_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.effective_celery_result_backend(self)` | 功能：`effective_celery_result_backend` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.mcp_server_url(self)` | 功能：`mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.mcp_server_url(self, value: str)` | 功能：`mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self, value: str；输出：None。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.strategy_mcp_server_url(self)` | 功能：Backward-compatible alias for strategy MCP URL. | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.strategy_mcp_server_url(self, value: str)` | 功能：`strategy_mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self, value: str；输出：None。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.backtest_mcp_server_url(self)` | 功能：Backward-compatible alias for backtest MCP URL. | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
-| `Settings.backtest_mcp_server_url(self, value: str)` | 功能：`backtest_mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self, value: str；输出：None。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator.py` 等 28 个模块 |
+| `get_settings()` | 功能：`get_settings` 为该模块公开调用入口之一。 | 输入参数：无；输出：Settings。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings()` | 功能：Runtime settings for API, infrastructure and middleware. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.database_url(self)` | 功能：`database_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.redis_url(self)` | 功能：`redis_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.effective_celery_broker_url(self)` | 功能：`effective_celery_broker_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.effective_celery_result_backend(self)` | 功能：`effective_celery_result_backend` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.mcp_server_url(self)` | 功能：`mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.mcp_server_url(self, value: str)` | 功能：`mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self, value: str；输出：None。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.strategy_mcp_server_url(self)` | 功能：Backward-compatible alias for strategy MCP URL. | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.strategy_mcp_server_url(self, value: str)` | 功能：`strategy_mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self, value: str；输出：None。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.backtest_mcp_server_url(self)` | 功能：Backward-compatible alias for backtest MCP URL. | 输入参数：self；输出：str。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
+| `Settings.backtest_mcp_server_url(self, value: str)` | 功能：`backtest_mcp_server_url` 为该模块公开调用入口之一。 | 输入参数：self, value: str；输出：None。 | PostgreSQL/ORM 读写；Redis I/O；外部网络请求；任务队列投递/消费 | `src/agents/handlers/deployment_handler.py`, `src/agents/handlers/kyc_handler.py`, `src/agents/handlers/pre_strategy_handler.py`, `src/agents/handlers/strategy_handler.py`, `src/agents/handlers/stress_test_handler.py`, `src/agents/orchestrator/` 等 28 个模块 |
 
 #### `src/dependencies.py`
 - 文件作用：该模块主要实现：FastAPI dependency providers.
@@ -1189,7 +1248,7 @@ backend/
 
 #### `src/engine/strategy/__init__.py`
 - 文件作用：该模块主要实现：Strategy DSL validation/parsing engine.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `src/api/routers/strategies.py`, `src/engine/backtest/service.py`, `src/mcp/strategy/tools.py`, `src/scripts/benchmark_backtest_stages.py`, `src/scripts/run_backtest_regression_audit.py` 等 22 个模块
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `src/api/routers/strategies.py`, `src/engine/backtest/service.py`, `src/mcp/strategy/tools.py`, `src/scripts/benchmark_backtest_stages.py`, `src/scripts/run_backtest_regression_audit.py` 等 22 个模块
 - 主要副作用：主要为纯计算/数据转换，无显式外部副作用。
 - 对外暴露符号：无（仅常量、导入或私有实现）。
 
@@ -1372,13 +1431,13 @@ backend/
 | `register_market_data_tools(mcp: FastMCP)` | 功能：Register market-data-related tools. | 输入参数：mcp: FastMCP；输出：None。 | 外部网络请求 | `src/mcp/market_data/__init__.py` |
 
 #### `src/mcp/server.py`
-- 文件作用：该模块主要实现：Unified modular MCP server entrypoint.
+- 文件作用：该模块主要实现：Domain-aware MCP server entrypoint with legacy all-in-one compatibility.
 - 模块级调用方（静态导入）：`src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py`
 - 主要副作用：外部网络请求
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `create_mcp_server(*, host: str='127.0.0.1', port: int=8111, mount_path: str='/')` | 功能：Create the modular MCP server and register all tool groups. | 输入参数：*, host: str='127.0.0.1', port: int=8111, mount_path: str='/'；输出：FastMCP。 | 外部网络请求 | `src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py` |
+| `create_mcp_server(*, host: str='127.0.0.1', port: int=8111, mount_path: str='/', stateless_http: bool=True, domain: str='all')` | 功能：Create one MCP server for a specific domain or legacy all-mode. | 输入参数：*, host: str='127.0.0.1', port: int=8111, mount_path: str='/', stateless_http: bool=True, domain: str='all'；输出：FastMCP。 | 外部网络请求 | `src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py` |
 | `main()` | 功能：`main` 为该模块公开调用入口之一。 | 输入参数：无；输出：int。 | 外部网络请求 | `src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py` |
 
 #### `src/mcp/strategy/__init__.py`
@@ -1462,12 +1521,12 @@ backend/
 
 #### `src/models/phase_transition.py`
 - 文件作用：该模块主要实现：Phase transition audit model.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `src/models/__init__.py`, `src/models/database.py`, `src/models/session.py`, `tests/test_models/test_jsonb_fields.py`, `tests/test_models/test_models.py` 等 7 个模块
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `src/models/__init__.py`, `src/models/database.py`, `src/models/session.py`, `tests/test_models/test_jsonb_fields.py`, `tests/test_models/test_models.py` 等 7 个模块
 - 主要副作用：PostgreSQL/ORM 读写
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `PhaseTransition()` | 功能：Track phase transitions for session orchestration. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/models/__init__.py`, `src/models/database.py`, `src/models/session.py`, `tests/test_models/test_jsonb_fields.py`, `tests/test_models/test_models.py` 等 7 个模块 |
+| `PhaseTransition()` | 功能：Track phase transitions for session orchestration. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/models/__init__.py`, `src/models/database.py`, `src/models/session.py`, `tests/test_models/test_jsonb_fields.py`, `tests/test_models/test_models.py` 等 7 个模块 |
 
 #### `src/models/redis.py`
 - 文件作用：该模块主要实现：Async Redis connection pool management.
@@ -1483,22 +1542,22 @@ backend/
 
 #### `src/models/session.py`
 - 文件作用：该模块主要实现：Session and message models for multi-phase conversation state.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `src/api/routers/sessions.py`, `src/api/routers/strategies.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py` 等 26 个模块
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `src/api/routers/sessions.py`, `src/api/routers/strategies.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py` 等 26 个模块
 - 主要副作用：PostgreSQL/ORM 读写
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `Session()` | 功能：User workflow session that spans kyc -> pre_strategy -> strategy -> stress_test -> deployment. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/api/routers/sessions.py`, `src/api/routers/strategies.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py` 等 26 个模块 |
-| `Message()` | 功能：Conversation message persisted by session. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/api/routers/sessions.py`, `src/api/routers/strategies.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py` 等 26 个模块 |
+| `Session()` | 功能：User workflow session that spans kyc -> pre_strategy -> strategy -> stress_test -> deployment. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/api/routers/sessions.py`, `src/api/routers/strategies.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py` 等 26 个模块 |
+| `Message()` | 功能：Conversation message persisted by session. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/api/routers/sessions.py`, `src/api/routers/strategies.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py` 等 26 个模块 |
 
 #### `src/models/strategy.py`
 - 文件作用：该模块主要实现：Strategy model definitions.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py`, `src/models/database.py` 等 14 个模块
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py`, `src/models/database.py` 等 14 个模块
 - 主要副作用：PostgreSQL/ORM 读写
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `Strategy()` | 功能：Trading strategy DSL and metadata. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py`, `src/models/database.py` 等 14 个模块 |
+| `Strategy()` | 功能：Trading strategy DSL and metadata. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/storage.py`, `src/models/__init__.py`, `src/models/backtest.py`, `src/models/database.py` 等 14 个模块 |
 
 #### `src/models/strategy_revision.py`
 - 文件作用：该模块主要实现：Strategy revision history model.
@@ -1511,13 +1570,13 @@ backend/
 
 #### `src/models/user.py`
 - 文件作用：该模块主要实现：User domain models.
-- 模块级调用方（静态导入）：`src/agents/handlers/kyc_handler.py`, `src/agents/orchestrator.py`, `src/api/middleware/auth.py`, `src/api/middleware/rate_limit.py`, `src/api/routers/auth.py`, `src/api/routers/chat.py` 等 31 个模块
+- 模块级调用方（静态导入）：`src/agents/handlers/kyc_handler.py`, `src/agents/orchestrator/`, `src/api/middleware/auth.py`, `src/api/middleware/rate_limit.py`, `src/api/routers/auth.py`, `src/api/routers/chat.py` 等 31 个模块
 - 主要副作用：PostgreSQL/ORM 读写
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `User()` | 功能：Application user. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/handlers/kyc_handler.py`, `src/agents/orchestrator.py`, `src/api/middleware/auth.py`, `src/api/middleware/rate_limit.py`, `src/api/routers/auth.py`, `src/api/routers/chat.py` 等 31 个模块 |
-| `UserProfile()` | 功能：KYC and preference profile attached to user. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/handlers/kyc_handler.py`, `src/agents/orchestrator.py`, `src/api/middleware/auth.py`, `src/api/middleware/rate_limit.py`, `src/api/routers/auth.py`, `src/api/routers/chat.py` 等 31 个模块 |
+| `User()` | 功能：Application user. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/handlers/kyc_handler.py`, `src/agents/orchestrator/`, `src/api/middleware/auth.py`, `src/api/middleware/rate_limit.py`, `src/api/routers/auth.py`, `src/api/routers/chat.py` 等 31 个模块 |
+| `UserProfile()` | 功能：KYC and preference profile attached to user. | 构造参数请见实现与类型标注。 | PostgreSQL/ORM 读写 | `src/agents/handlers/kyc_handler.py`, `src/agents/orchestrator/`, `src/api/middleware/auth.py`, `src/api/middleware/rate_limit.py`, `src/api/routers/auth.py`, `src/api/routers/chat.py` 等 31 个模块 |
 
 #### `src/services/auth_service.py`
 - 文件作用：该模块主要实现：Authentication service for register/login/token workflows.
@@ -1539,15 +1598,15 @@ backend/
 
 #### `src/services/openai_stream_service.py`
 - 文件作用：该模块主要实现：OpenAI Responses API streaming helper for agent conversational responses.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py`
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py`
 - 主要副作用：外部网络请求
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `ResponsesEventStreamer()` | 功能：Protocol for streaming raw Responses API events. | 构造参数请见实现与类型标注。 | 外部网络请求 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
-| `ResponsesEventStreamer.stream_events(self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None)` | 功能：Yield response stream events as plain dicts. | 输入参数：self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None；输出：AsyncIterator[dict[str, Any]]。 | 外部网络请求 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
-| `OpenAIResponsesEventStreamer()` | 功能：Stream raw OpenAI Responses API events. | 构造参数请见实现与类型标注。 | 外部网络请求 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
-| `OpenAIResponsesEventStreamer.stream_events(self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None)` | 功能：`stream_events` 为该模块公开调用入口之一。 | 输入参数：self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None；输出：AsyncIterator[dict[str, Any]]。 | 外部网络请求 | `src/agents/orchestrator.py`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
+| `ResponsesEventStreamer()` | 功能：Protocol for streaming raw Responses API events. | 构造参数请见实现与类型标注。 | 外部网络请求 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
+| `ResponsesEventStreamer.stream_events(self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None)` | 功能：Yield response stream events as plain dicts. | 输入参数：self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None；输出：AsyncIterator[dict[str, Any]]。 | 外部网络请求 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
+| `OpenAIResponsesEventStreamer()` | 功能：Stream raw OpenAI Responses API events. | 构造参数请见实现与类型标注。 | 外部网络请求 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
+| `OpenAIResponsesEventStreamer.stream_events(self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None)` | 功能：`stream_events` 为该模块公开调用入口之一。 | 输入参数：self, *, model: str, input_text: str, instructions: str \| None=None, previous_response_id: str \| None=None, tools: list[dict[str, Any]] \| None=None, tool_choice: dict[str, Any] \| None=None, reasoning: dict[str, Any] \| None=None；输出：AsyncIterator[dict[str, Any]]。 | 外部网络请求 | `src/agents/orchestrator/`, `src/api/routers/chat.py`, `src/api/routers/strategies.py`, `src/dependencies.py`, `tests/test_infra/test_openai_stream_service_errors.py` |
 
 #### `src/util/__init__.py`
 - 文件作用：该模块主要实现：Shared utilities: logging, data setup, etc.
@@ -1566,21 +1625,21 @@ backend/
 
 #### `src/util/logger.py`
 - 文件作用：该模块主要实现：Custom logger with rich console formatting and rotating file output.
-- 模块级调用方（静态导入）：`src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块
+- 模块级调用方（静态导入）：`src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块
 - 主要副作用：PostgreSQL/ORM 读写
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `setup_logger(name: str='minsy', level: int=logging.INFO)` | 功能：Set up and return a configured logger instance. | 输入参数：name: str='minsy', level: int=logging.INFO；输出：logging.Logger。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `configure_uvicorn_logging(level: int=logging.INFO)` | 功能：Route uvicorn/fastapi logs through one rich handler + file handler. | 输入参数：level: int=logging.INFO；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `configure_sqlalchemy_logging(show_sql: bool=False)` | 功能：Keep SQLAlchemy logs styled, but hide SQL statements by default. | 输入参数：show_sql: bool=False；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `configure_logging(level: str='INFO', show_sql: bool=False)` | 功能：Configure root, app and uvicorn-family loggers. | 输入参数：level: str='INFO', show_sql: bool=False；输出：logging.Logger。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `log_api(method: str, path: str, status: int \| None=None)` | 功能：Log API request/response. | 输入参数：method: str, path: str, status: int \| None=None；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `log_agent(action: str, detail: str='')` | 功能：Log agent activity. | 输入参数：action: str, detail: str=''；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `log_db(operation: str, detail: str='')` | 功能：Log database operations. | 输入参数：operation: str, detail: str=''；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `log_success(message: str)` | 功能：Log success message. | 输入参数：message: str；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `log_error(message: str, exc: Exception \| None=None)` | 功能：Log error message. | 输入参数：message: str, exc: Exception \| None=None；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
-| `banner()` | 功能：Print Minsy startup banner to both console and log file. | 输入参数：无；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator.py`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `setup_logger(name: str='minsy', level: int=logging.INFO)` | 功能：Set up and return a configured logger instance. | 输入参数：name: str='minsy', level: int=logging.INFO；输出：logging.Logger。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `configure_uvicorn_logging(level: int=logging.INFO)` | 功能：Route uvicorn/fastapi logs through one rich handler + file handler. | 输入参数：level: int=logging.INFO；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `configure_sqlalchemy_logging(show_sql: bool=False)` | 功能：Keep SQLAlchemy logs styled, but hide SQL statements by default. | 输入参数：show_sql: bool=False；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `configure_logging(level: str='INFO', show_sql: bool=False)` | 功能：Configure root, app and uvicorn-family loggers. | 输入参数：level: str='INFO', show_sql: bool=False；输出：logging.Logger。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `log_api(method: str, path: str, status: int \| None=None)` | 功能：Log API request/response. | 输入参数：method: str, path: str, status: int \| None=None；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `log_agent(action: str, detail: str='')` | 功能：Log agent activity. | 输入参数：action: str, detail: str=''；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `log_db(operation: str, detail: str='')` | 功能：Log database operations. | 输入参数：operation: str, detail: str=''；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `log_success(message: str)` | 功能：Log success message. | 输入参数：message: str；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `log_error(message: str, exc: Exception \| None=None)` | 功能：Log error message. | 输入参数：message: str, exc: Exception \| None=None；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
+| `banner()` | 功能：Print Minsy startup banner to both console and log file. | 输入参数：无；输出：None。 | PostgreSQL/ORM 读写 | `src/agents/orchestrator/`, `src/engine/backtest/service.py`, `src/engine/strategy/draft_store.py`, `src/main.py`, `src/mcp/_utils.py`, `src/mcp/server.py` 等 11 个模块 |
 
 #### `src/workers/__init__.py`
 - 文件作用：该模块主要实现：Celery worker package.
@@ -1639,7 +1698,7 @@ backend/
 - 建议下一步：要么移除该入口字段，要么补齐 stress_test toolchain（情景回测/蒙特卡洛/危机窗口）。
 
 2. 停止准则仅为占位提示，未接入真实绩效阈值
-- 现状证据：`src/agents/orchestrator.py` 的 `_maybe_apply_stop_criteria_placeholder` 会写入 `performance_threshold_todo`。
+- 现状证据：`src/agents/orchestrator/` 的 `_maybe_apply_stop_criteria_placeholder` 会写入 `performance_threshold_todo`。
 - 为什么是缺口：迭代终止依赖轮次阈值而非收益/回撤质量，策略搜索效率与稳定性受限。
 - 建议下一步：接入可配置门槛（如 rolling sharpe、max drawdown、trade count）并输出可审计触发理由。
 
@@ -1667,7 +1726,7 @@ backend/
 
 ### C.2 技术债与设计风险
 
-- 编排器文件体量过大：`src/agents/orchestrator.py` 超大单文件承载流式协议、工具事件解析、phase 迁移与上下文记忆，后续维护成本高。
+- 编排器复杂度仍高：虽已拆分为 `src/agents/orchestrator/` 多模块，但流式协议、工具事件解析、phase 迁移与上下文记忆仍集中在同一包，跨模块改动面较大。
 - 配置与运行边界耦合：phase runtime policy、tool exposure、历史兼容逻辑集中在 orchestrator，策略演进时容易回归。
 - 草稿存储双通道风险：`src/engine/strategy/draft_store.py` 在 Redis 不可用时回退内存缓存，多实例部署下会出现节点间不可见。
 - 数据启动强依赖外部资产：`src/util/data_setup.py` 首次启动依赖网络下载与 7z 解压，启动路径不确定性较高。
@@ -1692,7 +1751,7 @@ backend/
 
 5. 观测性与可审计增强
 - 价值：快速定位流式异常、MCP 工具失败与策略回归问题。
-- 落点模块：`src/services/openai_stream_service.py`、`src/agents/orchestrator.py`、`src/util/logger.py`、`logs/*`。
+- 落点模块：`src/services/openai_stream_service.py`、`src/agents/orchestrator/`、`src/util/logger.py`、`logs/*`。
 
 6. 数据与迁移治理标准化
 - 价值：降低启动路径副作用，提升多环境一致性。

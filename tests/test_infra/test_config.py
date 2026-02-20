@@ -18,6 +18,16 @@ ALL_SETTING_KEYS = [
     "MCP_SERVER_URL_DEV",
     "MCP_SERVER_URL_PROD",
     "MCP_SERVER_URL",
+    "MCP_SERVER_URL_STRATEGY_DEV",
+    "MCP_SERVER_URL_STRATEGY_PROD",
+    "MCP_SERVER_URL_BACKTEST_DEV",
+    "MCP_SERVER_URL_BACKTEST_PROD",
+    "MCP_SERVER_URL_MARKET_DATA_DEV",
+    "MCP_SERVER_URL_MARKET_DATA_PROD",
+    "MCP_SERVER_URL_STRESS_DEV",
+    "MCP_SERVER_URL_STRESS_PROD",
+    "MCP_SERVER_URL_TRADING_DEV",
+    "MCP_SERVER_URL_TRADING_PROD",
     "MCP_CONTEXT_SECRET",
     "MCP_CONTEXT_TTL_SECONDS",
     "POSTGRES_HOST",
@@ -204,6 +214,67 @@ def test_mcp_server_url_is_controlled_by_app_env_not_legacy_mcp_env(
 
     settings = Settings(_env_file=env_file)
     assert settings.mcp_server_url == "https://dotenv.dev/mcp"
+
+
+def test_domain_mcp_server_urls_fallback_to_legacy_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=dev",
+                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
+                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.strategy_mcp_server_url == "https://dotenv.dev/mcp"
+    assert settings.backtest_mcp_server_url == "https://dotenv.dev/mcp"
+    assert settings.market_data_mcp_server_url == "https://dotenv.dev/mcp"
+    assert settings.stress_mcp_server_url == "https://dotenv.dev/mcp"
+    assert settings.trading_mcp_server_url == "https://dotenv.dev/mcp"
+
+
+def test_domain_mcp_server_urls_prefer_domain_specific_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=prod",
+                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
+                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+                "MCP_SERVER_URL_STRATEGY_PROD=https://mcp.prod/strategy/mcp",
+                "MCP_SERVER_URL_BACKTEST_PROD=https://mcp.prod/backtest/mcp",
+                "MCP_SERVER_URL_MARKET_DATA_PROD=https://mcp.prod/market/mcp",
+                "MCP_SERVER_URL_STRESS_PROD=https://mcp.prod/stress/mcp",
+                "MCP_SERVER_URL_TRADING_PROD=https://mcp.prod/trading/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.strategy_mcp_server_url == "https://mcp.prod/strategy/mcp"
+    assert settings.backtest_mcp_server_url == "https://mcp.prod/backtest/mcp"
+    assert settings.market_data_mcp_server_url == "https://mcp.prod/market/mcp"
+    assert settings.stress_mcp_server_url == "https://mcp.prod/stress/mcp"
+    assert settings.trading_mcp_server_url == "https://mcp.prod/trading/mcp"
+    # Legacy property still works and remains separate from domain-specific URLs.
+    assert settings.mcp_server_url == "https://dotenv.prod/mcp"
 
 
 def test_runtime_env_aliases_and_dev_mode_flag(
