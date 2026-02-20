@@ -63,7 +63,7 @@ class Settings(BaseSettings):
         alias="TELEGRAM_TEST_BATCHES_ENABLED",
     )
     telegram_webapp_base_url: str = Field(
-        default="https://app.minsyai.com",
+        default="https://api.minsyai.com",
         alias="TELEGRAM_WEBAPP_BASE_URL",
     )
     telegram_test_payment_provider_token: str = Field(

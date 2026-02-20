@@ -143,10 +143,16 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         )
         assert start_response.status_code == 200
         assert start_response.json() == {"ok": True}
-        assert len(dummy_bot.sent_messages) >= 4
-        assert "你喜欢猫还是狗" in dummy_bot.sent_messages[0]["text"]
-        assert any("交易机会出现" in msg.get("text", "") for msg in dummy_bot.sent_messages)
-        assert any("连接完成" in msg.get("text", "") for msg in dummy_bot.sent_messages)
+        assert len(dummy_bot.sent_messages) >= 5
+        assert "已连接 Minsy Telegram 测试通道" in dummy_bot.sent_messages[0]["text"]
+        assert any(
+            "KYC → Pre-Strategy → Strategy → Deployment" in msg.get("text", "")
+            for msg in dummy_bot.sent_messages
+        )
+        assert any("Strategy 阶段交易机会" in msg.get("text", "") for msg in dummy_bot.sent_messages)
+        assert any("Backtest 已完成" in msg.get("text", "") for msg in dummy_bot.sent_messages)
+        assert any("实盘开仓提醒" in msg.get("text", "") for msg in dummy_bot.sent_messages)
+        assert any("Market Regime 变动提醒" in msg.get("text", "") for msg in dummy_bot.sent_messages)
         assert dummy_bot.commands
         assert dummy_bot.menu_buttons
         assert dummy_bot.polls
@@ -162,7 +168,7 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         assert telegram["connected_account"] == "@telegram_tester"
 
         trade_message = next(
-            msg for msg in dummy_bot.sent_messages if "交易机会出现" in msg.get("text", "")
+            msg for msg in dummy_bot.sent_messages if "Strategy 阶段交易机会" in msg.get("text", "")
         )
         trade_markup = trade_message["reply_markup"]
         trade_callback_data = trade_markup.inline_keyboard[0][0].callback_data
@@ -192,8 +198,34 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         assert len(dummy_bot.answered_callbacks) == 1
         assert dummy_bot.edited_messages
 
-        text_update = {
+        backtest_message = next(
+            msg for msg in dummy_bot.sent_messages if "Backtest 已完成" in msg.get("text", "")
+        )
+        backtest_callback = backtest_message["reply_markup"].inline_keyboard[0][0].callback_data
+        backtest_callback_update = {
             "update_id": base_update_id + 2,
+            "callback_query": {
+                "id": "callback-2",
+                "from": {"id": 910001, "is_bot": False, "first_name": "Tester"},
+                "data": backtest_callback,
+                "chat_instance": "chat-instance",
+                "message": {
+                    "message_id": 15,
+                    "date": 1739999999,
+                    "chat": {"id": chat_id, "type": "private"},
+                },
+            },
+        }
+        backtest_callback_response = client.post(
+            "/api/v1/social/webhooks/telegram",
+            headers=_telegram_headers(),
+            json=backtest_callback_update,
+        )
+        assert backtest_callback_response.status_code == 200
+        assert len(dummy_bot.answered_callbacks) == 2
+
+        text_update = {
+            "update_id": base_update_id + 3,
             "message": {
                 "message_id": 12,
                 "date": 1739999999,
@@ -215,7 +247,7 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         )
 
         reset_update = {
-            "update_id": base_update_id + 3,
+            "update_id": base_update_id + 4,
             "message": {
                 "message_id": 13,
                 "date": 1739999999,
@@ -233,7 +265,7 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         assert any("已重置对话上下文" in msg.get("text", "") for msg in dummy_bot.sent_messages)
 
         webapp_update = {
-            "update_id": base_update_id + 4,
+            "update_id": base_update_id + 5,
             "message": {
                 "message_id": 14,
                 "date": 1739999999,
@@ -254,7 +286,7 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         assert any("WebApp 回传参数" in msg.get("text", "") for msg in dummy_bot.sent_messages)
 
         inline_update = {
-            "update_id": base_update_id + 5,
+            "update_id": base_update_id + 6,
             "inline_query": {
                 "id": "inline-1",
                 "from": {

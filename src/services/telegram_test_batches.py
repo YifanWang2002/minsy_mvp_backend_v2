@@ -12,7 +12,7 @@ import re
 from datetime import UTC, datetime
 from html import escape
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +22,6 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQueryResultArticle,
-    InputMediaPhoto,
     InputTextMessageContent,
     LabeledPrice,
     MenuButtonWebApp,
@@ -40,6 +39,15 @@ from src.util.logger import logger
 _TELEGRAM_TEST_META_KEY = "telegram_test"
 _TRADE_SYMBOL = "NASDAQ:AAPL"
 _TRADE_INTERVALS: tuple[str, ...] = ("1m", "5m", "1h", "1d")
+_PRE_STRATEGY_MARKETS: tuple[str, ...] = ("us_stocks", "crypto", "forex", "futures")
+_FREQ_BUCKETS: tuple[str, ...] = ("few_per_month", "few_per_week", "daily", "multiple_per_day")
+_HOLDING_BUCKETS: tuple[str, ...] = (
+    "intraday_scalp",
+    "intraday",
+    "swing_days",
+    "position_weeks_plus",
+)
+_DEPLOYMENT_STATUS: tuple[str, ...] = ("ready", "deployed", "blocked")
 
 _SYMBOL_RE = re.compile(r"^[A-Z0-9:_\-\.]{1,32}$")
 
@@ -71,20 +79,32 @@ class TelegramTestBatchService:
             return
 
         signal_id = self._build_signal_id()
+        backtest_id = self._build_event_id(prefix="bt")
+        position_id = self._build_event_id(prefix="pos")
+        regime_id = self._build_event_id(prefix="reg")
         await self._persist_test_state(
             binding,
             {
                 "last_signal_id": signal_id,
                 "last_symbol": _TRADE_SYMBOL,
                 "last_interval": "1d",
+                "last_backtest_id": backtest_id,
+                "last_position_id": position_id,
+                "last_regime_id": regime_id,
             },
         )
 
         batches = (
             self._batch_configure_menu(chat_id=chat_id, locale=locale, signal_id=signal_id),
+            self._batch_flow_intro(chat_id=chat_id, locale=locale),
+            self._batch_pre_strategy_scope(chat_id=chat_id, locale=locale),
             self._batch_trade_opportunity(chat_id=chat_id, locale=locale, signal_id=signal_id),
             self._batch_chat_intro(chat_id=chat_id, locale=locale),
-            self._batch_content_features(chat_id=chat_id, locale=locale),
+            self._batch_deployment_status(chat_id=chat_id, locale=locale),
+            self._batch_backtest_completed(chat_id=chat_id, locale=locale, backtest_id=backtest_id),
+            self._batch_live_trade_open_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
+            self._batch_live_trade_close_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
+            self._batch_market_regime_change(chat_id=chat_id, locale=locale, regime_id=regime_id),
             self._batch_poll(chat_id=chat_id, locale=locale),
             self._batch_payments(chat_id=chat_id, locale=locale, signal_id=signal_id),
         )
@@ -95,6 +115,38 @@ class TelegramTestBatchService:
             except TelegramError as exc:
                 logger.warning("Telegram test batch failed: %s", exc)
             await asyncio.sleep(0.15)
+
+    async def send_post_strategy_batches(
+        self,
+        *,
+        chat_id: str,
+        locale: str,
+        binding: SocialConnectorBinding,
+    ) -> None:
+        """Replay post-strategy alert batches only."""
+        backtest_id = self._build_event_id(prefix="bt")
+        position_id = self._build_event_id(prefix="pos")
+        regime_id = self._build_event_id(prefix="reg")
+        await self._persist_test_state(
+            binding,
+            {
+                "last_backtest_id": backtest_id,
+                "last_position_id": position_id,
+                "last_regime_id": regime_id,
+            },
+        )
+        batches = (
+            self._batch_backtest_completed(chat_id=chat_id, locale=locale, backtest_id=backtest_id),
+            self._batch_live_trade_open_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
+            self._batch_live_trade_close_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
+            self._batch_market_regime_change(chat_id=chat_id, locale=locale, regime_id=regime_id),
+        )
+        for batch in batches:
+            try:
+                await batch
+            except TelegramError as exc:
+                logger.warning("Telegram post-strategy batch failed: %s", exc)
+            await asyncio.sleep(0.12)
 
     async def handle_connected_text_message(
         self,
@@ -137,6 +189,14 @@ class TelegramTestBatchService:
                 },
             )
             await self._batch_trade_opportunity(chat_id=chat_id, locale=locale, signal_id=signal_id)
+            return True
+
+        if lowered.startswith("/testall"):
+            await self.send_post_connect_batches(chat_id=chat_id, locale=locale, binding=binding)
+            return True
+
+        if lowered.startswith("/postflow"):
+            await self.send_post_strategy_batches(chat_id=chat_id, locale=locale, binding=binding)
             return True
 
         if lowered.startswith("/help"):
@@ -206,6 +266,379 @@ class TelegramTestBatchService:
 
         chat_id = str(callback.message.chat.id)
         message_id = callback.message.message_id
+
+        if data.startswith("backtest_continue:"):
+            backtest_id = data.split(":", 1)[1].strip() or "unknown"
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="backtest_continue",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "backtest_continue", "backtest_id": backtest_id},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text=(
+                    "收到，继续在聊天里优化策略。"
+                    if locale == "zh"
+                    else "Got it. Continue strategy iteration in chat."
+                ),
+            )
+            summary = (
+                "<b>Backtest 已完成</b>\n"
+                f"backtest_id: <code>{escape(backtest_id)}</code>\n"
+                "你可以直接回复：调整因子、参数、或风控阈值。"
+                if locale == "zh"
+                else "<b>Backtest Completed</b>\n"
+                f"backtest_id: <code>{escape(backtest_id)}</code>\n"
+                "Reply in chat to adjust factors, params, or risk controls."
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+
+        if data.startswith("backtest_rerun:"):
+            backtest_id = data.split(":", 1)[1].strip() or "unknown"
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="backtest_rerun",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "backtest_rerun", "backtest_id": backtest_id},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text="已登记重跑请求" if locale == "zh" else "Rerun request queued",
+            )
+            summary = (
+                "<b>回测重跑请求已登记</b>\n"
+                f"backtest_id: <code>{escape(backtest_id)}</code>\n"
+                "测试环境中仅做提醒，不会触发真实任务。"
+                if locale == "zh"
+                else "<b>Backtest rerun request recorded</b>\n"
+                f"backtest_id: <code>{escape(backtest_id)}</code>\n"
+                "In this test flow, this is a notification only."
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+
+        if data.startswith("live_open_ack:"):
+            position_id = data.split(":", 1)[1].strip() or "unknown"
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="live_open_ack",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "live_open_ack", "position_id": position_id},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text="已确认开仓提醒" if locale == "zh" else "Open-position alert acknowledged",
+            )
+            summary = (
+                "<b>实盘开仓提醒</b>\n"
+                f"position_id: <code>{escape(position_id)}</code>\n"
+                "状态: <b>已确认</b>"
+                if locale == "zh"
+                else "<b>Live Open-Position Alert</b>\n"
+                f"position_id: <code>{escape(position_id)}</code>\n"
+                "Status: <b>Acknowledged</b>"
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+
+        if data.startswith("live_force_close:"):
+            position_id = data.split(":", 1)[1].strip() or "unknown"
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="live_force_close",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "live_force_close", "position_id": position_id},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text="已记录平仓请求" if locale == "zh" else "Close request recorded",
+            )
+            summary = (
+                "<b>实盘开仓提醒</b>\n"
+                f"position_id: <code>{escape(position_id)}</code>\n"
+                "动作: <b>已请求紧急平仓</b>（测试）"
+                if locale == "zh"
+                else "<b>Live Open-Position Alert</b>\n"
+                f"position_id: <code>{escape(position_id)}</code>\n"
+                "Action: <b>Emergency close requested</b> (test)"
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+
+        if data.startswith("live_close_ack:"):
+            position_id = data.split(":", 1)[1].strip() or "unknown"
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="live_close_ack",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "live_close_ack", "position_id": position_id},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text="已确认平仓回执" if locale == "zh" else "Close-position receipt acknowledged",
+            )
+            summary = (
+                "<b>实盘平仓回执</b>\n"
+                f"position_id: <code>{escape(position_id)}</code>\n"
+                "状态: <b>已确认</b>"
+                if locale == "zh"
+                else "<b>Live Close-Position Receipt</b>\n"
+                f"position_id: <code>{escape(position_id)}</code>\n"
+                "Status: <b>Acknowledged</b>"
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+
+        if data.startswith("regime_ack:"):
+            regime_id = data.split(":", 1)[1].strip() or "unknown"
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="regime_ack",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "regime_ack", "regime_id": regime_id},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text="已确认 regime 变动" if locale == "zh" else "Regime-change alert acknowledged",
+            )
+            summary = (
+                "<b>Market Regime 变动</b>\n"
+                f"regime_event_id: <code>{escape(regime_id)}</code>\n"
+                "状态: <b>已确认</b>"
+                if locale == "zh"
+                else "<b>Market Regime Change</b>\n"
+                f"regime_event_id: <code>{escape(regime_id)}</code>\n"
+                "Status: <b>Acknowledged</b>"
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+
+        if data.startswith("regime_adjust:"):
+            regime_id = data.split(":", 1)[1].strip() or "unknown"
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="regime_adjust",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "regime_adjust", "regime_id": regime_id},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text="已记录调整请求" if locale == "zh" else "Adjustment request recorded",
+            )
+            summary = (
+                "<b>Market Regime 变动</b>\n"
+                f"regime_event_id: <code>{escape(regime_id)}</code>\n"
+                "动作: <b>请求调整策略参数</b>"
+                if locale == "zh"
+                else "<b>Market Regime Change</b>\n"
+                f"regime_event_id: <code>{escape(regime_id)}</code>\n"
+                "Action: <b>Request strategy parameter adjustment</b>"
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            await self._safe_send_message(
+                chat_id=chat_id,
+                text=(
+                    "请直接回复你要调整的内容，例如：降低杠杆、提高止损阈值、切换到更长持仓周期。"
+                    if locale == "zh"
+                    else "Reply with what to adjust, e.g. reduce leverage, widen stop-loss threshold, or switch to longer holding period."
+                ),
+            )
+            return True
+
+        if data.startswith("flow_market:"):
+            market = data.split(":", 1)[1].strip().lower()
+            if market not in _PRE_STRATEGY_MARKETS:
+                return False
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="flow_market",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "flow_market", "market": market},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text=(
+                    "已记录目标市场，继续设置机会频率。"
+                    if locale == "zh"
+                    else "Target market saved. Next: opportunity frequency."
+                ),
+            )
+            summary = (
+                f"<b>Pre-Strategy 已更新</b>\n目标市场: <code>{escape(market)}</code>\n下一步: 选择机会频率。"
+                if locale == "zh"
+                else f"<b>Pre-Strategy Updated</b>\nTarget market: <code>{escape(market)}</code>\nNext: choose opportunity frequency."
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            await self._send_frequency_prompt(chat_id=chat_id, locale=locale)
+            return True
+
+        if data.startswith("flow_frequency:"):
+            value = data.split(":", 1)[1].strip().lower()
+            if value not in _FREQ_BUCKETS:
+                return False
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="flow_freq",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "flow_frequency", "value": value},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text=(
+                    "已记录机会频率，继续设置持仓周期。"
+                    if locale == "zh"
+                    else "Opportunity frequency saved. Next: holding period."
+                ),
+            )
+            summary = (
+                f"<b>Pre-Strategy 已更新</b>\n机会频率: <code>{escape(value)}</code>\n下一步: 选择持仓周期。"
+                if locale == "zh"
+                else f"<b>Pre-Strategy Updated</b>\nOpportunity frequency: <code>{escape(value)}</code>\nNext: choose holding period."
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            await self._send_holding_period_prompt(chat_id=chat_id, locale=locale)
+            return True
+
+        if data.startswith("flow_holding:"):
+            value = data.split(":", 1)[1].strip().lower()
+            if value not in _HOLDING_BUCKETS:
+                return False
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="flow_hold",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={"callback_data": data, "kind": "flow_holding", "value": value},
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text=(
+                    "已记录持仓周期，进入 Strategy 阶段。"
+                    if locale == "zh"
+                    else "Holding period saved. Entering strategy phase."
+                ),
+            )
+            summary = (
+                "<b>Pre-Strategy 完成</b>\n已收集 market / frequency / holding。\n"
+                "下一步：进入 Strategy，验证 DSL，生成 strategy_draft_id 后由前端确认。"
+                if locale == "zh"
+                else "<b>Pre-Strategy Completed</b>\nCollected market / frequency / holding.\n"
+                "Next: enter Strategy, validate DSL, generate strategy_draft_id, then confirm in frontend."
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=summary,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+
+        if data.startswith("flow_deploy:"):
+            status_value = data.split(":", 1)[1].strip().lower()
+            if status_value not in _DEPLOYMENT_STATUS:
+                return False
+            await self.social_service.record_telegram_activity(
+                user_id=binding.user_id,
+                event_type="choice",
+                choice_value="flow_deploy",
+                message_text=None,
+                external_update_id=update.update_id,
+                payload={
+                    "callback_data": data,
+                    "kind": "flow_deployment_status",
+                    "deployment_status": status_value,
+                },
+            )
+            await self._safe_answer_callback(
+                callback_query_id=callback.id,
+                text=(
+                    f"部署状态已更新为 {status_value}"
+                    if locale == "zh"
+                    else f"Deployment status updated to {status_value}"
+                ),
+            )
+            deploy_text = (
+                "<b>Deployment 阶段状态</b>\n"
+                f"deployment_status: <code>{escape(status_value)}</code>\n"
+                "说明：ready/deployed/blocked 将驱动后续交付分支。"
+                if locale == "zh"
+                else "<b>Deployment Phase Status</b>\n"
+                f"deployment_status: <code>{escape(status_value)}</code>\n"
+                "Note: ready/deployed/blocked drives handoff branches."
+            )
+            await self._safe_edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=deploy_text,
+                parse_mode=ParseMode.HTML,
+            )
+            return True
 
         if data.startswith("trade_open:") or data.startswith("trade_ignore:"):
             action = "open" if data.startswith("trade_open:") else "ignore"
@@ -300,9 +733,9 @@ class TelegramTestBatchService:
 
         if data.startswith("trade_more:"):
             details = (
-                "策略细节:\n- 信号来源: EMA(12/26) + RSI\n- 方向: 多头\n- 风控: 1.2% 止损"
+                "策略细节:\n- 阶段: Strategy/artifact_ops\n- 来源: DSL + 回测筛选\n- 风控: 1.2% 止损（示例）"
                 if locale == "zh"
-                else "Signal details:\n- Source: EMA(12/26) + RSI\n- Direction: Long\n- Risk: 1.2% SL"
+                else "Signal details:\n- Stage: Strategy/artifact_ops\n- Source: DSL + backtest filter\n- Risk: 1.2% stop (sample)"
             )
             await self._safe_answer_callback(
                 callback_query_id=callback.id,
@@ -421,8 +854,10 @@ class TelegramTestBatchService:
         )
         commands = [
             BotCommand(command="reset", description="重置对话上下文" if locale == "zh" else "Reset chat context"),
-            BotCommand(command="signal", description="触发一条测试机会" if locale == "zh" else "Push a test signal"),
-            BotCommand(command="help", description="查看测试命令" if locale == "zh" else "Show command help"),
+            BotCommand(command="signal", description="触发交易机会批次" if locale == "zh" else "Push trade opportunity batch"),
+            BotCommand(command="testall", description="重放全部测试批次" if locale == "zh" else "Replay all test batches"),
+            BotCommand(command="postflow", description="重放策略后提醒批次" if locale == "zh" else "Replay post-strategy alerts"),
+            BotCommand(command="help", description="查看测试命令" if locale == "zh" else "Show test commands"),
         ]
         try:
             await self.bot.set_my_commands(commands=commands)
@@ -439,6 +874,92 @@ class TelegramTestBatchService:
             )
         except TelegramError as exc:
             logger.warning("Telegram set_chat_menu_button failed: %s", exc)
+
+    async def _batch_flow_intro(self, *, chat_id: str, locale: str) -> None:
+        text = (
+            "✅ Telegram 连接完成。\n"
+            "以下测试批次与 Minsy 实际流程一致：\n"
+            "KYC → Pre-Strategy → Strategy → Deployment。\n"
+            "这些仅用于验证 Telegram 交互，不会改动你的正式策略数据。"
+            if locale == "zh"
+            else "✅ Telegram connected.\n"
+            "The following test batches mirror Minsy's real flow:\n"
+            "KYC → Pre-Strategy → Strategy → Deployment.\n"
+            "These are test-only Telegram interactions and do not change production strategy data."
+        )
+        await self._safe_send_message(chat_id=chat_id, text=text)
+
+    async def _batch_pre_strategy_scope(self, *, chat_id: str, locale: str) -> None:
+        question = (
+            "接下来进入策略准备阶段。告诉我你想交易的市场（target_market）："
+            if locale == "zh"
+            else "Next, let's define your strategy scope. Choose your target market:"
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="美股 us_stocks", callback_data="flow_market:us_stocks"),
+                    InlineKeyboardButton(text="加密 crypto", callback_data="flow_market:crypto"),
+                ],
+                [
+                    InlineKeyboardButton(text="外汇 forex", callback_data="flow_market:forex"),
+                    InlineKeyboardButton(text="期货 futures", callback_data="flow_market:futures"),
+                ],
+            ]
+        )
+        await self._safe_send_message(chat_id=chat_id, text=question, reply_markup=markup)
+
+    async def _send_frequency_prompt(self, *, chat_id: str, locale: str) -> None:
+        question = (
+            "请选择你希望的机会频率（opportunity_frequency_bucket）："
+            if locale == "zh"
+            else "Choose your opportunity frequency (opportunity_frequency_bucket):"
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="每月几次",
+                        callback_data="flow_frequency:few_per_month",
+                    ),
+                    InlineKeyboardButton(
+                        text="每周几次",
+                        callback_data="flow_frequency:few_per_week",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="每日", callback_data="flow_frequency:daily"),
+                    InlineKeyboardButton(
+                        text="日内多次",
+                        callback_data="flow_frequency:multiple_per_day",
+                    ),
+                ],
+            ]
+        )
+        await self._safe_send_message(chat_id=chat_id, text=question, reply_markup=markup)
+
+    async def _send_holding_period_prompt(self, *, chat_id: str, locale: str) -> None:
+        question = (
+            "请选择持仓周期（holding_period_bucket）："
+            if locale == "zh"
+            else "Choose your holding period (holding_period_bucket):"
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="超短 intraday_scalp", callback_data="flow_holding:intraday_scalp"),
+                    InlineKeyboardButton(text="日内 intraday", callback_data="flow_holding:intraday"),
+                ],
+                [
+                    InlineKeyboardButton(text="数日 swing_days", callback_data="flow_holding:swing_days"),
+                    InlineKeyboardButton(
+                        text="数周+ position_weeks_plus",
+                        callback_data="flow_holding:position_weeks_plus",
+                    ),
+                ],
+            ]
+        )
+        await self._safe_send_message(chat_id=chat_id, text=question, reply_markup=markup)
 
     async def _batch_trade_opportunity(self, *, chat_id: str, locale: str, signal_id: str) -> None:
         chart_url = build_telegram_test_webapp_url(
@@ -490,11 +1011,13 @@ class TelegramTestBatchService:
 
     async def _batch_chat_intro(self, *, chat_id: str, locale: str) -> None:
         text = (
-            "✅ 连接完成。现在你可以直接发消息给我，我会调用真实 OpenAI API 回复。\n"
-            "支持命令：/reset（重置上下文）、/signal（推送机会）、/help。"
+            "进入 Strategy 阶段：先验证 DSL 生成 strategy_draft_id，前端确认后继续回测迭代。\n"
+            "你现在可以直接发消息给我，我会调用真实 OpenAI API 回复。\n"
+            "命令：/reset、/signal、/testall、/postflow、/help。"
             if locale == "zh"
-            else "✅ Connected. You can now chat with me. I will answer via the real OpenAI API.\n"
-            "Commands: /reset (context reset), /signal (push signal), /help."
+            else "Entering Strategy phase: validate DSL first, generate strategy_draft_id, then keep iterating with backtests.\n"
+            "You can chat with me now and I will reply via the real OpenAI API.\n"
+            "Commands: /reset, /signal, /testall, /postflow, /help."
         )
         markup = InlineKeyboardMarkup(
             [
@@ -508,38 +1031,183 @@ class TelegramTestBatchService:
         )
         await self._safe_send_message(chat_id=chat_id, text=text, reply_markup=markup)
 
-    async def _batch_content_features(self, *, chat_id: str, locale: str) -> None:
-        rich_text = (
-            "<b>交易机会摘要</b>\n"
-            "<code>symbol=NASDAQ:AAPL</code>\n"
-            "<code>risk=1.2%</code>\n"
-            "<a href=\"https://www.tradingview.com/symbols/NASDAQ-AAPL/\">TradingView 页面</a>"
+    async def _batch_deployment_status(self, *, chat_id: str, locale: str) -> None:
+        text = (
+            "进入 Deployment 阶段测试：请选择 deployment_status（ready / deployed / blocked）。"
             if locale == "zh"
-            else "<b>Signal Snapshot</b>\n"
-            "<code>symbol=NASDAQ:AAPL</code>\n"
-            "<code>risk=1.2%</code>\n"
-            "<a href=\"https://www.tradingview.com/symbols/NASDAQ-AAPL/\">TradingView page</a>"
+            else "Deployment phase test: choose deployment_status (ready / deployed / blocked)."
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="ready", callback_data="flow_deploy:ready"),
+                    InlineKeyboardButton(text="deployed", callback_data="flow_deploy:deployed"),
+                    InlineKeyboardButton(text="blocked", callback_data="flow_deploy:blocked"),
+                ]
+            ]
+        )
+        await self._safe_send_message(chat_id=chat_id, text=text, reply_markup=markup)
+
+    async def _batch_backtest_completed(
+        self,
+        *,
+        chat_id: str,
+        locale: str,
+        backtest_id: str,
+    ) -> None:
+        text = (
+            "<b>Backtest 已完成</b>\n"
+            f"backtest_id: <code>{escape(backtest_id)}</code>\n"
+            "结果摘要: 年化 21.4%, 最大回撤 9.8%, Sharpe 1.57。\n"
+            "你现在可以继续聊天，让我帮你做下一轮策略迭代。"
+            if locale == "zh"
+            else "<b>Backtest Completed</b>\n"
+            f"backtest_id: <code>{escape(backtest_id)}</code>\n"
+            "Summary: Annualized 21.4%, Max DD 9.8%, Sharpe 1.57.\n"
+            "You can continue chatting now for the next strategy iteration."
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="继续聊天优化" if locale == "zh" else "Continue Iteration",
+                        callback_data=f"backtest_continue:{backtest_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="重跑回测" if locale == "zh" else "Rerun Backtest",
+                        callback_data=f"backtest_rerun:{backtest_id}",
+                    ),
+                ]
+            ]
         )
         await self._safe_send_message(
             chat_id=chat_id,
-            text=rich_text,
+            text=text,
             parse_mode=ParseMode.HTML,
-            disable_web_page_preview=False,
+            reply_markup=markup,
         )
 
-        media = [
-            InputMediaPhoto(media="https://picsum.photos/seed/minsy-1d/1280/720", caption="1D"),
-            InputMediaPhoto(media="https://picsum.photos/seed/minsy-1h/1280/720", caption="1H"),
-            InputMediaPhoto(media="https://picsum.photos/seed/minsy-5m/1280/720", caption="5M"),
-        ]
-        await self._safe_send_media_group(chat_id=chat_id, media=media)
+    async def _batch_live_trade_open_reminder(
+        self,
+        *,
+        chat_id: str,
+        locale: str,
+        position_id: str,
+    ) -> None:
+        text = (
+            "<b>实盘开仓提醒</b>\n"
+            f"position_id: <code>{escape(position_id)}</code>\n"
+            "symbol: <code>NASDAQ:AAPL</code>\n"
+            "方向: <b>LONG</b> | 数量: <code>100</code> | 开仓价: <code>186.25</code>"
+            if locale == "zh"
+            else "<b>Live Open-Position Alert</b>\n"
+            f"position_id: <code>{escape(position_id)}</code>\n"
+            "symbol: <code>NASDAQ:AAPL</code>\n"
+            "Side: <b>LONG</b> | Qty: <code>100</code> | Entry: <code>186.25</code>"
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="已知晓" if locale == "zh" else "Acknowledge",
+                        callback_data=f"live_open_ack:{position_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="请求平仓" if locale == "zh" else "Request Close",
+                        callback_data=f"live_force_close:{position_id}",
+                    ),
+                ]
+            ]
+        )
+        await self._safe_send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+    async def _batch_live_trade_close_reminder(
+        self,
+        *,
+        chat_id: str,
+        locale: str,
+        position_id: str,
+    ) -> None:
+        text = (
+            "<b>实盘平仓回执</b>\n"
+            f"position_id: <code>{escape(position_id)}</code>\n"
+            "平仓价: <code>188.74</code> | PnL: <code>+1.34%</code> | 原因: 信号反转"
+            if locale == "zh"
+            else "<b>Live Close-Position Receipt</b>\n"
+            f"position_id: <code>{escape(position_id)}</code>\n"
+            "Exit: <code>188.74</code> | PnL: <code>+1.34%</code> | Reason: signal reversal"
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="确认回执" if locale == "zh" else "Confirm Receipt",
+                        callback_data=f"live_close_ack:{position_id}",
+                    )
+                ]
+            ]
+        )
+        await self._safe_send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
+
+    async def _batch_market_regime_change(
+        self,
+        *,
+        chat_id: str,
+        locale: str,
+        regime_id: str,
+    ) -> None:
+        text = (
+            "<b>Market Regime 变动提醒</b>\n"
+            f"regime_event_id: <code>{escape(regime_id)}</code>\n"
+            "旧状态: <code>risk_on</code> → 新状态: <code>risk_off</code>\n"
+            "建议: 降低仓位上限并提高止损保护。"
+            if locale == "zh"
+            else "<b>Market Regime Change Alert</b>\n"
+            f"regime_event_id: <code>{escape(regime_id)}</code>\n"
+            "Transition: <code>risk_on</code> → <code>risk_off</code>\n"
+            "Suggestion: reduce position cap and tighten protection."
+        )
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        text="已知晓" if locale == "zh" else "Acknowledge",
+                        callback_data=f"regime_ack:{regime_id}",
+                    ),
+                    InlineKeyboardButton(
+                        text="请求调整策略" if locale == "zh" else "Request Adjustments",
+                        callback_data=f"regime_adjust:{regime_id}",
+                    ),
+                ]
+            ]
+        )
+        await self._safe_send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+        )
 
     async def _batch_poll(self, *, chat_id: str, locale: str) -> None:
-        question = "你的风险偏好是？" if locale == "zh" else "What is your risk preference?"
+        question = (
+            "KYC 回顾：你的风险偏好是？"
+            if locale == "zh"
+            else "KYC recap: what is your risk tolerance?"
+        )
         options = [
-            "保守" if locale == "zh" else "Conservative",
-            "平衡" if locale == "zh" else "Balanced",
-            "激进" if locale == "zh" else "Aggressive",
+            "保守 conservative" if locale == "zh" else "Conservative",
+            "中等 moderate" if locale == "zh" else "Moderate",
+            "激进 aggressive" if locale == "zh" else "Aggressive",
         ]
         try:
             await self.bot.send_poll(
@@ -550,9 +1218,9 @@ class TelegramTestBatchService:
                 correct_option_id=1,
                 is_anonymous=False,
                 explanation=(
-                    "测试问卷：用于后续个性化信号。"
+                    "对应 KYC 的 risk_tolerance 字段，用于测试映射。"
                     if locale == "zh"
-                    else "Test quiz for future personalization."
+                    else "Maps to KYC risk_tolerance for test validation."
                 ),
             )
         except TelegramError as exc:
@@ -595,9 +1263,9 @@ class TelegramTestBatchService:
         locale: str,
     ) -> tuple[str, str | None]:
         instructions = (
-            "你是一个交易助手，请简洁回答用户，并在必要时提醒风险。"
+            "你是 Minsy 的交易助手。回答需贴合 KYC→Pre-Strategy→Strategy→Deployment 流程，简洁并提示风险。"
             if locale == "zh"
-            else "You are a trading assistant. Keep responses concise and mention risk when relevant."
+            else "You are Minsy's trading assistant. Keep answers aligned with KYC→Pre-Strategy→Strategy→Deployment flow, concise, and risk-aware."
         )
         request_kwargs: dict[str, Any] = {
             "model": settings.openai_response_model,
@@ -749,21 +1417,26 @@ class TelegramTestBatchService:
         return datetime.now(UTC).strftime("sig%Y%m%d%H%M%S")
 
     @staticmethod
+    def _build_event_id(*, prefix: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]", "", prefix.lower()) or "evt"
+        return datetime.now(UTC).strftime(f"{normalized}%Y%m%d%H%M%S")
+
+    @staticmethod
     def _build_trade_signal_text(*, locale: str, signal_id: str) -> str:
         if locale == "zh":
             return (
-                "<b>交易机会出现</b>\n"
+                "<b>Strategy 阶段交易机会</b>\n"
                 f"Signal ID: <code>{escape(signal_id)}</code>\n"
-                "标的: <code>NASDAQ:AAPL</code>\n"
-                "方向: <b>Long</b>\n"
-                "建议: 点击下方按钮选择 <b>开单</b> 或 <b>忽略</b>，并通过 WebApp 查看内嵌图表。"
+                "标的: <code>NASDAQ:AAPL</code>（示例）\n"
+                "来源: <b>DSL + 回测筛选后机会</b>\n"
+                "动作: 选择 <b>开单</b> / <b>忽略</b>，并通过 WebApp 查看 TradingView 图表。"
             )
         return (
-            "<b>New Trading Opportunity</b>\n"
+            "<b>Strategy Phase Opportunity</b>\n"
             f"Signal ID: <code>{escape(signal_id)}</code>\n"
-            "Symbol: <code>NASDAQ:AAPL</code>\n"
-            "Direction: <b>Long</b>\n"
-            "Action: choose <b>Open</b> or <b>Ignore</b>, then inspect the embedded WebApp chart."
+            "Symbol: <code>NASDAQ:AAPL</code> (sample)\n"
+            "Source: <b>post-DSL and backtest candidate</b>\n"
+            "Action: choose <b>Open</b> / <b>Ignore</b>, then inspect the TradingView WebApp chart."
         )
 
     @staticmethod
@@ -791,14 +1464,18 @@ class TelegramTestBatchService:
             return (
                 "可用测试命令:\n"
                 "/reset - 重置 OpenAI 对话上下文\n"
-                "/signal - 立即推送一条交易机会\n"
+                "/signal - 立即推送一条 Strategy 交易机会\n"
+                "/testall - 重放连接后的全部测试批次\n"
+                "/postflow - 仅重放 Strategy 后续提醒（backtest/实盘/regime）\n"
                 "/help - 查看命令列表\n"
                 "你也可以直接发送任意文本进行对话。"
             )
         return (
             "Available test commands:\n"
             "/reset - reset OpenAI conversation context\n"
-            "/signal - push a trade opportunity now\n"
+            "/signal - push one Strategy opportunity now\n"
+            "/testall - replay all post-connect test batches\n"
+            "/postflow - replay post-strategy alerts only (backtest/live/regime)\n"
             "/help - show this command list\n"
             "You can also send any text to chat."
         )
@@ -866,12 +1543,6 @@ class TelegramTestBatchService:
         except TelegramError as exc:
             logger.warning("Telegram send_chat_action failed: %s", exc)
 
-    async def _safe_send_media_group(self, *, chat_id: str, media: list[InputMediaPhoto]) -> None:
-        try:
-            await self.bot.send_media_group(chat_id=chat_id, media=media)
-        except TelegramError as exc:
-            logger.warning("Telegram send_media_group failed: %s", exc)
-
     async def _safe_answer_inline_query(
         self,
         *,
@@ -897,9 +1568,7 @@ def build_telegram_test_webapp_url(
     locale: str,
 ) -> str:
     """Build absolute Web App URL for the Telegram chart page."""
-    base = settings.telegram_webapp_base_url.strip().rstrip("/")
-    if not base:
-        base = "https://app.minsyai.com"
+    base = _resolve_webapp_base_url().rstrip("/")
 
     endpoint = f"{settings.api_v1_prefix}/social/connectors/telegram/test-webapp/chart"
     query = urlencode(
@@ -911,6 +1580,29 @@ def build_telegram_test_webapp_url(
         }
     )
     return f"{base}{endpoint}?{query}"
+
+
+def _resolve_webapp_base_url() -> str:
+    """Resolve WebApp base origin and avoid frontend-router hash conflicts."""
+    raw = settings.telegram_webapp_base_url.strip()
+    if not raw:
+        return "https://api.minsyai.com"
+
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    scheme = parsed.scheme or "https"
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return "https://api.minsyai.com"
+
+    # When frontend origin is provided, force API origin to avoid SPA hash-router
+    # collisions with Telegram tgWebAppData query/hash parameters.
+    if host == "app.minsyai.com":
+        host = "api.minsyai.com"
+
+    netloc = host
+    if isinstance(parsed.port, int):
+        netloc = f"{host}:{parsed.port}"
+    return f"{scheme}://{netloc}"
 
 
 def build_telegram_test_chart_html(

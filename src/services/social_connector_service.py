@@ -17,6 +17,7 @@ from src.models.social_connector import (
     SocialConnectorBinding,
     SocialConnectorLinkIntent,
 )
+from src.models.user_settings import UserSetting
 
 SUPPORTED_CONNECTOR_PROVIDERS: tuple[str, ...] = (
     "telegram",
@@ -207,6 +208,20 @@ class SocialConnectorService:
             filters.append(SocialConnectorBinding.status == "connected")
         return await self.db.scalar(select(SocialConnectorBinding).where(*filters))
 
+    async def get_telegram_binding_for_external_user(
+        self,
+        *,
+        telegram_user_id: str,
+        require_connected: bool = True,
+    ) -> SocialConnectorBinding | None:
+        filters = [
+            SocialConnectorBinding.provider == "telegram",
+            SocialConnectorBinding.external_user_id == telegram_user_id,
+        ]
+        if require_connected:
+            filters.append(SocialConnectorBinding.status == "connected")
+        return await self.db.scalar(select(SocialConnectorBinding).where(*filters))
+
     async def list_telegram_activities(
         self,
         *,
@@ -264,6 +279,19 @@ class SocialConnectorService:
         if value.startswith("zh"):
             return "zh"
         return "en"
+
+    async def resolve_user_locale(
+        self,
+        *,
+        user_id: UUID,
+        fallback_locale: str | None = None,
+    ) -> str:
+        raw_locale = await self.db.scalar(
+            select(UserSetting.locale).where(UserSetting.user_id == user_id)
+        )
+        if isinstance(raw_locale, str) and raw_locale.strip():
+            return self.normalize_locale(raw_locale)
+        return self.normalize_locale(fallback_locale)
 
     @staticmethod
     def _generate_link_token() -> str:

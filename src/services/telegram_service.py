@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import Bot, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 
 from src.config import settings
@@ -82,7 +82,7 @@ class TelegramService:
             payload={"text": cleaned},
         )
 
-        locale = self.social_service.normalize_locale((binding.metadata_ or {}).get("locale"))
+        locale = await self._resolve_binding_locale(binding)
         handled = await self._test_batch_service().handle_connected_text_message(
             update=update,
             binding=binding,
@@ -125,6 +125,7 @@ class TelegramService:
             await self._safe_send_message(chat_id=chat_id, text=str(exc))
             return
 
+        locale = await self._resolve_binding_locale(binding, fallback_locale=locale)
         await self._send_greeting(chat_id=chat_id, locale=locale)
         await self._test_batch_service().send_post_connect_batches(
             chat_id=chat_id,
@@ -133,19 +134,12 @@ class TelegramService:
         )
 
     async def _send_greeting(self, *, chat_id: str, locale: str) -> None:
-        is_zh = locale == "zh"
-        text = "你喜欢猫还是狗？" if is_zh else "Do you prefer cats or dogs?"
-        cat = "猫" if is_zh else "Cat"
-        dog = "狗" if is_zh else "Dog"
-        markup = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(text=cat, callback_data="pref:cat"),
-                    InlineKeyboardButton(text=dog, callback_data="pref:dog"),
-                ]
-            ]
+        text = (
+            "已连接 Minsy Telegram 测试通道，正在按批次发送流程消息。"
+            if locale == "zh"
+            else "Connected to the Minsy Telegram test channel. Sending batched flow messages."
         )
-        await self._safe_send_message(chat_id=chat_id, text=text, reply_markup=markup)
+        await self._safe_send_message(chat_id=chat_id, text=text)
 
     async def _handle_callback_query(self, update: Update) -> None:
         callback = update.callback_query
@@ -165,7 +159,7 @@ class TelegramService:
             return
 
         data = (callback.data or "").strip().lower()
-        locale = self.social_service.normalize_locale((binding.metadata_ or {}).get("locale"))
+        locale = await self._resolve_binding_locale(binding)
         handled = await self._test_batch_service().handle_callback_query(
             update=update,
             binding=binding,
@@ -212,7 +206,7 @@ class TelegramService:
             )
             return
 
-        locale = self.social_service.normalize_locale((binding.metadata_ or {}).get("locale"))
+        locale = await self._resolve_binding_locale(binding)
         handled = await self._test_batch_service().handle_web_app_data(
             update=update,
             binding=binding,
@@ -226,7 +220,15 @@ class TelegramService:
         if inline_query is None:
             return
 
-        locale = self.social_service.normalize_locale(getattr(inline_query.from_user, "language_code", "en"))
+        from_user = inline_query.from_user
+        locale = self.social_service.normalize_locale(getattr(from_user, "language_code", "en"))
+        if from_user is not None:
+            binding = await self.social_service.get_telegram_binding_for_external_user(
+                telegram_user_id=str(from_user.id),
+                require_connected=True,
+            )
+            if binding is not None:
+                locale = await self._resolve_binding_locale(binding, fallback_locale=locale)
         await self._test_batch_service().handle_inline_query(update=update, locale=locale)
 
     async def _safe_send_message(
@@ -281,4 +283,16 @@ class TelegramService:
             db=self.db,
             social_service=self.social_service,
             bot=self._bot_client(),
+        )
+
+    async def _resolve_binding_locale(
+        self,
+        binding: Any,
+        *,
+        fallback_locale: str | None = None,
+    ) -> str:
+        metadata_locale = (binding.metadata_ or {}).get("locale") if hasattr(binding, "metadata_") else None
+        return await self.social_service.resolve_user_locale(
+            user_id=binding.user_id,
+            fallback_locale=fallback_locale or metadata_locale,
         )
