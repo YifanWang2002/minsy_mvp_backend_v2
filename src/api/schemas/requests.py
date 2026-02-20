@@ -98,3 +98,17 @@ class StrategyConfirmRequest(BaseModel):
         if not normalized:
             return None
         return normalized
+
+
+class TelegramConnectLinkRequest(BaseModel):
+    """Request payload for Telegram connect-link generation."""
+
+    locale: str = Field(default="en", min_length=2, max_length=16)
+
+    @field_validator("locale")
+    @classmethod
+    def validate_locale(cls, value: str) -> str:
+        normalized = value.strip().lower().replace("_", "-")
+        if normalized.startswith("zh"):
+            return "zh"
+        return "en"

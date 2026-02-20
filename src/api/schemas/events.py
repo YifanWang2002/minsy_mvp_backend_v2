@@ -151,3 +151,38 @@ class StrategyDraftDetailResponse(BaseModel):
     dsl_json: dict[str, Any]
     expires_at: datetime
     metadata: dict[str, Any]
+
+
+class SocialConnectorItem(BaseModel):
+    """One social connector status entry for settings page."""
+
+    provider: str
+    status: str
+    connected_account: str | None = None
+    connected_at: datetime | None = None
+    supports_connect: bool = False
+
+
+class TelegramConnectLinkResponse(BaseModel):
+    """Telegram connect-link payload returned to frontend."""
+
+    provider: str
+    connect_url: str
+    expires_at: datetime
+
+
+class TelegramActivityItem(BaseModel):
+    """Telegram interaction event item for settings timeline."""
+
+    id: UUID
+    event_type: str
+    choice_value: str | None = None
+    message_text: str | None = None
+    created_at: datetime
+
+
+class TelegramActivitiesResponse(BaseModel):
+    """Telegram connector activity list."""
+
+    provider: str
+    items: list[TelegramActivityItem] = Field(default_factory=list)

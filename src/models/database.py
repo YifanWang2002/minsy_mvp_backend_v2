@@ -44,6 +44,7 @@ def _import_all_models() -> None:
     import src.models.deployment  # noqa: F401
     import src.models.phase_transition  # noqa: F401
     import src.models.session  # noqa: F401
+    import src.models.social_connector  # noqa: F401
     import src.models.strategy  # noqa: F401
     import src.models.strategy_revision  # noqa: F401
     import src.models.user  # noqa: F401

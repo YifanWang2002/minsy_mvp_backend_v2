@@ -5,6 +5,11 @@ from src.models.base import Base
 from src.models.deployment import Deployment
 from src.models.phase_transition import PhaseTransition
 from src.models.session import Message, Session
+from src.models.social_connector import (
+    SocialConnectorActivity,
+    SocialConnectorBinding,
+    SocialConnectorLinkIntent,
+)
 from src.models.strategy import Strategy
 from src.models.strategy_revision import StrategyRevision
 from src.models.user import User, UserProfile
@@ -17,6 +22,9 @@ __all__ = [
     "Message",
     "PhaseTransition",
     "Session",
+    "SocialConnectorActivity",
+    "SocialConnectorBinding",
+    "SocialConnectorLinkIntent",
     "Strategy",
     "StrategyRevision",
     "User",

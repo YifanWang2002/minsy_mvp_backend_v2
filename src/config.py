@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     )
     mcp_context_secret: str | None = Field(default=None, alias="MCP_CONTEXT_SECRET")
     mcp_context_ttl_seconds: int = Field(default=300, alias="MCP_CONTEXT_TTL_SECONDS")
+    telegram_enabled: bool = Field(default=True, alias="TELEGRAM_ENABLED")
+    telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
+    telegram_bot_username: str = Field(default="", alias="TELEGRAM_BOT_USERNAME")
+    telegram_webhook_secret_token: str = Field(default="", alias="TELEGRAM_WEBHOOK_SECRET_TOKEN")
+    telegram_connect_ttl_seconds: int = Field(default=600, alias="TELEGRAM_CONNECT_TTL_SECONDS")
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
@@ -195,6 +200,13 @@ class Settings(BaseSettings):
     def _validate_email_export_interval(cls, value: int) -> int:
         if value < 1:
             raise ValueError("USER_EMAIL_CSV_EXPORT_INTERVAL_MINUTES must be >= 1.")
+        return value
+
+    @field_validator("telegram_connect_ttl_seconds")
+    @classmethod
+    def _validate_telegram_connect_ttl_seconds(cls, value: int) -> int:
+        if value < 60:
+            raise ValueError("TELEGRAM_CONNECT_TTL_SECONDS must be >= 60.")
         return value
 
     @property

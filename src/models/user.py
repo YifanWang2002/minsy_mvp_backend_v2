@@ -14,6 +14,11 @@ if TYPE_CHECKING:
     from src.models.backtest import BacktestJob
     from src.models.deployment import Deployment
     from src.models.session import Session
+    from src.models.social_connector import (
+        SocialConnectorActivity,
+        SocialConnectorBinding,
+        SocialConnectorLinkIntent,
+    )
     from src.models.strategy import Strategy
     from src.models.user_settings import UserSetting
 
@@ -55,6 +60,18 @@ class User(Base):
         cascade="all, delete-orphan",
     )
     deployments: Mapped[list[Deployment]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    social_connector_bindings: Mapped[list[SocialConnectorBinding]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    social_connector_link_intents: Mapped[list[SocialConnectorLinkIntent]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    social_connector_activities: Mapped[list[SocialConnectorActivity]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )
