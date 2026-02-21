@@ -46,6 +46,8 @@ celery_app.conf.update(
     accept_content=["json"],
     task_time_limit=settings.celery_task_time_limit_seconds,
     task_soft_time_limit=settings.celery_task_soft_time_limit_seconds,
+    # Celery uses KB for this option; recycle child process after it exceeds cap.
+    worker_max_memory_per_child=settings.celery_worker_max_memory_per_child,
     task_always_eager=settings.celery_task_always_eager,
     broker_connection_retry_on_startup=True,
     timezone=settings.celery_timezone,

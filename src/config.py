@@ -151,6 +151,10 @@ class Settings(BaseSettings):
         default=1740,
         alias="CELERY_TASK_SOFT_TIME_LIMIT_SECONDS",
     )
+    celery_worker_max_memory_per_child: int = Field(
+        default=524288,
+        alias="CELERY_WORKER_MAX_MEMORY_PER_CHILD",
+    )
     celery_worker_prefetch_multiplier: int = Field(
         default=1,
         alias="CELERY_WORKER_PREFETCH_MULTIPLIER",
@@ -260,6 +264,13 @@ class Settings(BaseSettings):
     def _validate_backup_minute(cls, value: int) -> int:
         if not 0 <= value <= 59:
             raise ValueError("POSTGRES_BACKUP_MINUTE_UTC must be in [0, 59].")
+        return value
+
+    @field_validator("celery_worker_max_memory_per_child")
+    @classmethod
+    def _validate_celery_worker_max_memory_per_child(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("CELERY_WORKER_MAX_MEMORY_PER_CHILD must be >= 1 (KB).")
         return value
 
     @field_validator("user_email_csv_export_interval_minutes")

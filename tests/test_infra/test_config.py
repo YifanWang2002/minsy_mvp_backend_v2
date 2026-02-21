@@ -48,6 +48,7 @@ ALL_SETTING_KEYS = [
     "CELERY_TASK_DEFAULT_QUEUE",
     "CELERY_TASK_TIME_LIMIT_SECONDS",
     "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS",
+    "CELERY_WORKER_MAX_MEMORY_PER_CHILD",
     "CELERY_WORKER_PREFETCH_MULTIPLIER",
     "CELERY_TASK_ACKS_LATE",
     "CELERY_TASK_ALWAYS_EAGER",
@@ -337,6 +338,48 @@ def test_runtime_env_aliases_and_dev_mode_flag(
     prod_settings = Settings(_env_file=env_file)
     assert prod_settings.runtime_env == "prod"
     assert prod_settings.is_dev_mode is False
+
+
+def test_celery_worker_max_memory_per_child_reads_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "CELERY_WORKER_MAX_MEMORY_PER_CHILD=262144",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.celery_worker_max_memory_per_child == 262144
+
+
+def test_celery_worker_max_memory_per_child_invalid_raises_validation_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "CELERY_WORKER_MAX_MEMORY_PER_CHILD=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=env_file)
 
 
 def test_effective_mcp_context_secret_falls_back_to_secret_key(
