@@ -8,6 +8,9 @@ from celery import Celery
 from celery.schedules import crontab
 
 from src.config import settings
+from src.observability.sentry_setup import init_backend_sentry
+
+init_backend_sentry(source="celery")
 
 _beat_schedule: dict[str, dict[str, object]] = {}
 

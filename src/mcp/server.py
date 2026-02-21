@@ -20,6 +20,7 @@ from src.mcp.stress import TOOL_NAMES as STRESS_TOOL_NAMES
 from src.mcp.stress import register_stress_tools
 from src.mcp.trading import TOOL_NAMES as TRADING_TOOL_NAMES
 from src.mcp.trading import register_trading_tools
+from src.observability.sentry_setup import init_backend_sentry
 from src.util.logger import configure_logging, logger
 
 
@@ -206,6 +207,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _build_parser().parse_args()
     configure_logging(level=os.getenv("LOG_LEVEL", "INFO"), show_sql=False)
+    init_backend_sentry(source="mcp")
     resolved_domain = _resolve_domain(args.domain)
     mcp = create_mcp_server(
         host=args.host,

@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.middleware.sentry_http_status import SentryHTTPStatusMiddleware
 from src.api.router import api_router
 from src.config import settings
 from src.models.database import close_postgres, init_postgres
 from src.models.redis import close_redis, init_redis
+from src.observability.sentry_setup import init_backend_sentry
 from src.util.data_setup import ensure_market_data
 from src.util.logger import banner, configure_logging, log_success, logger
 
@@ -62,6 +64,7 @@ async def lifespan(_: FastAPI):
 
 def create_app() -> FastAPI:
     """Application factory for uvicorn and testing."""
+    init_backend_sentry(source="fastapi")
     app = FastAPI(
         title=settings.app_name,
         debug=settings.debug,
@@ -87,6 +90,8 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    app.add_middleware(SentryHTTPStatusMiddleware)
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

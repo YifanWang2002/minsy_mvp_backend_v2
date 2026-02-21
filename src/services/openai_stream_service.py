@@ -11,6 +11,7 @@ import httpx
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI
 
 from src.config import settings
+from src.observability.sentry_setup import capture_exception_with_context
 from src.util.logger import logger
 
 
@@ -407,6 +408,21 @@ class OpenAIResponsesEventStreamer:
                     diagnostics.get("status_code"),
                     diagnostics.get("request_id"),
                     error_payload.get("message"),
+                )
+                capture_exception_with_context(
+                    exc,
+                    tags={
+                        "source": "openai_stream",
+                        "category": diagnostics.get("category"),
+                        "status_code": diagnostics.get("status_code"),
+                        "request_id": diagnostics.get("request_id"),
+                    },
+                    extras={
+                        "attempt": attempt,
+                        "retryable": retryable,
+                        "diagnostics": diagnostics,
+                        "error_payload": error_payload,
+                    },
                 )
                 yield {
                     "type": "response.stream_error",
