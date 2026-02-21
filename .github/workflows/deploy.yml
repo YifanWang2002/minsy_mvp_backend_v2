@@ -24,7 +24,10 @@ jobs:
           port: 22
           script_stop: true
           script: |
-            set -euo pipefail
+            set -eu
+            if (set -o pipefail) >/dev/null 2>&1; then
+              set -o pipefail
+            fi
             export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
             APP_DIR="/home/yifan/minsy_mvp_backend_v2"
             cd "$APP_DIR"
@@ -96,33 +99,30 @@ jobs:
             sudo systemctl daemon-reload
 
             # 重启应用服务（MCP 拆分后逐个服务）
-            SERVICES=(
-              minsy-fastapi
-              minsy-mcp-strategy
-              minsy-mcp-backtest
-              minsy-mcp-market
-              minsy-mcp-stress
-              minsy-mcp-trading
-              minsy-celery
-              minsy-celery-beat
-            )
-            for svc in "${SERVICES[@]}"; do
+            SERVICES="minsy-fastapi minsy-mcp-strategy minsy-mcp-backtest minsy-mcp-market minsy-mcp-stress minsy-mcp-trading minsy-celery minsy-celery-beat"
+
+            FLOWER_ENABLED_RAW="$(grep -E '^FLOWER_ENABLED=' .env | tail -n1 | cut -d= -f2- || true)"
+            FLOWER_ENABLED_NORM="$(echo "${FLOWER_ENABLED_RAW:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
+            if [ "$FLOWER_ENABLED_NORM" = "1" ] || [ "$FLOWER_ENABLED_NORM" = "true" ] || [ "$FLOWER_ENABLED_NORM" = "yes" ] || [ "$FLOWER_ENABLED_NORM" = "on" ]; then
+              SERVICES="$SERVICES minsy-flower"
+            fi
+
+            for svc in $SERVICES; do
               sudo systemctl restart "$svc"
             done
 
             # systemd active 检查
-            for svc in "${SERVICES[@]}"; do
+            for svc in $SERVICES; do
               sudo systemctl is-active --quiet "$svc"
             done
 
             # 进程健康检查
             curl -fsS http://127.0.0.1:8000/ >/dev/null
             check_mcp_port() {
-              local port="$1"
-              local code
-              code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/mcp")"
-              if [ "$code" != "200" ] && [ "$code" != "406" ]; then
-                echo "Unexpected MCP health code on :${port}/mcp => ${code}"
+              _port="$1"
+              _code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${_port}/mcp")"
+              if [ "$_code" != "200" ] && [ "$_code" != "406" ]; then
+                echo "Unexpected MCP health code on :${_port}/mcp => ${_code}"
                 return 1
               fi
             }
