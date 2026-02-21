@@ -116,20 +116,57 @@ jobs:
               sudo systemctl is-active --quiet "$svc"
             done
 
-            # 进程健康检查
-            curl -fsS http://127.0.0.1:8000/ >/dev/null
-            check_mcp_port() {
-              _port="$1"
-              _code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${_port}/mcp")"
-              if [ "$_code" != "200" ] && [ "$_code" != "406" ]; then
-                echo "Unexpected MCP health code on :${_port}/mcp => ${_code}"
-                return 1
-              fi
+            dump_service_diagnostics() {
+              echo "=== Service diagnostics ==="
+              for svc in $SERVICES; do
+                echo "--- systemctl status: ${svc} ---"
+                sudo systemctl --no-pager -l status "$svc" || true
+                echo "--- journalctl tail: ${svc} ---"
+                sudo journalctl -u "$svc" -n 80 --no-pager || true
+              done
             }
-            check_mcp_port 8111
-            check_mcp_port 8112
-            check_mcp_port 8113
-            check_mcp_port 8114
-            check_mcp_port 8115
+
+            wait_fastapi_health() {
+              _attempt=1
+              _max_attempts=30
+              while [ "$_attempt" -le "$_max_attempts" ]; do
+                if curl -fsS http://127.0.0.1:8000/api/v1/health >/dev/null 2>&1; then
+                  echo "FastAPI health check passed."
+                  return 0
+                fi
+                sleep 2
+                _attempt=$((_attempt + 1))
+              done
+              echo "FastAPI did not become ready in time."
+              return 1
+            }
+
+            wait_mcp_port() {
+              _port="$1"
+              _attempt=1
+              _max_attempts=30
+              while [ "$_attempt" -le "$_max_attempts" ]; do
+                _code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${_port}/mcp" || true)"
+                if [ "$_code" = "200" ] || [ "$_code" = "406" ]; then
+                  echo "MCP port ${_port} health check passed (${_code})."
+                  return 0
+                fi
+                sleep 2
+                _attempt=$((_attempt + 1))
+              done
+              echo "MCP port ${_port} did not become ready in time (last code: ${_code})."
+              return 1
+            }
+
+            # 进程健康检查（带重试，避免刚重启时的短暂不可用）
+            if ! wait_fastapi_health; then
+              dump_service_diagnostics
+              exit 1
+            fi
+            if ! wait_mcp_port 8111; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_port 8112; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_port 8113; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_port 8114; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_port 8115; then dump_service_diagnostics; exit 1; fi
 
             echo "Deploy success."
