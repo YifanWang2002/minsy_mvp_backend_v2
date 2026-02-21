@@ -20,6 +20,7 @@ def build_quantstats_performance(
     returns: list[float],
     timestamps: list[datetime],
     risk_free_rate: float = 0.0,
+    max_series_points: int = 5_000,
 ) -> dict[str, Any]:
     """Compute performance metrics with QuantStats in a stable schema."""
 
@@ -78,12 +79,14 @@ def build_quantstats_performance(
 
     cumulative = (1.0 + aligned).cumprod() - 1.0
     drawdown = qs.stats.to_drawdown_series(aligned)
+    sampled_cumulative = _sample_series(cumulative, max_points=max_series_points)
+    sampled_drawdown = _sample_series(drawdown, max_points=max_series_points)
     return {
         "library": "quantstats",
         "metrics": metrics,
         "series": {
-            "cumulative_returns": _series_to_records(cumulative),
-            "drawdown": _series_to_records(drawdown),
+            "cumulative_returns": _series_to_records(sampled_cumulative),
+            "drawdown": _series_to_records(sampled_drawdown),
         },
     }
 
@@ -171,3 +174,16 @@ def _series_to_records(series: pd.Series) -> list[dict[str, Any]]:
             }
         )
     return records
+
+
+def _sample_series(series: pd.Series, *, max_points: int) -> pd.Series:
+    cap = max(0, int(max_points))
+    if cap == 0:
+        return series.iloc[0:0]
+    total = len(series)
+    if total <= cap:
+        return series
+    if cap == 1:
+        return series.iloc[-1:]
+    positions = np.linspace(0, total - 1, num=cap, dtype=int)
+    return series.iloc[positions]

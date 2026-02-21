@@ -32,6 +32,7 @@ class BacktestConfig:
     commission_rate: float = 0.0
     slippage_bps: float = 0.0
     record_bar_events: bool = False
+    performance_series_max_points: int = 5_000
 
 
 @dataclass(frozen=True, slots=True)

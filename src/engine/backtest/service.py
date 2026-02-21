@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -10,6 +11,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import settings
 from src.engine.backtest.analytics import build_compact_performance_payload
 from src.engine.backtest.engine import EventDrivenBacktestEngine
 from src.engine.backtest.types import BacktestConfig
@@ -63,6 +65,10 @@ class BacktestStrategyNotFoundError(LookupError):
     """Raised when strategy does not exist for a job create request."""
 
 
+class BacktestBarLimitExceededError(ValueError):
+    """Raised when requested bar count exceeds configured safety limit."""
+
+
 async def create_backtest_job(
     db: AsyncSession,
     *,
@@ -101,6 +107,10 @@ async def create_backtest_job(
         # analytics can be resolved per version reliably.
         "strategy_version": int(strategy.version),
     }
+    _enforce_backtest_bar_limit_at_submission(
+        strategy_payload=strategy.dsl_payload or {},
+        config=config,
+    )
     job = BacktestJob(
         strategy_id=strategy.id,
         user_id=strategy.user_id,
@@ -207,6 +217,12 @@ async def execute_backtest_job(
             start_date=start_date,
             end_date=end_date,
         )
+        loaded_bars = len(frame)
+        _enforce_backtest_bar_limit_or_raise(loaded_bars)
+        job.config = {
+            **(job.config or {}),
+            "loaded_bars": loaded_bars,
+        }
 
         config = _build_backtest_config(job.config or {})
         result = EventDrivenBacktestEngine(
@@ -226,6 +242,12 @@ async def execute_backtest_job(
         )
         _mark_job_completed(job, result=serialized_result)
 
+    except BacktestBarLimitExceededError as exc:
+        _mark_job_failed(
+            job,
+            error_code="BACKTEST_BAR_LIMIT_EXCEEDED",
+            message=str(exc),
+        )
     except Exception as exc:  # noqa: BLE001
         _mark_job_failed(
             job,
@@ -263,6 +285,23 @@ def _serialize_backtest_result(
     symbol: str,
     timeframe: str,
 ) -> dict[str, Any]:
+    sampled_trades, total_trades = _sample_sequence(
+        result.trades,
+        max_items=settings.backtest_result_max_trades,
+    )
+    sampled_equity_curve, total_equity_points = _sample_sequence(
+        result.equity_curve,
+        max_items=settings.backtest_result_max_equity_points,
+    )
+    sampled_returns, total_returns = _sample_sequence(
+        result.returns,
+        max_items=settings.backtest_result_max_returns,
+    )
+    sampled_events, total_events = _sample_sequence(
+        result.events,
+        max_items=settings.backtest_result_max_events,
+    )
+
     payload = {
         "market": market,
         "symbol": symbol,
@@ -291,13 +330,13 @@ def _serialize_backtest_result(
                 "pnl_pct": trade.pnl_pct,
                 "commission": trade.commission,
             }
-            for trade in result.trades
+            for trade in sampled_trades
         ],
         "equity_curve": [
             {"timestamp": point.timestamp.isoformat(), "equity": point.equity}
-            for point in result.equity_curve
+            for point in sampled_equity_curve
         ],
-        "returns": list(result.returns),
+        "returns": list(sampled_returns),
         "events": [
             {
                 "type": event.type.value,
@@ -305,9 +344,25 @@ def _serialize_backtest_result(
                 "bar_index": event.bar_index,
                 "payload": event.payload,
             }
-            for event in result.events
+            for event in sampled_events
         ],
         "performance": result.performance,
+        "truncation": {
+            "truncated": (
+                len(sampled_trades) < total_trades
+                or len(sampled_equity_curve) < total_equity_points
+                or len(sampled_returns) < total_returns
+                or len(sampled_events) < total_events
+            ),
+            "trades_total": total_trades,
+            "trades_kept": len(sampled_trades),
+            "equity_points_total": total_equity_points,
+            "equity_points_kept": len(sampled_equity_curve),
+            "returns_total": total_returns,
+            "returns_kept": len(sampled_returns),
+            "events_total": total_events,
+            "events_kept": len(sampled_events),
+        },
         "started_at": result.started_at.isoformat(),
         "finished_at": result.finished_at.isoformat(),
     }
@@ -394,6 +449,7 @@ def _build_backtest_config(config: dict[str, Any]) -> BacktestConfig:
         commission_rate=float(config.get("commission_rate", 0.0)),
         slippage_bps=float(config.get("slippage_bps", 0.0)),
         record_bar_events=record_bar_events,
+        performance_series_max_points=settings.backtest_result_max_equity_points,
     )
 
 
@@ -487,3 +543,89 @@ def _to_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _sample_sequence(
+    values: Sequence[Any],
+    *,
+    max_items: int,
+) -> tuple[list[Any], int]:
+    total = len(values)
+    cap = max(0, int(max_items))
+    if cap == 0:
+        return ([], total)
+    if total <= cap:
+        return (list(values), total)
+    if cap == 1:
+        return ([values[-1]], total)
+
+    sampled: list[Any] = []
+    last_index = total - 1
+    for idx in range(cap):
+        pos = round(idx * last_index / (cap - 1))
+        sampled.append(values[pos])
+    return (sampled, total)
+
+
+def _enforce_backtest_bar_limit_at_submission(
+    *,
+    strategy_payload: dict[str, Any],
+    config: dict[str, Any],
+) -> None:
+    """Best-effort early bar-limit validation during job submission."""
+    try:
+        parsed = parse_strategy_payload(strategy_payload)
+    except Exception:  # noqa: BLE001
+        # Preserve current behavior: invalid strategy payload fails during execution.
+        return
+
+    symbol = _pick_symbol(parsed.universe.tickers)
+    try:
+        loader = DataLoader()
+        start_date, end_date = _resolve_timerange(
+            loader=loader,
+            market=parsed.universe.market,
+            symbol=symbol,
+            config=config,
+        )
+    except Exception:  # noqa: BLE001
+        # If metadata/timerange probe fails here, execution-time validation still applies.
+        return
+
+    estimated_bars = _estimate_requested_bar_count(
+        start_date=start_date,
+        end_date=end_date,
+        timeframe=parsed.universe.timeframe,
+    )
+    _enforce_backtest_bar_limit_or_raise(estimated_bars)
+    config["estimated_bars"] = estimated_bars
+
+
+def _estimate_requested_bar_count(
+    *,
+    start_date: datetime,
+    end_date: datetime,
+    timeframe: str,
+) -> int:
+    timeframe_key = str(timeframe).strip().lower()
+    timeframe_minutes = DataLoader.TIMEFRAME_MINUTES.get(timeframe_key)
+    if timeframe_minutes is None or timeframe_minutes < 1:
+        # Unknown timeframe: keep permissive here and defer to execution-time row limit.
+        return 0
+    delta_seconds = (end_date - start_date).total_seconds()
+    if delta_seconds < 0:
+        return 0
+    interval_seconds = timeframe_minutes * 60
+    return int(delta_seconds // interval_seconds) + 1
+
+
+def _enforce_backtest_bar_limit_or_raise(requested_bars: int) -> None:
+    if requested_bars <= 0:
+        return
+    if requested_bars <= settings.backtest_max_bars:
+        return
+    raise BacktestBarLimitExceededError(
+        "Backtest request is too large: "
+        f"requested_bars={requested_bars:,} exceeds BACKTEST_MAX_BARS={settings.backtest_max_bars:,}. "
+        "Please narrow the date range or switch to a higher timeframe."
+    )

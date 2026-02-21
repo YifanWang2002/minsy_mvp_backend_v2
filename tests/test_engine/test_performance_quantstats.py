@@ -119,3 +119,17 @@ def test_quantstats_metrics_change_with_timestamp_frequency() -> None:
         assert hourly["metrics"][metric] is not None
         assert daily["metrics"][metric] is not None
         assert hourly["metrics"][metric] != pytest.approx(daily["metrics"][metric], rel=1e-6)
+
+
+def test_quantstats_series_is_capped_when_max_series_points_is_set() -> None:
+    returns = [0.001] * 200
+    timestamps = _sample_timestamps(len(returns))
+
+    performance = build_quantstats_performance(
+        returns=returns,
+        timestamps=timestamps,
+        max_series_points=32,
+    )
+
+    assert len(performance["series"]["cumulative_returns"]) == 32
+    assert len(performance["series"]["drawdown"]) == 32

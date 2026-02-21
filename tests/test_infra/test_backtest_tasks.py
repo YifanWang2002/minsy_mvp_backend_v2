@@ -98,3 +98,8 @@ def test_execute_backtest_job_task_resets_db_resources_per_task(
     payload = backtest_tasks.execute_backtest_job_task.run(str(job_id))
     assert payload["status"] == "done"
     assert observed["close_calls"] == 2
+
+
+def test_backtest_task_is_configured_to_avoid_oom_redelivery_loops() -> None:
+    assert backtest_tasks.execute_backtest_job_task.acks_late is False
+    assert backtest_tasks.execute_backtest_job_task.reject_on_worker_lost is False

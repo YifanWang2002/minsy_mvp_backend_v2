@@ -7,12 +7,13 @@ import csv
 import os
 import subprocess
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
 
 from src.config import settings
+from src.models.backtest import BacktestJob
 from src.models import database as db_module
 from src.models.user import User
 from src.util.logger import logger
@@ -139,6 +140,63 @@ async def _fetch_current_user_emails() -> set[str]:
             await db_module.close_postgres()
 
 
+async def _fail_stale_backtest_jobs_once() -> dict[str, int | list[str]]:
+    """Mark stale running backtest jobs as failed."""
+    with suppress(Exception):
+        await db_module.close_postgres()
+
+    await db_module.init_postgres(ensure_schema=False)
+    assert db_module.AsyncSessionLocal is not None
+
+    stale_ids: list[str] = []
+    try:
+        cutoff = datetime.now(UTC) - timedelta(minutes=settings.backtest_running_stale_minutes)
+        async with db_module.AsyncSessionLocal() as session:
+            stale_jobs = (
+                await session.scalars(
+                    select(BacktestJob).where(
+                        BacktestJob.status == "running",
+                        BacktestJob.updated_at < cutoff,
+                    )
+                )
+            ).all()
+
+            now_utc = datetime.now(UTC)
+            for job in stale_jobs:
+                stale_ids.append(str(job.id))
+                message = (
+                    "Backtest job timed out in running state and was auto-failed by cleanup "
+                    f"(threshold={settings.backtest_running_stale_minutes}m)."
+                )
+                job.status = "failed"
+                job.progress = 100
+                job.current_step = "failed"
+                job.completed_at = now_utc
+                job.error_message = message
+                job.results = {
+                    "error": {
+                        "code": "BACKTEST_STALE_RUNNING",
+                        "message": message,
+                    }
+                }
+
+            await session.commit()
+    finally:
+        with suppress(Exception):
+            await db_module.close_postgres()
+
+    logger.info(
+        "[maintenance] stale backtest cleanup threshold_minutes=%s failed_jobs=%s",
+        settings.backtest_running_stale_minutes,
+        len(stale_ids),
+    )
+    return {
+        "threshold_minutes": settings.backtest_running_stale_minutes,
+        "failed_jobs": len(stale_ids),
+        "job_ids": stale_ids,
+    }
+
+
 @celery_app.task(name="maintenance.backup_postgres_full")
 def backup_postgres_full_task() -> dict[str, str | int]:
     """Create a full PostgreSQL backup and rotate old backup files."""
@@ -191,3 +249,9 @@ def export_user_emails_csv_task() -> dict[str, str | int]:
         "total_emails": len(archive),
         "newly_added": newly_added,
     }
+
+
+@celery_app.task(name="maintenance.fail_stale_backtest_jobs")
+def fail_stale_backtest_jobs_task() -> dict[str, int | list[str]]:
+    """Fail stale backtest jobs stuck in running state."""
+    return asyncio.run(_fail_stale_backtest_jobs_once())

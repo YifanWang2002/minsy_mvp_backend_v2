@@ -36,6 +36,11 @@ def test_strategy_schema_only_does_not_embed_patch_workflow() -> None:
     assert "Strategy Patch Workflow" in artifact_ops
 
 
+def test_strategy_artifact_ops_includes_backtest_bar_limit_guardrail() -> None:
+    artifact_ops = build_strategy_static_instructions(language="en", phase_stage="artifact_ops")
+    assert "BACKTEST_MAX_BARS" in artifact_ops
+
+
 def test_stress_test_static_instruction_cache_distinguishes_stage() -> None:
     bootstrap = build_stress_test_static_instructions(language="en", phase_stage="bootstrap")
     bootstrap_again = build_stress_test_static_instructions(language="en", phase_stage="bootstrap")

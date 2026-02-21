@@ -58,6 +58,7 @@ Reply in **{{LANG_NAME}}**.
   1) `strategy_get_dsl(strategy_id)` to read `dsl_json.universe.market` and `dsl_json.universe.tickers`
   2) `get_symbol_data_coverage(market, symbol)` for the symbol you are about to backtest (use the first ticker unless user requests another)
 - Use coverage response `metadata.available_timerange.start/end` as hard bounds for backtest dates.
+- Keep each backtest request under backend safety cap `BACKTEST_MAX_BARS`; if range is too long (especially at `1m`), shorten date range or switch to a higher timeframe before calling `backtest_create_job`.
 - Never submit `backtest_create_job` with `end_date` later than `metadata.available_timerange.end`.
 - If user gives `start_date`/`end_date` outside coverage, clamp to available range and explain the adjustment briefly.
 - If user does not give date range, fill `start_date` and `end_date` from coverage bounds (do not infer from today's date).

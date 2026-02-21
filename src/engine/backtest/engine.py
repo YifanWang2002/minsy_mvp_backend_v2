@@ -142,6 +142,7 @@ class EventDrivenBacktestEngine:
         performance = build_quantstats_performance(
             returns=returns,
             timestamps=return_timestamps,
+            max_series_points=self.config.performance_series_max_points,
         )
         finished_at = utc_now()
         return BacktestResult(

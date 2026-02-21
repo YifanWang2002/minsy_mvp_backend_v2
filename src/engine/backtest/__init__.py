@@ -2,6 +2,7 @@
 
 from src.engine.backtest.engine import EventDrivenBacktestEngine
 from src.engine.backtest.service import (
+    BacktestBarLimitExceededError,
     BacktestJobNotFoundError,
     BacktestJobReceipt,
     BacktestJobView,
@@ -27,6 +28,7 @@ __all__ = [
     "BacktestConfig",
     "BacktestEvent",
     "BacktestEventType",
+    "BacktestBarLimitExceededError",
     "BacktestJobNotFoundError",
     "BacktestJobReceipt",
     "BacktestJobView",

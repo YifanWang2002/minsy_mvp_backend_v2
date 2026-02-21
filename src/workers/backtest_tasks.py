@@ -25,7 +25,13 @@ async def _run_backtest_job_once(job_uuid: UUID):
             await db_module.close_postgres()
 
 
-@celery_app.task(name="backtest.execute_job")
+@celery_app.task(
+    name="backtest.execute_job",
+    # Backtest tasks are memory-heavy and may be killed by OOM. Ack-early avoids
+    # broker-side redelivery loops for the same poisoned payload.
+    acks_late=False,
+    reject_on_worker_lost=False,
+)
 def execute_backtest_job_task(job_id: str) -> dict[str, str | int]:
     """Execute one backtest job inside a Celery worker process."""
     job_uuid = UUID(job_id)

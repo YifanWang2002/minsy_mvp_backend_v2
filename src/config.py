@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from urllib.parse import quote_plus
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote_plus, urlsplit, urlunsplit
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -25,6 +24,33 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, alias="PORT")
     api_v1_prefix: str = Field(default="/api/v1", alias="API_V1_PREFIX")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    sentry_dsn: str = Field(default="", alias="SENTRY_DSN")
+    sentry_env: str | None = Field(default=None, alias="SENTRY_ENV")
+    sentry_release: str | None = Field(default=None, alias="SENTRY_RELEASE")
+    sentry_traces_sample_rate: float = Field(default=0.0, alias="SENTRY_TRACES_SAMPLE_RATE")
+    sentry_profiles_sample_rate: float = Field(
+        default=0.0,
+        alias="SENTRY_PROFILES_SAMPLE_RATE",
+    )
+    sentry_http_status_capture_enabled: bool = Field(
+        default=True,
+        alias="SENTRY_HTTP_STATUS_CAPTURE_ENABLED",
+    )
+    sentry_http_status_min_code: int = Field(
+        default=400,
+        alias="SENTRY_HTTP_STATUS_MIN_CODE",
+    )
+    sentry_http_status_max_code: int = Field(
+        default=599,
+        alias="SENTRY_HTTP_STATUS_MAX_CODE",
+    )
+    sentry_http_status_exclude_paths: list[str] = Field(
+        default_factory=lambda: [
+            "/api/v1/health",
+            "/api/v1/status",
+        ],
+        alias="SENTRY_HTTP_STATUS_EXCLUDE_PATHS",
+    )
     chat_debug_trace_enabled: bool = Field(
         default=False,
         alias="CHAT_DEBUG_TRACE_ENABLED",
@@ -35,6 +61,14 @@ class Settings(BaseSettings):
     )
     openai_api_key: str = Field(alias="OPENAI_API_KEY")
     secret_key: str = Field(alias="SECRET_KEY")
+    openai_cost_tracking_enabled: bool = Field(
+        default=True,
+        alias="OPENAI_COST_TRACKING_ENABLED",
+    )
+    openai_pricing_json: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        alias="OPENAI_PRICING_JSON",
+    )
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(
         default=1440,
@@ -112,6 +146,90 @@ class Settings(BaseSettings):
         alias="TELEGRAM_TEST_PAYMENT_PROVIDER_TOKEN",
     )
 
+    # Trading runtime controls
+    paper_trading_enabled: bool = Field(default=True, alias="PAPER_TRADING_ENABLED")
+    paper_trading_enqueue_on_start: bool = Field(
+        default=True,
+        alias="PAPER_TRADING_ENQUEUE_ON_START",
+    )
+    paper_trading_execute_orders: bool = Field(
+        default=False,
+        alias="PAPER_TRADING_EXECUTE_ORDERS",
+    )
+    paper_trading_loop_interval_seconds: float = Field(
+        default=1.0,
+        alias="PAPER_TRADING_LOOP_INTERVAL_SECONDS",
+    )
+    paper_trading_max_retries: int = Field(default=3, alias="PAPER_TRADING_MAX_RETRIES")
+    paper_trading_kill_switch_global: bool = Field(
+        default=False,
+        alias="PAPER_TRADING_KILL_SWITCH_GLOBAL",
+    )
+    paper_trading_kill_switch_users_csv: str = Field(
+        default="",
+        alias="PAPER_TRADING_KILL_SWITCH_USERS",
+    )
+    paper_trading_kill_switch_deployments_csv: str = Field(
+        default="",
+        alias="PAPER_TRADING_KILL_SWITCH_DEPLOYMENTS",
+    )
+    paper_trading_broker_retry_max_attempts: int = Field(
+        default=3,
+        alias="PAPER_TRADING_BROKER_RETRY_MAX_ATTEMPTS",
+    )
+    paper_trading_broker_retry_backoff_seconds: float = Field(
+        default=0.2,
+        alias="PAPER_TRADING_BROKER_RETRY_BACKOFF_SECONDS",
+    )
+    paper_trading_circuit_breaker_failure_threshold: int = Field(
+        default=5,
+        alias="PAPER_TRADING_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    )
+    paper_trading_circuit_breaker_recovery_seconds: float = Field(
+        default=30.0,
+        alias="PAPER_TRADING_CIRCUIT_BREAKER_RECOVERY_SECONDS",
+    )
+    paper_trading_runtime_health_stale_seconds: int = Field(
+        default=120,
+        alias="PAPER_TRADING_RUNTIME_HEALTH_STALE_SECONDS",
+    )
+    backtest_max_bars: int = Field(
+        default=3_000_000,
+        alias="BACKTEST_MAX_BARS",
+    )
+    backtest_stale_job_cleanup_enabled: bool = Field(
+        default=True,
+        alias="BACKTEST_STALE_JOB_CLEANUP_ENABLED",
+    )
+    backtest_stale_job_cleanup_interval_minutes: int = Field(
+        default=10,
+        alias="BACKTEST_STALE_JOB_CLEANUP_INTERVAL_MINUTES",
+    )
+    backtest_running_stale_minutes: int = Field(
+        default=30,
+        alias="BACKTEST_RUNNING_STALE_MINUTES",
+    )
+    backtest_result_max_trades: int = Field(
+        default=20000,
+        alias="BACKTEST_RESULT_MAX_TRADES",
+    )
+    backtest_result_max_equity_points: int = Field(
+        default=5000,
+        alias="BACKTEST_RESULT_MAX_EQUITY_POINTS",
+    )
+    backtest_result_max_returns: int = Field(
+        default=5000,
+        alias="BACKTEST_RESULT_MAX_RETURNS",
+    )
+    backtest_result_max_events: int = Field(
+        default=2000,
+        alias="BACKTEST_RESULT_MAX_EVENTS",
+    )
+    trading_credentials_secret: str | None = Field(
+        default=None,
+        alias="TRADING_CREDENTIALS_SECRET",
+    )
+
     # Alpaca (paper trading first; live kept as future toggle via base URL)
     alpaca_api_key: str = Field(default="", alias="ALPACA_API_KEY")
     alpaca_api_secret: str = Field(default="", alias="ALPACA_API_SECRET")
@@ -125,6 +243,44 @@ class Settings(BaseSettings):
     )
     alpaca_stocks_feed: str = Field(default="iex", alias="ALPACA_STOCKS_FEED")
     alpaca_crypto_feed: str = Field(default="us", alias="ALPACA_CRYPTO_FEED")
+    alpaca_market_data_stream_url: str = Field(
+        default="wss://stream.data.alpaca.markets/v2",
+        alias="ALPACA_MARKET_DATA_STREAM_URL",
+    )
+    alpaca_request_rate_limit_per_minute: int = Field(
+        default=200,
+        alias="ALPACA_REQUEST_RATE_LIMIT_PER_MINUTE",
+    )
+    alpaca_stream_reconnect_base_seconds: float = Field(
+        default=1.0,
+        alias="ALPACA_STREAM_RECONNECT_BASE_SECONDS",
+    )
+    alpaca_stream_max_retries: int = Field(default=10, alias="ALPACA_STREAM_MAX_RETRIES")
+    market_data_backfill_limit: int = Field(default=500, alias="MARKET_DATA_BACKFILL_LIMIT")
+    market_data_aggregate_timeframes_csv: str = Field(
+        default="5m,15m,1h,1d",
+        alias="MARKET_DATA_AGGREGATE_TIMEFRAMES",
+    )
+    market_data_aggregate_timezone: str = Field(
+        default="UTC",
+        alias="MARKET_DATA_AGGREGATE_TIMEZONE",
+    )
+    market_data_ring_capacity_1m: int = Field(
+        default=45000,
+        alias="MARKET_DATA_RING_CAPACITY_1M",
+    )
+    market_data_ring_capacity_aggregated: int = Field(
+        default=10000,
+        alias="MARKET_DATA_RING_CAPACITY_AGG",
+    )
+    market_data_factor_cache_max_entries: int = Field(
+        default=200000,
+        alias="MARKET_DATA_FACTOR_CACHE_MAX_ENTRIES",
+    )
+    market_data_checkpoint_ttl_seconds: int = Field(
+        default=86400,
+        alias="MARKET_DATA_CHECKPOINT_TTL_SECONDS",
+    )
 
     postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
     postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
@@ -162,6 +318,11 @@ class Settings(BaseSettings):
     celery_task_acks_late: bool = Field(default=True, alias="CELERY_TASK_ACKS_LATE")
     celery_task_always_eager: bool = Field(default=False, alias="CELERY_TASK_ALWAYS_EAGER")
     celery_timezone: str = Field(default="UTC", alias="CELERY_TIMEZONE")
+    flower_enabled: bool = Field(default=False, alias="FLOWER_ENABLED")
+    flower_host: str = Field(default="127.0.0.1", alias="FLOWER_HOST")
+    flower_port: int = Field(default=5555, alias="FLOWER_PORT")
+    flower_user: str = Field(default="", alias="FLOWER_USER")
+    flower_password: str = Field(default="", alias="FLOWER_PASSWORD")
 
     postgres_backup_enabled: bool = Field(default=True, alias="POSTGRES_BACKUP_ENABLED")
     postgres_backup_dir: str = Field(default="backups/postgres", alias="POSTGRES_BACKUP_DIR")
@@ -245,6 +406,53 @@ class Settings(BaseSettings):
             return normalized or None
         return value
 
+    @field_validator("sentry_http_status_exclude_paths", mode="before")
+    @classmethod
+    def _parse_sentry_http_status_exclude_paths(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return []
+            if normalized.startswith("["):
+                return json.loads(normalized)
+            return [item.strip() for item in normalized.split(",") if item.strip()]
+        return value
+
+    @field_validator("openai_pricing_json", mode="before")
+    @classmethod
+    def _parse_openai_pricing_json(
+        cls,
+        value: object,
+    ) -> object:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return {}
+            return json.loads(normalized)
+        return {}
+
+    @field_validator("sentry_traces_sample_rate", "sentry_profiles_sample_rate")
+    @classmethod
+    def _validate_sentry_sample_rate(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("Sentry sample rates must be between 0.0 and 1.0.")
+        return value
+
+    @field_validator("sentry_http_status_min_code", "sentry_http_status_max_code")
+    @classmethod
+    def _validate_sentry_http_status_code(cls, value: int) -> int:
+        if not 100 <= value <= 599:
+            raise ValueError("Sentry HTTP status capture codes must be between 100 and 599.")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_sentry_http_status_code_range(self) -> Settings:
+        if self.sentry_http_status_min_code > self.sentry_http_status_max_code:
+            raise ValueError("SENTRY_HTTP_STATUS_MIN_CODE must be <= SENTRY_HTTP_STATUS_MAX_CODE.")
+        return self
+
     @field_validator("postgres_backup_retention_count")
     @classmethod
     def _validate_backup_retention(cls, value: int) -> int:
@@ -266,6 +474,12 @@ class Settings(BaseSettings):
             raise ValueError("POSTGRES_BACKUP_MINUTE_UTC must be in [0, 59].")
         return value
 
+    @field_validator("flower_port")
+    @classmethod
+    def _validate_flower_port(cls, value: int) -> int:
+        if not 1 <= value <= 65535:
+            raise ValueError("FLOWER_PORT must be in [1, 65535].")
+        return value
     @field_validator("celery_worker_max_memory_per_child")
     @classmethod
     def _validate_celery_worker_max_memory_per_child(cls, value: int) -> int:
@@ -285,6 +499,98 @@ class Settings(BaseSettings):
     def _validate_telegram_connect_ttl_seconds(cls, value: int) -> int:
         if value < 60:
             raise ValueError("TELEGRAM_CONNECT_TTL_SECONDS must be >= 60.")
+        return value
+
+    @field_validator("paper_trading_loop_interval_seconds")
+    @classmethod
+    def _validate_paper_trading_loop_interval(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("PAPER_TRADING_LOOP_INTERVAL_SECONDS must be > 0.")
+        return value
+
+    @field_validator("paper_trading_max_retries")
+    @classmethod
+    def _validate_paper_trading_max_retries(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("PAPER_TRADING_MAX_RETRIES must be >= 0.")
+        return value
+
+    @field_validator("backtest_max_bars")
+    @classmethod
+    def _validate_backtest_max_bars(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("BACKTEST_MAX_BARS must be >= 1.")
+        return value
+
+    @field_validator(
+        "backtest_stale_job_cleanup_interval_minutes",
+        "backtest_running_stale_minutes",
+    )
+    @classmethod
+    def _validate_backtest_cleanup_minutes(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("Backtest stale-job cleanup minute settings must be >= 1.")
+        return value
+
+    @field_validator(
+        "backtest_result_max_trades",
+        "backtest_result_max_equity_points",
+        "backtest_result_max_returns",
+        "backtest_result_max_events",
+    )
+    @classmethod
+    def _validate_backtest_result_caps(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("Backtest result cap settings must be >= 0.")
+        return value
+
+    @field_validator("alpaca_request_rate_limit_per_minute")
+    @classmethod
+    def _validate_alpaca_request_rate_limit(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("ALPACA_REQUEST_RATE_LIMIT_PER_MINUTE must be >= 1.")
+        return value
+
+    @field_validator("alpaca_stream_reconnect_base_seconds")
+    @classmethod
+    def _validate_stream_reconnect_base_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("ALPACA_STREAM_RECONNECT_BASE_SECONDS must be > 0.")
+        return value
+
+    @field_validator("alpaca_stream_max_retries")
+    @classmethod
+    def _validate_stream_max_retries(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("ALPACA_STREAM_MAX_RETRIES must be >= 0.")
+        return value
+
+    @field_validator("market_data_backfill_limit")
+    @classmethod
+    def _validate_market_data_backfill_limit(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("MARKET_DATA_BACKFILL_LIMIT must be >= 1.")
+        return value
+
+    @field_validator("market_data_ring_capacity_1m", "market_data_ring_capacity_aggregated")
+    @classmethod
+    def _validate_market_data_ring_capacity(cls, value: int) -> int:
+        if value < 10:
+            raise ValueError("MARKET_DATA ring capacity must be >= 10.")
+        return value
+
+    @field_validator("market_data_factor_cache_max_entries")
+    @classmethod
+    def _validate_market_data_factor_cache_max_entries(cls, value: int) -> int:
+        if value < 100:
+            raise ValueError("MARKET_DATA_FACTOR_CACHE_MAX_ENTRIES must be >= 100.")
+        return value
+
+    @field_validator("market_data_checkpoint_ttl_seconds")
+    @classmethod
+    def _validate_market_data_checkpoint_ttl_seconds(cls, value: int) -> int:
+        if value < 60:
+            raise ValueError("MARKET_DATA_CHECKPOINT_TTL_SECONDS must be >= 60.")
         return value
 
     @property
@@ -347,6 +653,24 @@ class Settings(BaseSettings):
     def is_dev_mode(self) -> bool:
         """Whether app runs in local/development mode."""
         return self.runtime_env in {"dev", "test"}
+
+    @property
+    def effective_sentry_env(self) -> str:
+        if isinstance(self.sentry_env, str) and self.sentry_env.strip():
+            return self.sentry_env.strip()
+        if self.runtime_env == "prod":
+            return "production"
+        if self.runtime_env == "dev":
+            return "development"
+        return self.runtime_env
+
+    @property
+    def effective_sentry_release(self) -> str | None:
+        if isinstance(self.sentry_release, str):
+            normalized = self.sentry_release.strip()
+            if normalized:
+                return normalized
+        return None
 
     @property
     def mcp_server_url(self) -> str:
@@ -434,6 +758,13 @@ class Settings(BaseSettings):
         """Signing secret for MCP context token propagation."""
         if isinstance(self.mcp_context_secret, str) and self.mcp_context_secret.strip():
             return self.mcp_context_secret.strip()
+        return self.secret_key
+
+    @property
+    def effective_trading_credentials_secret(self) -> str:
+        """Signing/encryption secret for persisted broker credentials."""
+        if isinstance(self.trading_credentials_secret, str) and self.trading_credentials_secret.strip():
+            return self.trading_credentials_secret.strip()
         return self.secret_key
 
 

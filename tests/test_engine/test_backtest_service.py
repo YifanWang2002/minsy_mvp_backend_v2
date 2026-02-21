@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.engine.backtest import (
+    BacktestBarLimitExceededError,
     BacktestJobNotFoundError,
     BacktestStrategyNotFoundError,
     BacktestJobView,
@@ -18,6 +19,17 @@ from src.engine.backtest import (
     execute_backtest_job_with_fresh_session,
     get_backtest_job_view,
     schedule_backtest_job,
+)
+from src.engine.backtest import service as backtest_service
+from src.engine.backtest.types import (
+    BacktestConfig,
+    BacktestEvent,
+    BacktestEventType,
+    BacktestResult,
+    BacktestSummary,
+    BacktestTrade,
+    EquityPoint,
+    PositionSide,
 )
 from src.engine.data import DataLoader
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
@@ -425,3 +437,148 @@ async def test_execute_backtest_job_with_fresh_session_initializes_db_factory(
         "job_id": job_id,
         "auto_commit": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_create_backtest_job_rejects_over_bar_limit(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = await _create_strategy(db_session, email="bt_service_bar_limit_create@example.com")
+    monkeypatch.setattr(backtest_service.settings, "backtest_max_bars", 10)
+
+    with pytest.raises(BacktestBarLimitExceededError):
+        await create_backtest_job(
+            db_session,
+            strategy_id=strategy.id,
+            start_date="2024-01-01T00:00:00+00:00",
+            end_date="2024-02-01T00:00:00+00:00",
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_backtest_job_marks_failed_when_loaded_bars_exceed_limit(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = await _create_strategy(db_session, email="bt_service_bar_limit_execute@example.com")
+
+    def _fake_load(
+        self,  # noqa: ANN001
+        market: str,
+        symbol: str,
+        timeframe: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> pd.DataFrame:
+        return _sample_frame()
+
+    def _fake_metadata(self, market: str, symbol: str) -> dict[str, object]:  # noqa: ANN001
+        return {
+            "available_timerange": {
+                "start": "2024-01-01T00:00:00+00:00",
+                "end": "2024-02-01T00:00:00+00:00",
+            }
+        }
+
+    monkeypatch.setattr(DataLoader, "load", _fake_load)
+    monkeypatch.setattr(DataLoader, "get_symbol_metadata", _fake_metadata)
+    monkeypatch.setattr(backtest_service.settings, "backtest_max_bars", 50)
+
+    receipt = await create_backtest_job(db_session, strategy_id=strategy.id)
+    view = await execute_backtest_job(db_session, job_id=receipt.job_id)
+
+    assert view.status == "failed"
+    assert view.error is not None
+    assert view.error["code"] == "BACKTEST_BAR_LIMIT_EXCEEDED"
+    assert "BACKTEST_MAX_BARS" in view.error["message"]
+
+
+def test_serialize_backtest_result_applies_result_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backtest_service.settings, "backtest_result_max_trades", 7)
+    monkeypatch.setattr(backtest_service.settings, "backtest_result_max_equity_points", 9)
+    monkeypatch.setattr(backtest_service.settings, "backtest_result_max_returns", 8)
+    monkeypatch.setattr(backtest_service.settings, "backtest_result_max_events", 6)
+
+    started_at = datetime(2024, 1, 1, tzinfo=UTC)
+    finished_at = datetime(2024, 1, 2, tzinfo=UTC)
+
+    result = BacktestResult(
+        config=BacktestConfig(),
+        summary=BacktestSummary(
+            total_trades=20,
+            winning_trades=12,
+            losing_trades=8,
+            win_rate=0.6,
+            total_pnl=123.0,
+            total_return_pct=0.12,
+            final_equity=101_230.0,
+            max_drawdown_pct=-0.08,
+        ),
+        trades=tuple(
+            BacktestTrade(
+                side=PositionSide.LONG,
+                entry_time=started_at,
+                exit_time=finished_at,
+                entry_price=100.0,
+                exit_price=101.0,
+                quantity=1.0,
+                bars_held=1,
+                exit_reason="tp",
+                pnl=1.0,
+                pnl_pct=0.01,
+                commission=0.0,
+            )
+            for _ in range(20)
+        ),
+        equity_curve=tuple(
+            EquityPoint(
+                timestamp=started_at,
+                equity=100_000.0 + idx,
+            )
+            for idx in range(25)
+        ),
+        returns=tuple(0.001 for _ in range(22)),
+        events=tuple(
+            BacktestEvent(
+                type=BacktestEventType.BAR,
+                timestamp=started_at,
+                bar_index=idx,
+                payload={},
+            )
+            for idx in range(18)
+        ),
+        performance={
+            "library": "quantstats",
+            "metrics": {"sharpe": 1.0},
+            "series": {
+                "cumulative_returns": [],
+                "drawdown": [],
+            },
+        },
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+    payload = backtest_service._serialize_backtest_result(
+        result=result,
+        market="crypto",
+        symbol="BTCUSDT",
+        timeframe="1h",
+    )
+
+    assert len(payload["trades"]) == 7
+    assert len(payload["equity_curve"]) == 9
+    assert len(payload["returns"]) == 8
+    assert len(payload["events"]) == 6
+    assert payload["truncation"]["truncated"] is True
+    assert payload["truncation"]["trades_total"] == 20
+    assert payload["truncation"]["trades_kept"] == 7
+    assert payload["truncation"]["equity_points_total"] == 25
+    assert payload["truncation"]["equity_points_kept"] == 9
+    assert payload["truncation"]["returns_total"] == 22
+    assert payload["truncation"]["returns_kept"] == 8
+    assert payload["truncation"]["events_total"] == 18
+    assert payload["truncation"]["events_kept"] == 6

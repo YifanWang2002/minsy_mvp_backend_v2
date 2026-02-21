@@ -11,6 +11,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.engine.backtest import BacktestBarLimitExceededError
 from src.engine.backtest.service import execute_backtest_job
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
 from src.mcp.context_auth import McpContextClaims
@@ -279,6 +280,35 @@ async def test_backtest_tools_pending_and_input_errors(
     missing_strategy_payload = _extract_payload(missing_strategy_call)
     assert missing_strategy_payload["ok"] is False
     assert missing_strategy_payload["error"]["code"] == "STRATEGY_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_backtest_create_job_returns_bar_limit_error_code(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    async def _fake_create_backtest_job(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise BacktestBarLimitExceededError(
+            "requested_bars=6000000 exceeds BACKTEST_MAX_BARS=3000000"
+        )
+
+    monkeypatch.setattr(backtest_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(backtest_tools, "create_backtest_job", _fake_create_backtest_job)
+
+    mcp = FastMCP("test-backtest-tools-bar-limit")
+    backtest_tools.register_backtest_tools(mcp)
+
+    payload = _extract_payload(
+        await mcp.call_tool(
+            "backtest_create_job",
+            {"strategy_id": str(uuid4())},
+        )
+    )
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "BACKTEST_BAR_LIMIT_EXCEEDED"
 
 
 @pytest.mark.asyncio

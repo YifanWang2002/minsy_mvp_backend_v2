@@ -13,8 +13,19 @@ ALL_SETTING_KEYS = [
     "PORT",
     "API_V1_PREFIX",
     "LOG_LEVEL",
+    "SENTRY_DSN",
+    "SENTRY_ENV",
+    "SENTRY_RELEASE",
+    "SENTRY_TRACES_SAMPLE_RATE",
+    "SENTRY_PROFILES_SAMPLE_RATE",
+    "SENTRY_HTTP_STATUS_CAPTURE_ENABLED",
+    "SENTRY_HTTP_STATUS_MIN_CODE",
+    "SENTRY_HTTP_STATUS_MAX_CODE",
+    "SENTRY_HTTP_STATUS_EXCLUDE_PATHS",
     "CHAT_DEBUG_TRACE_ENABLED",
     "OPENAI_API_KEY",
+    "OPENAI_COST_TRACKING_ENABLED",
+    "OPENAI_PRICING_JSON",
     "MCP_SERVER_URL_DEV",
     "MCP_SERVER_URL_PROD",
     "MCP_SERVER_URL",
@@ -30,6 +41,45 @@ ALL_SETTING_KEYS = [
     "MCP_SERVER_URL_TRADING_PROD",
     "MCP_CONTEXT_SECRET",
     "MCP_CONTEXT_TTL_SECONDS",
+    "PAPER_TRADING_ENABLED",
+    "PAPER_TRADING_ENQUEUE_ON_START",
+    "PAPER_TRADING_EXECUTE_ORDERS",
+    "PAPER_TRADING_LOOP_INTERVAL_SECONDS",
+    "PAPER_TRADING_MAX_RETRIES",
+    "PAPER_TRADING_KILL_SWITCH_GLOBAL",
+    "PAPER_TRADING_KILL_SWITCH_USERS",
+    "PAPER_TRADING_KILL_SWITCH_DEPLOYMENTS",
+    "PAPER_TRADING_BROKER_RETRY_MAX_ATTEMPTS",
+    "PAPER_TRADING_BROKER_RETRY_BACKOFF_SECONDS",
+    "PAPER_TRADING_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+    "PAPER_TRADING_CIRCUIT_BREAKER_RECOVERY_SECONDS",
+    "PAPER_TRADING_RUNTIME_HEALTH_STALE_SECONDS",
+    "BACKTEST_MAX_BARS",
+    "BACKTEST_STALE_JOB_CLEANUP_ENABLED",
+    "BACKTEST_STALE_JOB_CLEANUP_INTERVAL_MINUTES",
+    "BACKTEST_RUNNING_STALE_MINUTES",
+    "BACKTEST_RESULT_MAX_TRADES",
+    "BACKTEST_RESULT_MAX_EQUITY_POINTS",
+    "BACKTEST_RESULT_MAX_RETURNS",
+    "BACKTEST_RESULT_MAX_EVENTS",
+    "TRADING_CREDENTIALS_SECRET",
+    "ALPACA_API_KEY",
+    "ALPACA_API_SECRET",
+    "ALPACA_TRADING_BASE_URL",
+    "ALPACA_MARKET_DATA_BASE_URL",
+    "ALPACA_MARKET_DATA_STREAM_URL",
+    "ALPACA_STOCKS_FEED",
+    "ALPACA_CRYPTO_FEED",
+    "ALPACA_REQUEST_RATE_LIMIT_PER_MINUTE",
+    "ALPACA_STREAM_RECONNECT_BASE_SECONDS",
+    "ALPACA_STREAM_MAX_RETRIES",
+    "MARKET_DATA_BACKFILL_LIMIT",
+    "MARKET_DATA_AGGREGATE_TIMEFRAMES",
+    "MARKET_DATA_AGGREGATE_TIMEZONE",
+    "MARKET_DATA_RING_CAPACITY_1M",
+    "MARKET_DATA_RING_CAPACITY_AGG",
+    "MARKET_DATA_FACTOR_CACHE_MAX_ENTRIES",
+    "MARKET_DATA_CHECKPOINT_TTL_SECONDS",
     "POSTGRES_HOST",
     "POSTGRES_PORT",
     "POSTGRES_USER",
@@ -53,6 +103,11 @@ ALL_SETTING_KEYS = [
     "CELERY_TASK_ACKS_LATE",
     "CELERY_TASK_ALWAYS_EAGER",
     "CELERY_TIMEZONE",
+    "FLOWER_ENABLED",
+    "FLOWER_HOST",
+    "FLOWER_PORT",
+    "FLOWER_USER",
+    "FLOWER_PASSWORD",
     "POSTGRES_BACKUP_ENABLED",
     "POSTGRES_BACKUP_DIR",
     "POSTGRES_BACKUP_RETENTION_COUNT",
@@ -215,6 +270,182 @@ def test_mcp_server_url_is_controlled_by_app_env_not_legacy_mcp_env(
 
     settings = Settings(_env_file=env_file)
     assert settings.mcp_server_url == "https://dotenv.dev/mcp"
+
+
+def test_sentry_http_status_capture_settings_parse_and_validate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "SENTRY_HTTP_STATUS_CAPTURE_ENABLED=true",
+                "SENTRY_HTTP_STATUS_MIN_CODE=401",
+                "SENTRY_HTTP_STATUS_MAX_CODE=599",
+                "SENTRY_HTTP_STATUS_EXCLUDE_PATHS=[\"/api/v1/health\",\"/api/v1/status\",\"/favicon.ico\"]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.sentry_http_status_capture_enabled is True
+    assert settings.sentry_http_status_min_code == 401
+    assert settings.sentry_http_status_max_code == 599
+    assert settings.sentry_http_status_exclude_paths == [
+        "/api/v1/health",
+        "/api/v1/status",
+        "/favicon.ico",
+    ]
+
+
+def test_sentry_http_status_capture_invalid_range_raises_validation_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "SENTRY_HTTP_STATUS_MIN_CODE=599",
+                "SENTRY_HTTP_STATUS_MAX_CODE=400",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=env_file)
+
+
+def test_celery_worker_max_memory_per_child_reads_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "CELERY_WORKER_MAX_MEMORY_PER_CHILD=262144",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.celery_worker_max_memory_per_child == 262144
+
+
+def test_celery_worker_max_memory_per_child_invalid_raises_validation_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "CELERY_WORKER_MAX_MEMORY_PER_CHILD=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=env_file)
+
+
+def test_backtest_limits_read_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "BACKTEST_MAX_BARS=4200000",
+                "BACKTEST_STALE_JOB_CLEANUP_ENABLED=true",
+                "BACKTEST_STALE_JOB_CLEANUP_INTERVAL_MINUTES=12",
+                "BACKTEST_RUNNING_STALE_MINUTES=45",
+                "BACKTEST_RESULT_MAX_TRADES=1234",
+                "BACKTEST_RESULT_MAX_EQUITY_POINTS=2345",
+                "BACKTEST_RESULT_MAX_RETURNS=3456",
+                "BACKTEST_RESULT_MAX_EVENTS=456",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.backtest_max_bars == 4_200_000
+    assert settings.backtest_stale_job_cleanup_enabled is True
+    assert settings.backtest_stale_job_cleanup_interval_minutes == 12
+    assert settings.backtest_running_stale_minutes == 45
+    assert settings.backtest_result_max_trades == 1234
+    assert settings.backtest_result_max_equity_points == 2345
+    assert settings.backtest_result_max_returns == 3456
+    assert settings.backtest_result_max_events == 456
+
+
+def test_backtest_limits_invalid_values_raise_validation_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "BACKTEST_MAX_BARS=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError):
+        Settings(_env_file=env_file)
+
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "BACKTEST_STALE_JOB_CLEANUP_INTERVAL_MINUTES=0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError):
+        Settings(_env_file=env_file)
+
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "BACKTEST_RESULT_MAX_TRADES=-1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError):
+        Settings(_env_file=env_file)
 
 
 def test_domain_mcp_server_urls_fallback_to_legacy_url(

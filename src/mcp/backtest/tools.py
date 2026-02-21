@@ -8,6 +8,7 @@ from uuid import UUID
 from mcp.server.fastmcp import Context, FastMCP
 
 from src.engine.backtest import (
+    BacktestBarLimitExceededError,
     BacktestJobNotFoundError,
     BacktestStrategyNotFoundError,
     create_backtest_job,
@@ -240,6 +241,13 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                 tool="backtest_create_job",
                 ok=False,
                 error_code="STRATEGY_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except BacktestBarLimitExceededError as exc:
+            return _payload(
+                tool="backtest_create_job",
+                ok=False,
+                error_code="BACKTEST_BAR_LIMIT_EXCEEDED",
                 error_message=str(exc),
             )
         except Exception as exc:  # noqa: BLE001
