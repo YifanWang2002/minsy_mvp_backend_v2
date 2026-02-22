@@ -1,8 +1,11 @@
 api.minsyai.com {
-	encode gzip zstd
+	@chat path /api/v1/chat/*
+	@non_chat {
+		not path /api/v1/chat/*
+	}
+	encode @non_chat gzip zstd
 
 	route {
-		@chat path /api/v1/chat/*
 		reverse_proxy @chat 127.0.0.1:8000 {
 			flush_interval -1
 		}

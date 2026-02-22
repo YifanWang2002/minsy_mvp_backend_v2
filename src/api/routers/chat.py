@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
+
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +29,7 @@ from src.util.chat_debug_trace import (
 )
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+_CHAT_SSE_HEARTBEAT_SECONDS = 12.0
 
 
 def _resolve_kyc_status(user: User) -> str:
@@ -82,6 +86,21 @@ async def send_message_stream(
 
     async def traced_stream():
         token = set_chat_debug_trace(trace)
+        producer_queue: asyncio.Queue[str] = asyncio.Queue()
+        producer_finished = asyncio.Event()
+        producer_error: Exception | None = None
+
+        async def _produce_chunks() -> None:
+            nonlocal producer_error
+            try:
+                async for chunk in stream:
+                    await producer_queue.put(chunk)
+            except Exception as exc:  # noqa: BLE001
+                producer_error = exc
+            finally:
+                producer_finished.set()
+
+        producer_task = asyncio.create_task(_produce_chunks())
         try:
             if trace.enabled:
                 client_host = request.client.host if request.client is not None else None
@@ -97,9 +116,37 @@ async def send_message_stream(
                         "payload": payload.model_dump(mode="json"),
                     },
                 )
-            async for chunk in stream:
+            while True:
+                if producer_finished.is_set() and producer_queue.empty():
+                    break
+                try:
+                    chunk = await asyncio.wait_for(
+                        producer_queue.get(),
+                        timeout=_CHAT_SSE_HEARTBEAT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    if producer_finished.is_set() and producer_queue.empty():
+                        break
+                    # SSE comment heartbeat (ignored by client parser, but keeps TCP active).
+                    yield ": keepalive\n\n"
+                    continue
                 yield chunk
+            if producer_error is not None:
+                raise producer_error
+        except asyncio.CancelledError:
+            # Client disconnected: keep consuming upstream stream so this turn can
+            # still reach `done` and persist full assistant output.
+            current_task = asyncio.current_task()
+            if current_task is not None and hasattr(current_task, "uncancel"):
+                current_task.uncancel()
+            with suppress(Exception):
+                await asyncio.shield(producer_task)
+            return
         finally:
+            if not producer_task.done():
+                producer_task.cancel()
+                with suppress(Exception):
+                    await producer_task
             if trace.enabled:
                 trace.record(
                     stage="trace_finished",
@@ -108,6 +155,9 @@ async def send_message_stream(
             reset_chat_debug_trace(token)
 
     response = StreamingResponse(traced_stream(), media_type="text/event-stream")
+    response.headers["Cache-Control"] = "no-cache, no-transform"
+    response.headers["Connection"] = "keep-alive"
+    response.headers["X-Accel-Buffering"] = "no"
     if trace.enabled and trace.trace_id:
         response.headers[CHAT_TRACE_RESPONSE_HEADER_ID] = trace.trace_id
     return response
