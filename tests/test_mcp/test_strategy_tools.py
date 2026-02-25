@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import anyio
 import pytest
 from mcp.server.fastmcp import FastMCP
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -187,6 +188,78 @@ async def test_strategy_validate_dsl_tool_covers_pass_and_fail(
     invalid_json_result = _extract_payload(invalid_json_call)
     assert invalid_json_result["ok"] is False
     assert invalid_json_result["error"]["code"] == "INVALID_JSON"
+
+
+@pytest.mark.asyncio
+async def test_strategy_validate_dsl_degrades_when_draft_persistence_times_out(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_validate_timeout@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    async def _slow_create_strategy_draft(**_: Any) -> Any:
+        await anyio.sleep(0.05)
+        raise AssertionError("timeout guard should stop this call before completion")
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(strategy_tools, "create_strategy_draft", _slow_create_strategy_draft)
+    monkeypatch.setattr(strategy_tools, "_STRATEGY_VALIDATE_DRAFT_TIMEOUT_SECONDS", 0.01)
+
+    mcp = FastMCP("test-strategy-tools-validate-timeout")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    call_result = await mcp.call_tool(
+        "strategy_validate_dsl",
+        {
+            "dsl_json": json.dumps(payload),
+            "session_id": str(session.id),
+        },
+    )
+    result = _extract_payload(call_result)
+
+    assert result["ok"] is True
+    assert "strategy_draft_id" not in result
+    assert isinstance(result.get("draft_warning"), dict)
+    assert result["draft_warning"]["code"] == "DRAFT_PERSIST_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_strategy_validate_dsl_degrades_when_draft_persistence_fails(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = await _create_session(db_session, email="strategy_mcp_validate_store_fail@example.com")
+
+    async def _fake_new_db_session() -> _SessionContext:
+        return _SessionContext(db_session)
+
+    async def _failing_create_strategy_draft(**_: Any) -> Any:
+        raise RuntimeError("redis unavailable")
+
+    monkeypatch.setattr(strategy_tools, "_new_db_session", _fake_new_db_session)
+    monkeypatch.setattr(strategy_tools, "create_strategy_draft", _failing_create_strategy_draft)
+
+    mcp = FastMCP("test-strategy-tools-validate-store-fail")
+    strategy_tools.register_strategy_tools(mcp)
+
+    payload = load_strategy_payload(EXAMPLE_PATH)
+    call_result = await mcp.call_tool(
+        "strategy_validate_dsl",
+        {
+            "dsl_json": json.dumps(payload),
+            "session_id": str(session.id),
+        },
+    )
+    result = _extract_payload(call_result)
+
+    assert result["ok"] is True
+    assert "strategy_draft_id" not in result
+    assert isinstance(result.get("draft_warning"), dict)
+    assert result["draft_warning"]["code"] == "DRAFT_PERSIST_FAILED"
 
 
 @pytest.mark.asyncio

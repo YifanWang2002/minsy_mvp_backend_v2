@@ -29,6 +29,7 @@ dependencies = [
     "rich>=14.3.2",
     "yfinance>=1.2.0",
     "mcp[cli]>=1.0.0",
+    "sentry-sdk>=2.24.1",
     "pyyaml>=6.0",
     "jsonpatch>=1.33",
     "celery>=5.4.0",

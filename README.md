@@ -139,8 +139,6 @@ API_V1_PREFIX=/api/v1
 
 OPENAI_API_KEY=<your_openai_api_key>
 OPENAI_RESPONSE_MODEL=gpt-5
-MCP_SERVER_URL_DEV=http://127.0.0.1:8111/mcp
-MCP_SERVER_URL_PROD=https://mcp.minsyai.com/mcp
 MCP_SERVER_URL_STRATEGY_DEV=http://127.0.0.1:8111/mcp
 MCP_SERVER_URL_BACKTEST_DEV=http://127.0.0.1:8112/mcp
 MCP_SERVER_URL_MARKET_DATA_DEV=http://127.0.0.1:8113/mcp
@@ -191,6 +189,15 @@ REFRESH_TOKEN_EXPIRE_DAYS=7
 
 #### 启动命令
 ```bash
+# 推荐：一键启动（Postgres + Redis + API + MCP + Celery）
+cp env/.env.common.example env/.env.common
+cp env/.env.dev.example env/.env.dev
+./scripts/render_env.sh --profile dev
+./scripts/dev_up.sh
+
+# 停止所有服务
+./scripts/dev_down.sh
+
 # 1) API
 uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 
@@ -206,10 +213,14 @@ uv run python -m src.mcp.server --domain trading --transport streamable-http --h
 # 3) 本地 MCP 反向代理（用于 /strategy|/backtest|... 前缀）
 uv run python -m src.mcp.dev_proxy --host 127.0.0.1 --port 8110
 
-# 4) Celery worker（另一个终端）
-uv run celery -A src.workers.celery_app.celery_app worker -l info -Q backtest
+# 4) Celery workers（建议分队列启动，至少要有 paper_trading + market_data）
+uv run celery -A src.workers.celery_app.celery_app worker -l info -Q paper_trading --hostname=paper@%h
+uv run celery -A src.workers.celery_app.celery_app worker -l info -Q market_data --hostname=market@%h
 
-# 5) Celery beat（另一个终端，负责定时备份与邮箱导出）
+# 可选：回测队列
+uv run celery -A src.workers.celery_app.celery_app worker -l info -Q backtest --hostname=backtest@%h
+
+# 5) Celery beat（另一个终端，负责 paper scheduler / market_data refresh / 维护任务）
 uv run celery -A src.workers.celery_app.celery_app beat -l info
 ```
 
@@ -250,6 +261,31 @@ curl -i http://127.0.0.1:8000/health
 3. `Redis client not initialized`：API 启动流程未完成或 Redis 未连通，先确认 `/health` 中 `redis=true`（`src/models/redis.py`）。
 4. 指标报 `NotImplementedError`：当前环境缺少 TA-Lib/pandas-ta 部分能力（`src/engine/feature/indicators/categories/*.py`）。
 5. Docker 容器启动失败（`api.main:app`）：当前 `Dockerfile` CMD 与代码入口不一致，需改为 `src.main:app`。
+
+### A.5 可观测性（Sentry / 成本追踪 / Flower）
+
+#### Sentry（后端）
+- 入口：FastAPI (`src/main.py`)、Celery (`src/workers/celery_app.py`)、MCP (`src/mcp/server.py`)。
+- 配置：`SENTRY_DSN`、`SENTRY_ENV`、`SENTRY_RELEASE`、`SENTRY_TRACES_SAMPLE_RATE`、`SENTRY_PROFILES_SAMPLE_RATE`。
+- 安全：`src/observability/sentry_setup.py` 会在 `before_send` 对 `Authorization`、`x-minsy-mcp-context`、token/password/secret 类字段脱敏。
+
+#### OpenAI Token/Cost 聚合
+- 单轮：assistant message 的 `messages.token_usage` 持久化 `input_tokens/output_tokens/total_tokens/model`，并在启用时包含 `cost_usd`。
+- 会话级：`sessions.metadata.openai_cost` 维护 `totals`、`by_model`、`last_turn`。
+- 配置：`OPENAI_COST_TRACKING_ENABLED`、`OPENAI_PRICING_JSON`。
+
+#### Flower 生产监控
+- 服务模板：`deploy/systemd/minsy-flower.service`。
+- 反向代理：`Caddyfile` 中 `flower.minsyai.com -> 127.0.0.1:5555`。
+- 部署检查：`.github/workflows/deploy.yml` 会在 `FLOWER_ENABLED=true` 时纳入 `minsy-flower` 重启与 active 检查。
+
+#### 快速验证
+```bash
+curl -s https://api.minsyai.com/api/v1/status
+systemctl status minsy-flower --no-pager
+```
+
+完整巡检/排障步骤见：`/Users/yifanwang/minsy_mvp_remastered/docs/observability_runbook.md`
 
 ## B. 超详细文件索引（重点）
 
@@ -1431,13 +1467,13 @@ backend/
 | `register_market_data_tools(mcp: FastMCP)` | 功能：Register market-data-related tools. | 输入参数：mcp: FastMCP；输出：None。 | 外部网络请求 | `src/mcp/market_data/__init__.py` |
 
 #### `src/mcp/server.py`
-- 文件作用：该模块主要实现：Domain-aware MCP server entrypoint with legacy all-in-one compatibility.
+- 文件作用：该模块主要实现：Domain-aware MCP server entrypoint.
 - 模块级调用方（静态导入）：`src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py`
 - 主要副作用：外部网络请求
 
 | 对外符号 (`name(signature)`) | 功能说明 | 输入/输出 | 副作用 | 被哪些模块调用（静态） |
 |---|---|---|---|---|
-| `create_mcp_server(*, host: str='127.0.0.1', port: int=8111, mount_path: str='/', stateless_http: bool=True, domain: str='all')` | 功能：Create one MCP server for a specific domain or legacy all-mode. | 输入参数：*, host: str='127.0.0.1', port: int=8111, mount_path: str='/', stateless_http: bool=True, domain: str='all'；输出：FastMCP。 | 外部网络请求 | `src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py` |
+| `create_mcp_server(*, host: str='127.0.0.1', port: int=8111, mount_path: str='/', stateless_http: bool=True, domain: str='strategy')` | 功能：Create one MCP server for a specific domain. | 输入参数：*, host: str='127.0.0.1', port: int=8111, mount_path: str='/', stateless_http: bool=True, domain: str='strategy'；输出：FastMCP。 | 外部网络请求 | `src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py` |
 | `main()` | 功能：`main` 为该模块公开调用入口之一。 | 输入参数：无；输出：int。 | 外部网络请求 | `src/mcp/__init__.py`, `src/scripts/verify_local_mcp_framework.py` |
 
 #### `src/mcp/strategy/__init__.py`

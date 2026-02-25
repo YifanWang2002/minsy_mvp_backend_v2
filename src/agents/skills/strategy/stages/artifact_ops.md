@@ -18,4 +18,5 @@ Stage objective:
 - Before any `backtest_create_job`, also ensure the request stays within backend bar cap (`BACKTEST_MAX_BARS`); if it would exceed (commonly with long `1m` ranges), shorten range or raise timeframe first.
 - You may call backtest tools in this stage (`backtest_create_job`, `backtest_get_job`, and analytics tools like `backtest_entry_hour_pnl_heatmap`, `backtest_exit_reason_breakdown`, `backtest_rolling_metrics`) to evaluate and iterate.
 - When backtest status is `done`, emit one `backtest_charts` AGENT_UI payload with `job_id` so frontend can render charts without extra text tokens.
+- If user explicitly confirms "ready to deploy", emit `<AGENT_STATE_PATCH>{"strategy_confirmed":true}</AGENT_STATE_PATCH>` so backend can advance phase automatically.
 - Do not re-collect already finalized schema fields unless user requests changes.

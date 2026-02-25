@@ -20,6 +20,8 @@ from src.engine.strategy import parse_strategy_payload
 from src.models import database as db_module
 from src.models.backtest import BacktestJob
 from src.models.strategy import Strategy
+from src.services.notification_events import EVENT_BACKTEST_COMPLETED
+from src.services.notification_outbox_service import NotificationOutboxService
 from src.util.logger import logger
 
 _INTERNAL_TO_EXTERNAL_STATUS: dict[str, str] = {
@@ -241,6 +243,11 @@ async def execute_backtest_job(
             timeframe=timeframe,
         )
         _mark_job_completed(job, result=serialized_result)
+        await _enqueue_backtest_completed_notification(
+            db,
+            job=job,
+            strategy=strategy,
+        )
 
     except BacktestBarLimitExceededError as exc:
         _mark_job_failed(
@@ -490,6 +497,35 @@ def _mark_job_completed(
     job.current_step = "done"
     job.completed_at = datetime.now(UTC)
     job.error_message = None
+
+
+async def _enqueue_backtest_completed_notification(
+    db: AsyncSession,
+    *,
+    job: BacktestJob,
+    strategy: Strategy,
+) -> None:
+    if not settings.notifications_enabled:
+        return
+    result_payload = job.results if isinstance(job.results, dict) else {}
+    summary = result_payload.get("summary") if isinstance(result_payload.get("summary"), dict) else {}
+    payload = {
+        "job_id": str(job.id),
+        "strategy_id": str(strategy.id),
+        "summary": {
+            "total_return_pct": summary.get("total_return_pct"),
+            "max_drawdown_pct": summary.get("max_drawdown_pct"),
+            "sharpe_ratio": summary.get("sharpe_ratio"),
+        },
+        "completed_at": job.completed_at.isoformat() if job.completed_at is not None else None,
+    }
+    service = NotificationOutboxService(db)
+    await service.enqueue_event_for_user(
+        user_id=job.user_id,
+        event_type=EVENT_BACKTEST_COMPLETED,
+        event_key=f"backtest_completed:{job.id}",
+        payload=payload,
+    )
 
 
 def _mark_job_failed(

@@ -44,6 +44,7 @@ class MessageItem(BaseModel):
     # - GenUI blocks (e.g. choice_prompt/tradingview_chart/strategy_card)
     # - MCP tool-call final results (type=mcp_call, status in {success,failure})
     tool_calls: list[dict[str, Any]] | None = None
+    token_usage: dict[str, Any] | None = None
 
 
 class SessionDetailResponse(BaseModel):
@@ -186,3 +187,323 @@ class TelegramActivitiesResponse(BaseModel):
 
     provider: str
     items: list[TelegramActivityItem] = Field(default_factory=list)
+
+
+class NotificationPreferencesResponse(BaseModel):
+    """Notification preference payload for settings page."""
+
+    user_id: UUID
+    telegram_enabled: bool
+    backtest_completed_enabled: bool
+    deployment_started_enabled: bool
+    position_opened_enabled: bool
+    position_closed_enabled: bool
+    risk_triggered_enabled: bool
+    execution_anomaly_enabled: bool
+
+
+class TradingPreferenceResponse(BaseModel):
+    """Trading execution mode + approval configuration payload."""
+
+    user_id: UUID
+    execution_mode: str
+    approval_channel: str
+    approval_timeout_seconds: int
+    approval_scope: str
+
+
+class TradeApprovalRequestResponse(BaseModel):
+    """Trade approval request detail payload."""
+
+    trade_approval_request_id: UUID
+    user_id: UUID
+    deployment_id: UUID
+    execution_order_id: UUID | None = None
+    signal: str
+    side: str
+    symbol: str
+    qty: float
+    mark_price: float
+    reason: str
+    timeframe: str
+    bar_time: datetime | None = None
+    approval_channel: str
+    status: str
+    approval_key: str
+    requested_at: datetime
+    expires_at: datetime
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
+    expired_at: datetime | None = None
+    executed_at: datetime | None = None
+    approved_via: str | None = None
+    decision_actor: str | None = None
+    execution_error: str | None = None
+    intent_payload: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TelegramTestTargetResponse(BaseModel):
+    """Resolved Telegram test-target diagnostics."""
+
+    configured_email: str
+    resolved_user_exists: bool
+    resolved_binding_connected: bool
+    resolved_chat_id_masked: str | None = None
+    resolved_binding_id: UUID | None = None
+    resolved_username: str | None = None
+    resolved_user_id: UUID | None = None
+
+
+class TelegramTestSendResponse(BaseModel):
+    """Telegram debug send result payload."""
+
+    ok: bool
+    actual_target: str
+    message_id: str | None = None
+    detail: str | None = None
+
+
+class BrokerAccountResponse(BaseModel):
+    """Broker account payload for API responses."""
+
+    broker_account_id: UUID
+    user_id: UUID
+    provider: str
+    mode: str
+    status: str
+    key_fingerprint: str | None = None
+    encryption_version: str | None = None
+    updated_source: str | None = None
+    last_validated_at: datetime | None = None
+    last_validated_status: str | None = None
+    validation_metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeploymentRunResponse(BaseModel):
+    """Deployment runtime snapshot."""
+
+    deployment_run_id: UUID
+    deployment_id: UUID
+    strategy_id: UUID
+    broker_account_id: UUID
+    status: str
+    last_bar_time: datetime | None = None
+    timeframe_seconds: int | None = None
+    last_trigger_bucket: int | None = None
+    last_enqueued_at: datetime | None = None
+    runtime_state: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeploymentResponse(BaseModel):
+    """Deployment detail payload."""
+
+    deployment_id: UUID
+    strategy_id: UUID
+    user_id: UUID
+    mode: str
+    status: str
+    market: str | None = None
+    symbols: list[str] = Field(default_factory=list)
+    timeframe: str | None = None
+    capital_allocated: float
+    risk_limits: dict[str, Any] = Field(default_factory=dict)
+    deployed_at: datetime | None = None
+    stopped_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    run: DeploymentRunResponse | None = None
+
+
+class DeploymentActionResponse(BaseModel):
+    """Lifecycle transition response payload."""
+
+    deployment: DeploymentResponse
+    queued_task_id: str | None = None
+
+
+class OrderResponse(BaseModel):
+    """Order list/detail payload."""
+
+    order_id: UUID
+    deployment_id: UUID
+    provider_order_id: str | None = None
+    client_order_id: str
+    symbol: str
+    side: str
+    type: str
+    qty: float
+    price: float | None = None
+    status: str
+    provider_status: str | None = None
+    reject_reason: str | None = None
+    last_sync_at: datetime | None = None
+    submitted_at: datetime
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class FillResponse(BaseModel):
+    """Fill list payload."""
+
+    fill_id: UUID
+    order_id: UUID
+    provider_fill_id: str | None = None
+    fill_price: float
+    fill_qty: float
+    fee: float
+    filled_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class PositionResponse(BaseModel):
+    """Position list payload."""
+
+    position_id: UUID
+    deployment_id: UUID
+    symbol: str
+    side: str
+    qty: float
+    avg_entry_price: float
+    mark_price: float
+    unrealized_pnl: float
+    realized_pnl: float
+    created_at: datetime
+    updated_at: datetime
+
+
+class PnlSnapshotResponse(BaseModel):
+    """PnL snapshot payload."""
+
+    pnl_snapshot_id: UUID
+    deployment_id: UUID
+    source: str = "platform_estimate"
+    equity: float
+    cash: float
+    margin_used: float
+    unrealized_pnl: float
+    realized_pnl: float
+    snapshot_time: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class ManualTradeActionResponse(BaseModel):
+    """Manual trade action payload."""
+
+    manual_trade_action_id: UUID
+    user_id: UUID
+    deployment_id: UUID
+    action: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MarketDataQuoteResponse(BaseModel):
+    """Quote snapshot payload for frontend polling."""
+
+    market: str
+    symbol: str
+    bid: float | None = None
+    ask: float | None = None
+    last: float | None = None
+    timestamp: datetime
+    source: str = "runtime_cache"
+
+
+class MarketDataBarResponse(BaseModel):
+    """One normalized OHLCV bar."""
+
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class MarketDataBarsResponse(BaseModel):
+    """Bar list payload."""
+
+    market: str
+    symbol: str
+    timeframe: str
+    bars: list[MarketDataBarResponse] = Field(default_factory=list)
+
+
+class MarketDataSubscriptionResponse(BaseModel):
+    """Subscription dedup result payload."""
+
+    subscriber_id: str
+    added_symbols: list[str] = Field(default_factory=list)
+    removed_symbols: list[str] = Field(default_factory=list)
+    active_symbols: list[str] = Field(default_factory=list)
+
+
+class SignalResponse(BaseModel):
+    """Live signal event payload."""
+
+    signal_event_id: UUID | None = None
+    deployment_id: UUID
+    signal: str
+    symbol: str
+    timeframe: str
+    bar_time: datetime
+    reason: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeploymentSignalProcessResponse(BaseModel):
+    """Response after processing one deployment bar-close cycle."""
+
+    deployment_id: UUID
+    execution_event_id: UUID | None = None
+    signal: str
+    reason: str
+    order_id: UUID | None = None
+    idempotent_hit: bool = False
+    bar_time: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrokerAccountSnapshotResponse(BaseModel):
+    """Broker-reported account snapshot attached to deployment runtime."""
+
+    provider: str
+    source: str
+    sync_status: str
+    fetched_at: datetime | None = None
+    equity: float | None = None
+    cash: float | None = None
+    buying_power: float | None = None
+    margin_used: float | None = None
+    unrealized_pnl: float | None = None
+    realized_pnl: float | None = None
+    positions_count: int | None = None
+    symbols: list[str] = Field(default_factory=list)
+    error: str | None = None
+    updated_at: datetime | None = None
+
+
+class PortfolioResponse(BaseModel):
+    """Portfolio aggregate payload for one deployment."""
+
+    deployment_id: UUID
+    metrics_source: str = "platform_estimate"
+    equity: float
+    cash: float
+    margin_used: float
+    unrealized_pnl: float
+    realized_pnl: float
+    snapshot_time: datetime
+    broker_account: BrokerAccountSnapshotResponse | None = None
+    positions: list[PositionResponse] = Field(default_factory=list)

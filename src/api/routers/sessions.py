@@ -87,6 +87,7 @@ async def get_session(
                 phase=message.phase,
                 created_at=message.created_at,
                 tool_calls=message.tool_calls,
+                token_usage=message.token_usage,
             )
             for message in ordered_messages
         ],

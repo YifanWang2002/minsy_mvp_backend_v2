@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
@@ -112,3 +113,115 @@ class TelegramConnectLinkRequest(BaseModel):
         if normalized.startswith("zh"):
             return "zh"
         return "en"
+
+
+class BrokerAccountCreateRequest(BaseModel):
+    """Create one broker account binding for current user."""
+
+    provider: Literal["alpaca", "ccxt"]
+    mode: Literal["paper"] = "paper"
+    credentials: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("credentials")
+    @classmethod
+    def validate_credentials(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:
+            raise ValueError("credentials cannot be empty.")
+        return value
+
+
+class BrokerAccountCredentialsUpdateRequest(BaseModel):
+    """Rotate credentials for an existing broker account."""
+
+    credentials: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("credentials")
+    @classmethod
+    def validate_credentials(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if not value:
+            raise ValueError("credentials cannot be empty.")
+        return value
+
+
+class DeploymentCreateRequest(BaseModel):
+    """Create one paper/live deployment runtime."""
+
+    strategy_id: UUID
+    broker_account_id: UUID
+    mode: Literal["paper"] = "paper"
+    capital_allocated: Decimal = Field(default=Decimal("0"), ge=0)
+    risk_limits: dict[str, Any] = Field(default_factory=dict)
+    runtime_state: dict[str, Any] = Field(default_factory=dict)
+
+
+class ManualTradeActionRequest(BaseModel):
+    """Submit user manual action for one deployment."""
+
+    action: Literal["open", "close", "reduce", "stop"]
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class MarketDataSubscriptionRequest(BaseModel):
+    """Subscribe current user to market-data symbols."""
+
+    symbols: list[str] = Field(default_factory=list)
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, value: list[str]) -> list[str]:
+        normalized = [symbol.strip().upper() for symbol in value if symbol.strip()]
+        if not normalized:
+            raise ValueError("symbols cannot be empty.")
+        return normalized
+
+
+class NotificationPreferencesUpdateRequest(BaseModel):
+    """Patch payload for notification preference toggles."""
+
+    telegram_enabled: bool | None = None
+    backtest_completed_enabled: bool | None = None
+    deployment_started_enabled: bool | None = None
+    position_opened_enabled: bool | None = None
+    position_closed_enabled: bool | None = None
+    risk_triggered_enabled: bool | None = None
+    execution_anomaly_enabled: bool | None = None
+
+
+class TradingPreferencesUpdateRequest(BaseModel):
+    """Patch payload for runtime execution/approval mode."""
+
+    execution_mode: Literal["auto_execute", "approval_required"] | None = None
+    approval_channel: Literal["telegram", "discord", "slack", "whatsapp"] | None = None
+    approval_timeout_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    approval_scope: Literal["open_only", "open_and_close"] | None = None
+
+
+class TradeApprovalDecisionRequest(BaseModel):
+    """Decision payload for approve/reject operations."""
+
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("note")
+    @classmethod
+    def validate_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+
+class TelegramTestSendRequest(BaseModel):
+    """Payload for Telegram debug test-send endpoint."""
+
+    message: str = Field(min_length=1, max_length=3000)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("message cannot be empty.")
+        return normalized

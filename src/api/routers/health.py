@@ -9,10 +9,15 @@ from time import perf_counter
 from typing import Literal
 
 import httpx
+import psutil
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
 from src.config import settings
+from src.engine.execution.circuit_breaker import get_broker_request_circuit_breaker
+from src.engine.execution.kill_switch import RuntimeKillSwitch
+from src.engine.execution.runtime_state_store import runtime_state_store
+from src.engine.market_data.runtime import market_data_runtime
 from src.models.database import postgres_healthcheck
 from src.models.redis import redis_healthcheck
 from src.util.logger import logger
@@ -36,6 +41,22 @@ def _overall_status(states: list[ServiceState]) -> ServiceState:
     if any(item == "degraded" for item in states):
         return "degraded"
     return "healthy"
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 async def _ping_openai_models() -> tuple[bool, int | None, str]:
@@ -125,6 +146,179 @@ async def _build_backtest_service_status() -> dict[str, str]:
     return _build_service_status("down", details)
 
 
+async def _build_flower_service_status() -> dict[str, str]:
+    if not settings.flower_enabled:
+        return _build_service_status(
+            "down",
+            "Flower is disabled by FLOWER_ENABLED=false.",
+        )
+
+    flower_url = f"http://{settings.flower_host}:{settings.flower_port}/"
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(flower_url)
+    except httpx.TimeoutException:
+        return _build_service_status("degraded", "Flower probe timed out.")
+    except httpx.HTTPError:
+        return _build_service_status("down", "Flower endpoint is unreachable.")
+
+    if response.status_code in {
+        status.HTTP_200_OK,
+        status.HTTP_401_UNAUTHORIZED,
+        status.HTTP_403_FORBIDDEN,
+    }:
+        return _build_service_status(
+            "healthy",
+            f"Flower endpoint responded with HTTP {response.status_code}.",
+        )
+    return _build_service_status(
+        "degraded",
+        f"Flower endpoint returned HTTP {response.status_code}.",
+    )
+
+
+def _collect_system_metrics() -> dict[str, float | str]:
+    memory = psutil.virtual_memory()
+    cpu_usage = psutil.cpu_percent(interval=0.1)
+    memory_usage = float(memory.percent)
+    memory_available_gb = float(memory.available) / (1024**3)
+    return {
+        "platform": platform.platform(),
+        "cpu_usage_percent": round(float(cpu_usage), 2),
+        "memory_usage_percent": round(memory_usage, 2),
+        "memory_available_gb": round(memory_available_gb, 2),
+    }
+
+
+async def _build_system_metrics() -> dict[str, float | str]:
+    try:
+        return await asyncio.to_thread(_collect_system_metrics)
+    except Exception:  # noqa: BLE001
+        logger.exception("System metrics collection failed.")
+        return {
+            "platform": platform.platform(),
+            "cpu_usage_percent": 0.0,
+            "memory_usage_percent": 0.0,
+            "memory_available_gb": 0.0,
+        }
+
+
+async def _build_live_trading_service_status() -> dict[str, str]:
+    if not settings.paper_trading_enabled:
+        return _build_service_status(
+            "down",
+            "Paper trading is disabled by PAPER_TRADING_ENABLED=false.",
+        )
+
+    kill_snapshot = RuntimeKillSwitch().snapshot()
+    if bool(kill_snapshot.get("global")):
+        return _build_service_status(
+            "down",
+            "Global paper-trading kill switch is enabled.",
+        )
+
+    now_dt = datetime.now(UTC)
+    now_ms = int(now_dt.timestamp() * 1000)
+    stale_seconds = max(1, settings.paper_trading_runtime_health_stale_seconds)
+    stale_ms = stale_seconds * 1000
+    if hasattr(market_data_runtime, "redis_data_plane_status"):
+        redis_data_plane = market_data_runtime.redis_data_plane_status()
+    else:
+        redis_data_plane = {
+            "enabled": False,
+            "available": True,
+            "market_data_store_ok": True,
+            "subscription_store_ok": True,
+            "last_error": None,
+        }
+    if hasattr(market_data_runtime, "freshest_checkpoint_ms"):
+        freshest_checkpoint_ms = market_data_runtime.freshest_checkpoint_ms(timeframe="1m")
+    else:
+        checkpoints = market_data_runtime.checkpoints()
+        freshest_checkpoint_ms = None
+        for key, ts_ms in checkpoints.items():
+            if key.endswith(":1m"):
+                candidate = int(ts_ms)
+                if freshest_checkpoint_ms is None or candidate > freshest_checkpoint_ms:
+                    freshest_checkpoint_ms = candidate
+    recent_market_data = False
+    market_data_source = "redis_watermark"
+    market_data_lag_seconds: float | None = None
+    if freshest_checkpoint_ms is not None:
+        market_data_lag_seconds = max(0.0, (now_ms - int(freshest_checkpoint_ms)) / 1000.0)
+        if now_ms - int(freshest_checkpoint_ms) <= stale_ms:
+            recent_market_data = True
+
+    if not recent_market_data:
+        live_health = await runtime_state_store.get_live_trading_health()
+        if isinstance(live_health, dict):
+            runtime_reason = str(live_health.get("runtime_reason", "")).strip().lower()
+            runtime_bar_time = _parse_datetime(live_health.get("runtime_bar_time"))
+            runtime_updated_at = _parse_datetime(live_health.get("updated_at"))
+
+            if runtime_bar_time is not None:
+                age_seconds = (now_dt - runtime_bar_time).total_seconds()
+                if age_seconds <= stale_seconds:
+                    recent_market_data = True
+                    market_data_source = "runtime_state_store"
+            elif runtime_updated_at is not None and runtime_reason not in {
+                "",
+                "no_market_data",
+                "deployment_paused",
+                "deployment_stopped",
+            }:
+                age_seconds = (now_dt - runtime_updated_at).total_seconds()
+                if age_seconds <= stale_seconds:
+                    recent_market_data = True
+                    market_data_source = "runtime_state_store"
+
+    try:
+        workers = await asyncio.to_thread(_inspect_celery_workers)
+        paper_workers_up = isinstance(workers, dict) and bool(workers)
+    except Exception:  # noqa: BLE001
+        logger.exception("Live trading worker probe failed.")
+        paper_workers_up = False
+
+    breaker_snapshot = await get_broker_request_circuit_breaker().snapshot()
+    circuit_open = breaker_snapshot.state == "open"
+    order_execution_enabled = bool(settings.paper_trading_execute_orders)
+    blocked_users = len(kill_snapshot.get("blocked_users", []))
+    blocked_deployments = len(kill_snapshot.get("blocked_deployments", []))
+    if hasattr(market_data_runtime, "runtime_metrics"):
+        runtime_metrics = market_data_runtime.runtime_metrics()
+    else:
+        runtime_metrics = {}
+    refresh_scheduler_metrics = runtime_metrics.get("refresh_scheduler", {})
+    if isinstance(refresh_scheduler_metrics, dict):
+        duplicate_rate_pct = float(refresh_scheduler_metrics.get("duplicate_rate_pct", 0.0))
+    else:
+        duplicate_rate_pct = 0.0
+    redis_available = bool(redis_data_plane.get("available", True))
+    redis_required = bool(settings.effective_market_data_redis_read_enabled)
+    details = (
+        f"market_data_fresh={'yes' if recent_market_data else 'no'}; "
+        f"market_data_source={market_data_source}; "
+        f"market_data_redis_available={'yes' if redis_available else 'no'}; "
+        f"market_data_lag_seconds={'n/a' if market_data_lag_seconds is None else round(market_data_lag_seconds, 3)}; "
+        f"refresh_duplicate_rate_pct={round(duplicate_rate_pct, 2)}; "
+        f"paper_worker_up={'yes' if paper_workers_up else 'no'}; "
+        f"order_execution={'broker' if order_execution_enabled else 'simulated'}; "
+        f"broker_circuit={breaker_snapshot.state}; "
+        f"kill_switch_users={blocked_users}; "
+        f"kill_switch_deployments={blocked_deployments}."
+    )
+
+    if redis_required and not redis_available:
+        if settings.effective_market_data_runtime_fail_fast_on_redis_error:
+            return _build_service_status("down", details)
+        return _build_service_status("degraded", details)
+    if not recent_market_data and not paper_workers_up:
+        return _build_service_status("down", details)
+    if circuit_open or not recent_market_data or not paper_workers_up or not order_execution_enabled:
+        return _build_service_status("degraded", details)
+    return _build_service_status("healthy", details)
+
+
 @router.get("/health")
 async def health_check() -> JSONResponse:
     """Check API, PostgreSQL and Redis runtime health."""
@@ -159,16 +353,16 @@ async def status_check() -> JSONResponse:
     )
     chat = await _build_chat_service_status()
     backtest = await _build_backtest_service_status()
-    live_trading = _build_service_status(
-        "down",
-        "Live trading is disabled by default.",
-    )
+    flower = await _build_flower_service_status()
+    system_metrics = await _build_system_metrics()
+    live_trading = await _build_live_trading_service_status()
 
     overall = _overall_status(
         [
             api_endpoint["status"],  # type: ignore[list-item]
             chat["status"],  # type: ignore[list-item]
             backtest["status"],  # type: ignore[list-item]
+            live_trading["status"],  # type: ignore[list-item]
         ]
     )
 
@@ -179,14 +373,10 @@ async def status_check() -> JSONResponse:
             "api_endpoint": api_endpoint,
             "chat": chat,
             "backtest": backtest,
+            "flower": flower,
             "live_trading": live_trading,
         },
-        "system": {
-            "platform": platform.platform(),
-            "cpu_usage_percent": 0.0,
-            "memory_usage_percent": 0.0,
-            "memory_available_gb": 0.0,
-        },
+        "system": system_metrics,
         "response_time_ms": round(elapsed_ms, 2),
         "timestamp": datetime.now(UTC).isoformat(),
     }

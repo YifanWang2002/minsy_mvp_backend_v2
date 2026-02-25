@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import src.config as config_module
 from src.config import Settings
 
 ALL_SETTING_KEYS = [
@@ -26,9 +27,6 @@ ALL_SETTING_KEYS = [
     "OPENAI_API_KEY",
     "OPENAI_COST_TRACKING_ENABLED",
     "OPENAI_PRICING_JSON",
-    "MCP_SERVER_URL_DEV",
-    "MCP_SERVER_URL_PROD",
-    "MCP_SERVER_URL",
     "MCP_SERVER_URL_STRATEGY_DEV",
     "MCP_SERVER_URL_STRATEGY_PROD",
     "MCP_SERVER_URL_BACKTEST_DEV",
@@ -54,6 +52,7 @@ ALL_SETTING_KEYS = [
     "PAPER_TRADING_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
     "PAPER_TRADING_CIRCUIT_BREAKER_RECOVERY_SECONDS",
     "PAPER_TRADING_RUNTIME_HEALTH_STALE_SECONDS",
+    "PAPER_TRADING_DEPLOYMENT_LOCK_TTL_SECONDS",
     "BACKTEST_MAX_BARS",
     "BACKTEST_STALE_JOB_CLEANUP_ENABLED",
     "BACKTEST_STALE_JOB_CLEANUP_INTERVAL_MINUTES",
@@ -74,12 +73,21 @@ ALL_SETTING_KEYS = [
     "ALPACA_STREAM_RECONNECT_BASE_SECONDS",
     "ALPACA_STREAM_MAX_RETRIES",
     "MARKET_DATA_BACKFILL_LIMIT",
+    "MARKET_DATA_REFRESH_ACTIVE_SUBSCRIPTIONS_INTERVAL_SECONDS",
     "MARKET_DATA_AGGREGATE_TIMEFRAMES",
     "MARKET_DATA_AGGREGATE_TIMEZONE",
     "MARKET_DATA_RING_CAPACITY_1M",
     "MARKET_DATA_RING_CAPACITY_AGG",
     "MARKET_DATA_FACTOR_CACHE_MAX_ENTRIES",
     "MARKET_DATA_CHECKPOINT_TTL_SECONDS",
+    "MARKET_DATA_REDIS_WRITE_ENABLED",
+    "MARKET_DATA_REDIS_READ_ENABLED",
+    "MARKET_DATA_REDIS_SUBS_ENABLED",
+    "MARKET_DATA_MEMORY_CACHE_ENABLED",
+    "MARKET_DATA_RUNTIME_FAIL_FAST_ON_REDIS_ERROR",
+    "MARKET_DATA_REFRESH_DEDUPE_ENABLED",
+    "MARKET_DATA_REFRESH_DEDUPE_WINDOW_SECONDS",
+    "MARKET_DATA_REFRESH_SYMBOL_RATE_LIMIT",
     "POSTGRES_HOST",
     "POSTGRES_PORT",
     "POSTGRES_USER",
@@ -191,15 +199,20 @@ def test_settings_missing_required_env_raises_validation_error(
         Settings(_env_file=env_file)
 
 
-def test_mcp_server_url_uses_env_file_values_over_process_env(
+def test_domain_mcp_server_urls_use_env_file_values_over_process_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_env(monkeypatch)
     monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("MCP_SERVER_URL_DEV", "https://process.dev/mcp")
-    monkeypatch.setenv("MCP_SERVER_URL_PROD", "https://process.prod/mcp")
-    monkeypatch.setenv("MCP_SERVER_URL", "https://process.override/mcp")
+    monkeypatch.setenv(
+        "MCP_SERVER_URL_STRATEGY_DEV",
+        "https://process.dev/strategy/mcp",
+    )
+    monkeypatch.setenv(
+        "MCP_SERVER_URL_STRATEGY_PROD",
+        "https://process.prod/strategy/mcp",
+    )
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -208,8 +221,8 @@ def test_mcp_server_url_uses_env_file_values_over_process_env(
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
                 "APP_ENV=dev",
-                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
-                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+                "MCP_SERVER_URL_STRATEGY_DEV=https://dotenv.dev/strategy/mcp",
+                "MCP_SERVER_URL_STRATEGY_PROD=https://dotenv.prod/strategy/mcp",
             ]
         ),
         encoding="utf-8",
@@ -217,17 +230,14 @@ def test_mcp_server_url_uses_env_file_values_over_process_env(
 
     settings = Settings(_env_file=env_file)
     assert settings.runtime_env == "dev"
-    assert settings.mcp_server_url_dev == "https://dotenv.dev/mcp"
-    assert settings.mcp_server_url_prod == "https://dotenv.prod/mcp"
-    assert settings.mcp_server_url == "https://dotenv.dev/mcp"
+    assert settings.strategy_mcp_server_url == "https://dotenv.dev/strategy/mcp"
 
 
-def test_mcp_server_url_ignores_legacy_override_key(
+def test_domain_mcp_server_url_uses_prod_slot_in_prod_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("MCP_SERVER_URL", "https://process.override/mcp")
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -236,23 +246,21 @@ def test_mcp_server_url_ignores_legacy_override_key(
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
                 "APP_ENV=prod",
-                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
-                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+                "MCP_SERVER_URL_STRATEGY_PROD=https://dotenv.prod/strategy/mcp",
             ]
         ),
         encoding="utf-8",
     )
 
     settings = Settings(_env_file=env_file)
-    assert settings.mcp_server_url == "https://dotenv.prod/mcp"
+    assert settings.strategy_mcp_server_url == "https://dotenv.prod/strategy/mcp"
 
 
-def test_mcp_server_url_is_controlled_by_app_env_not_legacy_mcp_env(
+def test_domain_mcp_server_url_is_controlled_by_app_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_env(monkeypatch)
-    monkeypatch.setenv("MCP_ENV", "prod")
 
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -261,15 +269,15 @@ def test_mcp_server_url_is_controlled_by_app_env_not_legacy_mcp_env(
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
                 "APP_ENV=dev",
-                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
-                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
+                "MCP_SERVER_URL_STRATEGY_DEV=https://dotenv.dev/strategy/mcp",
+                "MCP_SERVER_URL_STRATEGY_PROD=https://dotenv.prod/strategy/mcp",
             ]
         ),
         encoding="utf-8",
     )
 
     settings = Settings(_env_file=env_file)
-    assert settings.mcp_server_url == "https://dotenv.dev/mcp"
+    assert settings.strategy_mcp_server_url == "https://dotenv.dev/strategy/mcp"
 
 
 def test_sentry_http_status_capture_settings_parse_and_validate(
@@ -448,7 +456,7 @@ def test_backtest_limits_invalid_values_raise_validation_error(
         Settings(_env_file=env_file)
 
 
-def test_domain_mcp_server_urls_fallback_to_legacy_url(
+def test_domain_mcp_server_urls_use_domain_defaults(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -460,19 +468,84 @@ def test_domain_mcp_server_urls_fallback_to_legacy_url(
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
                 "APP_ENV=dev",
-                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
-                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
             ]
         ),
         encoding="utf-8",
     )
 
     settings = Settings(_env_file=env_file)
-    assert settings.strategy_mcp_server_url == "https://dotenv.dev/mcp"
-    assert settings.backtest_mcp_server_url == "https://dotenv.dev/mcp"
-    assert settings.market_data_mcp_server_url == "https://dotenv.dev/mcp"
-    assert settings.stress_mcp_server_url == "https://dotenv.dev/mcp"
-    assert settings.trading_mcp_server_url == "https://dotenv.dev/mcp"
+    assert settings.strategy_mcp_server_url == "https://dev.minsyai.com/strategy/mcp"
+    assert settings.backtest_mcp_server_url == "https://dev.minsyai.com/backtest/mcp"
+    assert settings.market_data_mcp_server_url == "https://dev.minsyai.com/market/mcp"
+    assert settings.stress_mcp_server_url == "https://dev.minsyai.com/stress/mcp"
+    assert settings.trading_mcp_server_url == "https://dev.minsyai.com/trading/mcp"
+
+
+def test_market_data_redis_feature_switches_read_from_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "MARKET_DATA_REDIS_WRITE_ENABLED=true",
+                "MARKET_DATA_REDIS_READ_ENABLED=true",
+                "MARKET_DATA_REDIS_SUBS_ENABLED=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(_env_file=env_file)
+    assert settings.market_data_redis_write_enabled is True
+    assert settings.market_data_redis_read_enabled is True
+    assert settings.market_data_redis_subs_enabled is False
+    assert settings.effective_market_data_redis_write_enabled is True
+    assert settings.effective_market_data_redis_read_enabled is True
+    assert settings.effective_market_data_redis_subs_enabled is False
+
+
+def test_market_data_effective_defaults_follow_runtime_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=prod",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = Settings(_env_file=env_file)
+    assert settings.effective_market_data_redis_write_enabled is True
+    assert settings.effective_market_data_redis_read_enabled is True
+    assert settings.effective_market_data_redis_subs_enabled is True
+    assert settings.effective_market_data_runtime_fail_fast_on_redis_error is True
+
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=prod",
+                "MARKET_DATA_REDIS_READ_ENABLED=false",
+                "MARKET_DATA_RUNTIME_FAIL_FAST_ON_REDIS_ERROR=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    overridden = Settings(_env_file=env_file)
+    assert overridden.effective_market_data_redis_read_enabled is False
+    assert overridden.effective_market_data_runtime_fail_fast_on_redis_error is False
 
 
 def test_domain_mcp_server_urls_prefer_domain_specific_values(
@@ -487,8 +560,6 @@ def test_domain_mcp_server_urls_prefer_domain_specific_values(
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
                 "APP_ENV=prod",
-                "MCP_SERVER_URL_DEV=https://dotenv.dev/mcp",
-                "MCP_SERVER_URL_PROD=https://dotenv.prod/mcp",
                 "MCP_SERVER_URL_STRATEGY_PROD=https://mcp.prod/strategy/mcp",
                 "MCP_SERVER_URL_BACKTEST_PROD=https://mcp.prod/backtest/mcp",
                 "MCP_SERVER_URL_MARKET_DATA_PROD=https://mcp.prod/market/mcp",
@@ -505,11 +576,9 @@ def test_domain_mcp_server_urls_prefer_domain_specific_values(
     assert settings.market_data_mcp_server_url == "https://mcp.prod/market/mcp"
     assert settings.stress_mcp_server_url == "https://mcp.prod/stress/mcp"
     assert settings.trading_mcp_server_url == "https://mcp.prod/trading/mcp"
-    # Legacy property still works and remains separate from domain-specific URLs.
-    assert settings.mcp_server_url == "https://dotenv.prod/mcp"
 
 
-def test_domain_mcp_server_urls_auto_derive_for_minsyai_legacy_host(
+def test_domain_mcp_server_urls_switch_by_app_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -521,18 +590,30 @@ def test_domain_mcp_server_urls_auto_derive_for_minsyai_legacy_host(
                 "OPENAI_API_KEY=test-key",
                 "SECRET_KEY=test-secret-key-for-tests",
                 "APP_ENV=prod",
-                "MCP_SERVER_URL_PROD=https://mcp.minsyai.com/mcp",
+                "MCP_SERVER_URL_STRATEGY_DEV=https://mcp.dev/strategy/mcp",
+                "MCP_SERVER_URL_STRATEGY_PROD=https://mcp.prod/strategy/mcp",
             ]
         ),
         encoding="utf-8",
     )
 
     settings = Settings(_env_file=env_file)
-    assert settings.strategy_mcp_server_url == "https://mcp.minsyai.com/strategy/mcp"
-    assert settings.backtest_mcp_server_url == "https://mcp.minsyai.com/backtest/mcp"
-    assert settings.market_data_mcp_server_url == "https://mcp.minsyai.com/market/mcp"
-    assert settings.stress_mcp_server_url == "https://mcp.minsyai.com/stress/mcp"
-    assert settings.trading_mcp_server_url == "https://mcp.minsyai.com/trading/mcp"
+    assert settings.strategy_mcp_server_url == "https://mcp.prod/strategy/mcp"
+
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SECRET_KEY=test-secret-key-for-tests",
+                "APP_ENV=dev",
+                "MCP_SERVER_URL_STRATEGY_DEV=https://mcp.dev/strategy/mcp",
+                "MCP_SERVER_URL_STRATEGY_PROD=https://mcp.prod/strategy/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    dev_settings = Settings(_env_file=env_file)
+    assert dev_settings.strategy_mcp_server_url == "https://mcp.dev/strategy/mcp"
 
 
 def test_runtime_env_aliases_and_dev_mode_flag(
@@ -569,48 +650,6 @@ def test_runtime_env_aliases_and_dev_mode_flag(
     prod_settings = Settings(_env_file=env_file)
     assert prod_settings.runtime_env == "prod"
     assert prod_settings.is_dev_mode is False
-
-
-def test_celery_worker_max_memory_per_child_reads_from_env(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_env(monkeypatch)
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "OPENAI_API_KEY=test-key",
-                "SECRET_KEY=test-secret-key-for-tests",
-                "CELERY_WORKER_MAX_MEMORY_PER_CHILD=262144",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    settings = Settings(_env_file=env_file)
-    assert settings.celery_worker_max_memory_per_child == 262144
-
-
-def test_celery_worker_max_memory_per_child_invalid_raises_validation_error(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _clear_env(monkeypatch)
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "OPENAI_API_KEY=test-key",
-                "SECRET_KEY=test-secret-key-for-tests",
-                "CELERY_WORKER_MAX_MEMORY_PER_CHILD=0",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ValidationError):
-        Settings(_env_file=env_file)
 
 
 def test_effective_mcp_context_secret_falls_back_to_secret_key(
@@ -653,3 +692,32 @@ def test_effective_mcp_context_secret_prefers_override(
 
     settings = Settings(_env_file=env_file)
     assert settings.effective_mcp_context_secret == "mcp-secret"
+
+
+def test_get_settings_uses_minsy_env_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_env(monkeypatch)
+    env_file = tmp_path / ".env.profile"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=profile-test-key",
+                "SECRET_KEY=profile-test-secret",
+                "APP_ENV=prod",
+                "MCP_SERVER_URL_STRATEGY_PROD=https://profile.prod/strategy/mcp",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config_module.get_settings.cache_clear()
+    monkeypatch.setenv("MINSY_ENV_FILE", str(env_file))
+    try:
+        settings = config_module.get_settings()
+        assert settings.openai_api_key == "profile-test-key"
+        assert settings.runtime_env == "prod"
+        assert settings.strategy_mcp_server_url == "https://profile.prod/strategy/mcp"
+    finally:
+        config_module.get_settings.cache_clear()

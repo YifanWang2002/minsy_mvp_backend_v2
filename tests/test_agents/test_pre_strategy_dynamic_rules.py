@@ -36,6 +36,25 @@ def _sample_valid_values() -> dict[str, set[str]]:
     }
 
 
+def test_market_catalog_filters_benchmark_symbols(monkeypatch) -> None:
+    class _FakeLoader:
+        def get_available_markets(self) -> list[str]:
+            return ["crypto"]
+
+        def get_available_symbols(self, market: str) -> list[str]:
+            assert market == "crypto"
+            return ["BTCUSD", "BTCBENCH250EE3", "ETHUSD", "ETHBENCHABCDEF"]
+
+    skills_mod._load_market_catalog.cache_clear()
+    monkeypatch.setattr(skills_mod, "DataLoader", lambda: _FakeLoader())
+
+    try:
+        catalog = skills_mod.get_pre_strategy_market_instrument_map()
+        assert catalog == {"crypto": ("BTCUSD", "ETHUSD")}
+    finally:
+        skills_mod._load_market_catalog.cache_clear()
+
+
 def test_symbol_conversion_rules_across_markets() -> None:
     assert skills_mod.get_market_data_symbol_for_market_instrument(
         market="us_stocks",

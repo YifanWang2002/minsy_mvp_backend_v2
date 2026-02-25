@@ -61,15 +61,16 @@ mcp.minsyai.com {
 		}
 	}
 
-	# Legacy all-in-one route for backward compatibility.
-	@legacy path /mcp*
-	handle @legacy {
-		reverse_proxy 127.0.0.1:8111 {
-			flush_interval -1
-		}
-	}
-
 	handle {
 		respond "MCP route not found" 404
+	}
+}
+
+flower.minsyai.com {
+	reverse_proxy 127.0.0.1:5555
+
+	log {
+		output file /var/log/caddy/flower_access.log
+		format json
 	}
 }

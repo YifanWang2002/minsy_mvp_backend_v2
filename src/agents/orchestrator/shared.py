@@ -35,6 +35,10 @@ from src.models.phase_transition import PhaseTransition
 from src.models.session import Message, Session
 from src.models.strategy import Strategy
 from src.models.user import User, UserProfile
+from src.observability.openai_cost import (
+    build_turn_usage_snapshot,
+    merge_session_openai_cost_metadata,
+)
 from src.services.openai_stream_service import ResponsesEventStreamer
 from src.services.session_title_service import refresh_session_title
 from src.util.chat_debug_trace import (

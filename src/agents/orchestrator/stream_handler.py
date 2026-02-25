@@ -14,8 +14,9 @@ class StreamHandlerMixin:
         preparation: _TurnPreparation,
         stream_state: _TurnStreamState,
     ) -> AsyncIterator[str]:
+        resolved_model = preparation.prompt.model or settings.openai_response_model
         stream_request_kwargs: dict[str, Any] = {
-            "model": preparation.prompt.model or settings.openai_response_model,
+            "model": resolved_model,
             "input_text": preparation.prompt.enriched_input,
             "instructions": preparation.prompt.instructions,
             "previous_response_id": session.previous_response_id,
@@ -23,6 +24,7 @@ class StreamHandlerMixin:
             "tool_choice": preparation.prompt.tool_choice,
             "reasoning": preparation.prompt.reasoning,
         }
+        stream_state.request_model = resolved_model
         trace_stream_request_kwargs = self._redact_stream_request_kwargs_for_trace(
             stream_request_kwargs
         )
@@ -142,6 +144,9 @@ class StreamHandlerMixin:
                             usage = response_obj.get("usage")
                             if isinstance(usage, dict):
                                 stream_state.completed_usage = usage
+                            response_model = response_obj.get("model")
+                            if isinstance(response_model, str) and response_model.strip():
+                                stream_state.completed_model = response_model.strip()
                             resp_id = response_obj.get("id")
                             if isinstance(resp_id, str) and resp_id:
                                 session.previous_response_id = resp_id

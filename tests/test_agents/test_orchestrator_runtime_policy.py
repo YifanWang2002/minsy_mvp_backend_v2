@@ -204,7 +204,10 @@ async def test_strategy_phase_auto_policy_limits_tools_to_validation(
         for tool in tools
         if isinstance(tool, dict) and tool.get("server_label") == "strategy"
     )
-    assert strategy_tools["allowed_tools"] == ["strategy_validate_dsl"]
+    assert strategy_tools["allowed_tools"] == [
+        "strategy_validate_dsl",
+        "strategy_upsert_dsl",
+    ]
     instructions = streamer.calls[0]["instructions"]
     assert isinstance(instructions, str)
     assert "Strategy Patch Workflow" not in instructions
@@ -499,7 +502,10 @@ async def test_strategy_phase_ignores_foreign_strategy_id_in_message(
         for tool in tools
         if isinstance(tool, dict) and tool.get("server_label") == "strategy"
     )
-    assert strategy_tools["allowed_tools"] == ["strategy_validate_dsl"]
+    assert strategy_tools["allowed_tools"] == [
+        "strategy_validate_dsl",
+        "strategy_upsert_dsl",
+    ]
 
 
 @pytest.mark.asyncio
@@ -567,6 +573,58 @@ async def test_legacy_stress_test_session_is_redirected_to_strategy_phase(
         strategy_profile.get("strategy_id")
         == artifacts["stress_test"]["profile"]["strategy_id"]
     )
+
+
+@pytest.mark.asyncio
+async def test_deployment_phase_exposes_trading_tools_only(
+    db_session,
+) -> None:
+    user = User(
+        email=f"orchestrator_deploy_{uuid4().hex}@example.com",
+        password_hash="hash",
+        name="rt",
+    )
+    db_session.add(user)
+    await db_session.flush()
+
+    artifacts = init_all_artifacts()
+    artifacts["deployment"]["profile"] = {
+        "deployment_status": "ready",
+        "strategy_id": str(uuid4()),
+    }
+    artifacts["deployment"]["missing_fields"] = []
+
+    session = Session(
+        user_id=user.id,
+        current_phase="deployment",
+        status="active",
+        artifacts=artifacts,
+        metadata_={},
+    )
+    db_session.add(session)
+    await db_session.flush()
+
+    streamer = _CaptureStreamer()
+    orchestrator = ChatOrchestrator(db_session)
+    payload = ChatSendRequest(session_id=session.id, message="start deployment now")
+    async for _ in orchestrator.handle_message_stream(
+        user, payload, streamer, language="en"
+    ):
+        pass
+
+    assert streamer.calls
+    tools = streamer.calls[0]["tools"]
+    assert isinstance(tools, list) and tools
+    labels = {tool.get("server_label") for tool in tools if isinstance(tool, dict)}
+    assert labels == {"trading"}
+    trading_tool = next(
+        tool
+        for tool in tools
+        if isinstance(tool, dict) and tool.get("server_label") == "trading"
+    )
+    allowed = trading_tool.get("allowed_tools")
+    assert isinstance(allowed, list)
+    assert "trading_create_paper_deployment" in allowed
 
 
 @pytest.mark.asyncio
@@ -1023,7 +1081,9 @@ async def test_strategy_phase_backfills_incomplete_strategy_ref_payload_from_mod
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_filters_genui_with_post_process_artifacts(db_session, monkeypatch) -> None:
+async def test_orchestrator_filters_genui_with_post_process_artifacts(
+    db_session, monkeypatch
+) -> None:
     user = User(
         email=f"orchestrator_rt_{uuid4().hex}@example.com",
         password_hash="hash",
@@ -1066,7 +1126,9 @@ async def test_orchestrator_filters_genui_with_post_process_artifacts(db_session
         async def post_process(self, ctx, raw_patches, db):  # type: ignore[no-untyped-def]
             del raw_patches, db
             artifacts = ctx.session_artifacts
-            phase_data = artifacts.setdefault("kyc", {"profile": {}, "missing_fields": []})
+            phase_data = artifacts.setdefault(
+                "kyc", {"profile": {}, "missing_fields": []}
+            )
             profile = phase_data.setdefault("profile", {})
             profile["probe"] = "updated"
             return PostProcessResult(

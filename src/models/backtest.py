@@ -25,6 +25,7 @@ from src.models.base import Base
 if TYPE_CHECKING:
     from src.models.deployment import Deployment
     from src.models.session import Session
+    from src.models.stress_job import StressJob
     from src.models.strategy import Strategy
     from src.models.user import User
 
@@ -84,3 +85,4 @@ class BacktestJob(Base):
     user: Mapped[User] = relationship(back_populates="backtest_jobs")
     session: Mapped[Session | None] = relationship(back_populates="backtest_jobs")
     deployments: Mapped[list[Deployment]] = relationship(back_populates="backtest_job")
+    stress_jobs: Mapped[list[StressJob]] = relationship(back_populates="base_backtest_job")

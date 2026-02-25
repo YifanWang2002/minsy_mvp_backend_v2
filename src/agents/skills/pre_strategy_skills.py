@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import re
 
 from src.engine import DataLoader
 
@@ -50,6 +51,18 @@ _LANGUAGE_NAMES: dict[str, str] = {
     "fr": "Français",
 }
 
+_SYNTHETIC_SYMBOL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^[A-Z0-9]+BENCH[0-9A-F]{6,}$"),
+)
+
+
+def _is_user_selectable_symbol(symbol: str) -> bool:
+    """Hide synthetic benchmark artifacts from end-user instrument pickers."""
+    normalized = symbol.strip().upper()
+    if not normalized:
+        return False
+    return all(pattern.fullmatch(normalized) is None for pattern in _SYNTHETIC_SYMBOL_PATTERNS)
+
 
 @lru_cache(maxsize=4)
 def _load_md(path: Path) -> str:
@@ -78,7 +91,11 @@ def _load_market_catalog() -> dict[str, tuple[str, ...]]:
             {
                 item.strip().upper()
                 for item in loader.get_available_symbols(market)
-                if isinstance(item, str) and item.strip()
+                if (
+                    isinstance(item, str)
+                    and item.strip()
+                    and _is_user_selectable_symbol(item)
+                )
             }
         )
         if symbols:

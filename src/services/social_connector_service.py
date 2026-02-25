@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.config import settings
@@ -17,6 +17,7 @@ from src.models.social_connector import (
     SocialConnectorBinding,
     SocialConnectorLinkIntent,
 )
+from src.models.user import User
 from src.models.user_settings import UserSetting
 
 SUPPORTED_CONNECTOR_PROVIDERS: tuple[str, ...] = (
@@ -221,6 +222,56 @@ class SocialConnectorService:
         if require_connected:
             filters.append(SocialConnectorBinding.status == "connected")
         return await self.db.scalar(select(SocialConnectorBinding).where(*filters))
+
+    async def get_connected_binding_for_user(
+        self,
+        *,
+        user_id: UUID,
+        provider: str,
+    ) -> SocialConnectorBinding | None:
+        normalized_provider = str(provider).strip().lower()
+        if not normalized_provider:
+            return None
+        return await self.db.scalar(
+            select(SocialConnectorBinding).where(
+                SocialConnectorBinding.user_id == user_id,
+                SocialConnectorBinding.provider == normalized_provider,
+                SocialConnectorBinding.status == "connected",
+            )
+        )
+
+    async def list_connected_bindings_for_user(self, *, user_id: UUID) -> list[SocialConnectorBinding]:
+        rows = (
+            await self.db.scalars(
+                select(SocialConnectorBinding).where(
+                    SocialConnectorBinding.user_id == user_id,
+                    SocialConnectorBinding.status == "connected",
+                )
+            )
+        ).all()
+        return list(rows)
+
+    async def resolve_connected_telegram_binding_by_email(
+        self,
+        *,
+        email: str,
+        require_connected: bool = True,
+    ) -> SocialConnectorBinding | None:
+        normalized_email = str(email).strip().lower()
+        if not normalized_email:
+            return None
+        filters = [
+            SocialConnectorBinding.provider == "telegram",
+            func.lower(User.email) == normalized_email,
+        ]
+        if require_connected:
+            filters.append(SocialConnectorBinding.status == "connected")
+        return await self.db.scalar(
+            select(SocialConnectorBinding)
+            .join(User, User.id == SocialConnectorBinding.user_id)
+            .where(*filters)
+            .order_by(SocialConnectorBinding.updated_at.desc())
+        )
 
     async def list_telegram_activities(
         self,

@@ -12,7 +12,13 @@ from src.models.base import Base
 
 if TYPE_CHECKING:
     from src.models.backtest import BacktestJob
+    from src.models.broker_account import BrokerAccount
     from src.models.deployment import Deployment
+    from src.models.manual_trade_action import ManualTradeAction
+    from src.models.market_data_sync_job import MarketDataSyncJob
+    from src.models.notification_outbox import NotificationOutbox
+    from src.models.trade_approval_request import TradeApprovalRequest
+    from src.models.trading_preference import TradingPreference
     from src.models.session import Session
     from src.models.social_connector import (
         SocialConnectorActivity,
@@ -20,6 +26,8 @@ if TYPE_CHECKING:
         SocialConnectorLinkIntent,
     )
     from src.models.strategy import Strategy
+    from src.models.stress_job import StressJob
+    from src.models.user_notification_preference import UserNotificationPreference
     from src.models.user_settings import UserSetting
 
 
@@ -59,7 +67,23 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    market_data_sync_jobs: Mapped[list[MarketDataSyncJob]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    stress_jobs: Mapped[list[StressJob]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     deployments: Mapped[list[Deployment]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    broker_accounts: Mapped[list[BrokerAccount]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    manual_trade_actions: Mapped[list[ManualTradeAction]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -72,6 +96,24 @@ class User(Base):
         cascade="all, delete-orphan",
     )
     social_connector_activities: Mapped[list[SocialConnectorActivity]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    notification_preferences: Mapped[UserNotificationPreference | None] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    notification_outbox_items: Mapped[list[NotificationOutbox]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    trading_preference: Mapped[TradingPreference | None] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    trade_approval_requests: Mapped[list[TradeApprovalRequest]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )

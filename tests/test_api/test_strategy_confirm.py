@@ -72,7 +72,9 @@ def _make_mock_response_event(text: str, response_id: str) -> dict:
     }
 
 
-def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_phase() -> None:
+def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_phase() -> (
+    None
+):
     mock_responses = [
         _TURN1_RESPONSE,
         _TURN2_RESPONSE,
@@ -99,7 +101,11 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
         captured_tools.append(deepcopy(tools) if isinstance(tools, list) else None)
         captured_previous_response_ids.append(previous_response_id)
         text = mock_responses[idx]
-        yield {"type": "response.output_text.delta", "delta": text, "sequence_number": 1}
+        yield {
+            "type": "response.output_text.delta",
+            "delta": text,
+            "sequence_number": 1,
+        }
         yield _make_mock_response_event(text, f"resp_strategy_confirm_{idx}")
 
     with patch(
@@ -174,8 +180,17 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
             assert detail.status_code == 200
             detail_body = detail.json()
             artifacts = detail_body["artifacts"]
-            assert artifacts["strategy"]["profile"]["strategy_id"] == body["strategy_id"]
-            assert artifacts["stress_test"]["profile"]["strategy_id"] == body["strategy_id"]
+            assert (
+                artifacts["strategy"]["profile"]["strategy_id"] == body["strategy_id"]
+            )
+            assert (
+                artifacts["stress_test"]["profile"]["strategy_id"]
+                == body["strategy_id"]
+            )
+            assert (
+                artifacts["deployment"]["profile"]["strategy_id"] == body["strategy_id"]
+            )
+            assert artifacts["deployment"]["profile"]["deployment_status"] == "ready"
             expected_market = (
                 strategy_payload.get("universe", {}).get("market")
                 if isinstance(strategy_payload.get("universe"), dict)
@@ -220,20 +235,125 @@ def test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_pha
                 assert metadata.get("strategy_tickers") == expected_tickers
             if isinstance(expected_timeframe, str) and expected_timeframe:
                 assert metadata.get("strategy_timeframe") == expected_timeframe
+            assert metadata.get("deployment_status") == "ready"
 
-    # Last call is auto backtest bootstrap turn in strategy phase:
-    # strategy + backtest tools should be available together.
+    # Last call happens in strategy phase and should use strategy artifact-ops tools.
     assert captured_tools
     assert captured_previous_response_ids
     assert captured_previous_response_ids[-1] is None
     last_tools = captured_tools[-1]
     assert isinstance(last_tools, list) and last_tools
-    labels = {
-        item.get("server_label")
-        for item in last_tools
-        if isinstance(item, dict)
-    }
-    assert labels == {"strategy", "backtest", "market_data"}
+    labels = {item.get("server_label") for item in last_tools if isinstance(item, dict)}
+    assert labels == {"strategy", "market_data", "backtest"}
+
+
+def test_chat_can_advance_strategy_to_deployment_without_confirm_endpoint() -> None:
+    strategy_id = str(uuid4())
+    mock_responses = [
+        _TURN1_RESPONSE,
+        _TURN2_RESPONSE,
+        _TURN3_RESPONSE,
+        _TURN4_RESPONSE,
+        (
+            "策略已确认并可进入部署。"
+            f'<AGENT_STATE_PATCH>{{"strategy_id":"{strategy_id}","strategy_confirmed":true}}</AGENT_STATE_PATCH>'
+        ),
+    ]
+    call_idx = {"i": 0}
+
+    async def _mock_stream_events(
+        *,
+        model: str,
+        input_text: str,
+        instructions: str | None = None,
+        previous_response_id: str | None = None,
+        tools: list | None = None,
+        tool_choice: dict | None = None,
+        reasoning: dict | None = None,
+    ):
+        idx = call_idx["i"]
+        call_idx["i"] += 1
+        text = mock_responses[idx]
+        yield {
+            "type": "response.output_text.delta",
+            "delta": text,
+            "sequence_number": 1,
+        }
+        yield _make_mock_response_event(text, f"resp_chat_confirm_{idx}")
+
+    with patch(
+        "src.services.openai_stream_service.OpenAIResponsesEventStreamer.stream_events",
+        side_effect=_mock_stream_events,
+    ):
+        with TestClient(app) as client:
+            token = _register_and_get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            turn1 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"message": "I have over 5 years of trading experience."},
+            )
+            assert turn1.status_code == 200
+            done1 = next(
+                p for p in _parse_sse_payloads(turn1.text) if p.get("type") == "done"
+            )
+            session_id = done1["session_id"]
+
+            turn2 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": session_id, "message": "Risk aggressive."},
+            )
+            assert turn2.status_code == 200
+
+            turn3 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={"session_id": session_id, "message": "High growth."},
+            )
+            assert turn3.status_code == 200
+
+            turn4 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={
+                    "session_id": session_id,
+                    "message": "crypto + BTCUSD + daily + swing_days",
+                },
+            )
+            assert turn4.status_code == 200
+            done4 = next(
+                p for p in _parse_sse_payloads(turn4.text) if p.get("type") == "done"
+            )
+            assert done4["phase"] == "strategy"
+
+            turn5 = client.post(
+                "/api/v1/chat/send-openai-stream",
+                headers=headers,
+                json={
+                    "session_id": session_id,
+                    "message": "I confirm this strategy is finalized and ready to deploy.",
+                },
+            )
+            assert turn5.status_code == 200
+            payloads5 = _parse_sse_payloads(turn5.text)
+            done5 = next(p for p in payloads5 if p.get("type") == "done")
+            assert done5["phase"] == "deployment"
+            assert any(
+                item.get("type") == "phase_change"
+                and item.get("from_phase") == "strategy"
+                and item.get("to_phase") == "deployment"
+                for item in payloads5
+            )
+
+            detail = client.get(f"/api/v1/sessions/{session_id}", headers=headers)
+            assert detail.status_code == 200
+            artifacts = detail.json()["artifacts"]
+            assert artifacts["strategy"]["profile"]["strategy_id"] == strategy_id
+            assert artifacts["strategy"]["profile"]["strategy_confirmed"] is True
+            assert artifacts["deployment"]["profile"]["strategy_id"] == strategy_id
+            assert artifacts["deployment"]["profile"]["deployment_status"] == "ready"
 
 
 def test_get_strategy_detail_by_id() -> None:

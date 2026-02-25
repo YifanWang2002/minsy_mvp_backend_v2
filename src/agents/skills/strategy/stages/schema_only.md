@@ -6,6 +6,9 @@ Stage objective:
   2) `strategy_validate_dsl(dsl_json, session_id=tool_compat_session_id)` when `tool_compat_session_id` is available
   3) one `strategy_ref` GenUI payload with `strategy_draft_id`
 - Do not call persistence tools that require confirmed strategy ownership at this stage.
+- Default behavior: do not call persistence tools at this stage.
+- Exception: if user explicitly confirms immediate save/deploy, call `strategy_upsert_dsl` once and emit
+  `<AGENT_STATE_PATCH>{"strategy_id":"<uuid>","strategy_confirmed":true}</AGENT_STATE_PATCH>`.
 - Do not print the full DSL JSON in plain text unless the user explicitly asks for raw JSON.
 - Do not emit `choice_prompt` GenUI unless DSL cannot be completed safely without one critical missing preference.
 - Ask only the minimum follow-up needed to complete schema fields.

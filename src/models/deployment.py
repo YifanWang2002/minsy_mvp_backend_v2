@@ -22,7 +22,14 @@ from src.models.base import Base
 
 if TYPE_CHECKING:
     from src.models.backtest import BacktestJob
+    from src.models.deployment_run import DeploymentRun
+    from src.models.manual_trade_action import ManualTradeAction
+    from src.models.order import Order
+    from src.models.pnl_snapshot import PnlSnapshot
+    from src.models.position import Position
+    from src.models.signal_event import SignalEvent
     from src.models.strategy import Strategy
+    from src.models.trade_approval_request import TradeApprovalRequest
     from src.models.user import User
 
 
@@ -82,3 +89,31 @@ class Deployment(Base):
     strategy: Mapped[Strategy] = relationship(back_populates="deployments")
     user: Mapped[User] = relationship(back_populates="deployments")
     backtest_job: Mapped[BacktestJob | None] = relationship(back_populates="deployments")
+    deployment_runs: Mapped[list[DeploymentRun]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+    orders: Mapped[list[Order]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+    positions: Mapped[list[Position]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+    pnl_snapshots: Mapped[list[PnlSnapshot]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+    manual_trade_actions: Mapped[list[ManualTradeAction]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+    signal_events: Mapped[list[SignalEvent]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )
+    trade_approval_requests: Mapped[list[TradeApprovalRequest]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+    )

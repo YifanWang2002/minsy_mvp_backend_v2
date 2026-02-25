@@ -1,4 +1,4 @@
-"""Domain-aware MCP server entrypoint with legacy all-in-one compatibility."""
+"""Domain-aware MCP server entrypoint."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ _DOMAIN_SPECS: dict[str, McpDomainSpec] = {
     "stress": McpDomainSpec(
         domain="stress",
         display_name="Minsy Stress MCP Server",
-        instructions="MCP server reserved for stress testing and optimization tools.",
+        instructions="MCP server for stress testing and strategy optimization tools.",
         register_tools=register_stress_tools,
         tool_names=STRESS_TOOL_NAMES,
     ),
@@ -76,16 +76,7 @@ _DOMAIN_ALIASES: dict[str, str] = {
     "market-data": "market",
 }
 
-# Keep backward compatibility: default all-mode still exposes the historical
-# three domains used by existing orchestrator/runtime policies.
-_LEGACY_ALL_DOMAINS: tuple[str, ...] = (
-    "market",
-    "backtest",
-    "strategy",
-)
-
 SUPPORTED_DOMAINS: tuple[str, ...] = (
-    "all",
     "strategy",
     "backtest",
     "market",
@@ -95,17 +86,9 @@ SUPPORTED_DOMAINS: tuple[str, ...] = (
     "trading",
 )
 
-ALL_REGISTERED_TOOL_NAMES: tuple[str, ...] = tuple(
-    tool_name
-    for domain_name in _LEGACY_ALL_DOMAINS
-    for tool_name in _DOMAIN_SPECS[domain_name].tool_names
-)
-
 
 def _resolve_domain(value: str) -> str:
     normalized = value.strip().lower()
-    if normalized == "all":
-        return normalized
     aliased = _DOMAIN_ALIASES.get(normalized, normalized)
     if aliased not in _DOMAIN_SPECS:
         raise ValueError(
@@ -115,21 +98,10 @@ def _resolve_domain(value: str) -> str:
     return aliased
 
 
-def _resolve_domain_specs(domain: str) -> tuple[McpDomainSpec, ...]:
-    if domain == "all":
-        return tuple(_DOMAIN_SPECS[name] for name in _LEGACY_ALL_DOMAINS)
-    return (_DOMAIN_SPECS[domain],)
-
-
-def registered_tool_names(*, domain: str = "all") -> tuple[str, ...]:
-    """Return registered tool names for one MCP domain or the legacy all-mode."""
+def registered_tool_names(*, domain: str) -> tuple[str, ...]:
+    """Return registered tool names for one MCP domain."""
     resolved_domain = _resolve_domain(domain)
-    domain_specs = _resolve_domain_specs(resolved_domain)
-    return tuple(
-        tool_name
-        for domain_spec in domain_specs
-        for tool_name in domain_spec.tool_names
-    )
+    return _DOMAIN_SPECS[resolved_domain].tool_names
 
 
 def create_mcp_server(
@@ -138,20 +110,13 @@ def create_mcp_server(
     port: int = 8111,
     mount_path: str = "/",
     stateless_http: bool = True,
-    domain: str = "all",
+    domain: str = "strategy",
 ) -> FastMCP:
-    """Create one MCP server for a specific domain or legacy all-mode."""
+    """Create one MCP server for a specific domain."""
     resolved_domain = _resolve_domain(domain)
-    domain_specs = _resolve_domain_specs(resolved_domain)
-    if len(domain_specs) == 1:
-        name = domain_specs[0].display_name
-        instructions = domain_specs[0].instructions
-    else:
-        name = "Minsy Modular MCP Server"
-        instructions = (
-            "Modular MCP server with tools grouped by market_data, "
-            "backtest, and strategy domains."
-        )
+    domain_spec = _DOMAIN_SPECS[resolved_domain]
+    name = domain_spec.display_name
+    instructions = domain_spec.instructions
 
     mcp = FastMCP(
         name=name,
@@ -167,19 +132,18 @@ def create_mcp_server(
             enable_dns_rebinding_protection=False
         ),
     )
-    for domain_spec in domain_specs:
-        domain_spec.register_tools(mcp)
+    domain_spec.register_tools(mcp)
     return mcp
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the modular MCP server.")
+    parser = argparse.ArgumentParser(description="Run a domain MCP server.")
     parser.add_argument(
         "--domain",
         choices=SUPPORTED_DOMAINS,
-        default="all",
+        default="strategy",
         help=(
-            "Server domain to run: all (legacy), strategy, backtest, "
+            "Server domain to run: strategy, backtest, "
             "market/market_data, stress, or trading."
         ),
     )

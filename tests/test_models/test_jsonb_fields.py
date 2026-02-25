@@ -35,7 +35,13 @@ async def test_jsonb_fields_round_trip_dict_data(db_session: AsyncSession) -> No
         content="ok",
         phase="strategy",
         tool_calls=[{"name": "search", "args": {"q": "AAPL"}, "result": {"ok": True}}],
-        token_usage={"prompt": 10, "completion": 20, "total": 30},
+        token_usage={
+            "model": "gpt-5.2",
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "cost_usd": 0.0012,
+        },
     )
     db_session.add(message)
 
@@ -96,7 +102,8 @@ async def test_jsonb_fields_round_trip_dict_data(db_session: AsyncSession) -> No
     assert loaded_session is not None and loaded_session.artifacts["summary"]["risk"] == "aggressive"
     assert loaded_session is not None and loaded_session.metadata_["trace_id"] == "abc123"
     assert loaded_message is not None and loaded_message.tool_calls[0]["name"] == "search"
-    assert loaded_message is not None and loaded_message.token_usage["total"] == 30
+    assert loaded_message is not None and loaded_message.token_usage["total_tokens"] == 30
+    assert loaded_message is not None and loaded_message.token_usage["cost_usd"] == 0.0012
     assert loaded_strategy is not None and loaded_strategy.parameters["fast"] == 10
     assert loaded_backtest is not None and loaded_backtest.results["return"] == 0.21
     assert loaded_deployment is not None and loaded_deployment.risk_limits["max_position"] == 0.15

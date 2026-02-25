@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 __all__ = [
-    "ALL_REGISTERED_TOOL_NAMES",
     "create_mcp_server",
     "registered_tool_names",
 ]

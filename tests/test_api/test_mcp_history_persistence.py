@@ -131,11 +131,20 @@ def test_session_history_persists_mcp_final_results_only() -> None:
             assert response.status_code == 200
             payloads = _parse_sse_payloads(response.text)
             done = next(item for item in payloads if item.get("type") == "done")
+            usage = done.get("usage") or {}
+            assert usage["input_tokens"] == 32
+            assert usage["output_tokens"] == 18
+            assert usage["total_tokens"] == 50
+            assert usage["model"]
+            assert "cost_usd" in usage
             session_id = done["session_id"]
 
             detail = client.get(f"/api/v1/sessions/{session_id}", headers=headers)
             assert detail.status_code == 200
             body = detail.json()
+            openai_cost = body["metadata"].get("openai_cost") or {}
+            assert openai_cost["totals"]["turn_count"] == 1
+            assert openai_cost["totals"]["total_tokens"] == 50
 
             assistant_messages = [
                 message
@@ -143,6 +152,7 @@ def test_session_history_persists_mcp_final_results_only() -> None:
                 if message.get("role") == "assistant"
             ]
             assert assistant_messages
+            assert assistant_messages[-1]["token_usage"]["total_tokens"] == 50
             tool_calls = assistant_messages[-1].get("tool_calls") or []
 
             mcp_calls = [
@@ -226,11 +236,18 @@ def test_session_history_drops_retry_failures_when_later_call_succeeds() -> None
             assert response.status_code == 200
             payloads = _parse_sse_payloads(response.text)
             done = next(item for item in payloads if item.get("type") == "done")
+            usage = done.get("usage") or {}
+            assert usage["input_tokens"] == 18
+            assert usage["output_tokens"] == 12
+            assert usage["total_tokens"] == 30
             session_id = done["session_id"]
 
             detail = client.get(f"/api/v1/sessions/{session_id}", headers=headers)
             assert detail.status_code == 200
             body = detail.json()
+            openai_cost = body["metadata"].get("openai_cost") or {}
+            assert openai_cost["totals"]["turn_count"] == 1
+            assert openai_cost["totals"]["total_tokens"] == 30
 
             assistant_messages = [
                 message
@@ -238,6 +255,7 @@ def test_session_history_drops_retry_failures_when_later_call_succeeds() -> None
                 if message.get("role") == "assistant"
             ]
             assert assistant_messages
+            assert assistant_messages[-1]["token_usage"]["total_tokens"] == 30
             tool_calls = assistant_messages[-1].get("tool_calls") or []
             mcp_calls = [
                 item for item in tool_calls if isinstance(item, dict) and item.get("type") == "mcp_call"
@@ -320,11 +338,18 @@ def test_session_history_keeps_non_retryable_validation_failure_even_if_later_su
             assert response.status_code == 200
             payloads = _parse_sse_payloads(response.text)
             done = next(item for item in payloads if item.get("type") == "done")
+            usage = done.get("usage") or {}
+            assert usage["input_tokens"] == 20
+            assert usage["output_tokens"] == 10
+            assert usage["total_tokens"] == 30
             session_id = done["session_id"]
 
             detail = client.get(f"/api/v1/sessions/{session_id}", headers=headers)
             assert detail.status_code == 200
             body = detail.json()
+            openai_cost = body["metadata"].get("openai_cost") or {}
+            assert openai_cost["totals"]["turn_count"] == 1
+            assert openai_cost["totals"]["total_tokens"] == 30
 
             assistant_messages = [
                 message
@@ -332,6 +357,7 @@ def test_session_history_keeps_non_retryable_validation_failure_even_if_later_su
                 if message.get("role") == "assistant"
             ]
             assert assistant_messages
+            assert assistant_messages[-1]["token_usage"]["total_tokens"] == 30
             tool_calls = assistant_messages[-1].get("tool_calls") or []
             mcp_calls = [
                 item

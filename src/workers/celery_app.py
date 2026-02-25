@@ -36,6 +36,38 @@ if settings.backtest_stale_job_cleanup_enabled:
         "schedule": timedelta(minutes=settings.backtest_stale_job_cleanup_interval_minutes),
     }
 
+if settings.paper_trading_enabled:
+    _beat_schedule["paper_trading.scheduler_tick"] = {
+        "task": "paper_trading.scheduler_tick",
+        "schedule": timedelta(seconds=settings.paper_trading_loop_interval_seconds),
+        "options": {
+            # Drop stale scheduler ticks to avoid backlog snowball under load.
+            "expires": max(1, int(settings.paper_trading_loop_interval_seconds * 2)),
+        },
+    }
+    _beat_schedule["market_data.refresh_active_subscriptions"] = {
+        "task": "market_data.refresh_active_subscriptions",
+        "schedule": timedelta(
+            seconds=settings.market_data_refresh_active_subscriptions_interval_seconds,
+        ),
+    }
+
+if settings.notifications_enabled:
+    _beat_schedule["notifications.dispatch_pending"] = {
+        "task": "notifications.dispatch_pending",
+        "schedule": timedelta(seconds=settings.notifications_loop_interval_seconds),
+        "options": {
+            # Skip expired dispatch ticks so notifications do not flood worker slots.
+            "expires": max(1, int(settings.notifications_loop_interval_seconds)),
+        },
+    }
+
+if settings.trading_approval_enabled:
+    _beat_schedule["trade_approval.expire_pending"] = {
+        "task": "trade_approval.expire_pending",
+        "schedule": timedelta(seconds=settings.trading_approval_expire_scan_interval_seconds),
+    }
+
 celery_app = Celery(
     "minsy",
     broker=settings.effective_celery_broker_url,
@@ -44,9 +76,18 @@ celery_app = Celery(
         "src.workers.backtest_tasks",
         "src.workers.market_data_tasks",
         "src.workers.maintenance_tasks",
+        "src.workers.notification_tasks",
         "src.workers.paper_trading_tasks",
+        "src.workers.stress_tasks",
+        "src.workers.trade_approval_tasks",
     ],
 )
+
+_task_annotations: dict[str, dict[str, str]] = {}
+if settings.market_data_refresh_symbol_rate_limit.strip():
+    _task_annotations["market_data.refresh_symbol"] = {
+        "rate_limit": settings.market_data_refresh_symbol_rate_limit.strip(),
+    }
 
 celery_app.conf.update(
     task_default_queue=settings.celery_task_default_queue,
@@ -55,6 +96,7 @@ celery_app.conf.update(
     task_track_started=True,
     worker_prefetch_multiplier=settings.celery_worker_prefetch_multiplier,
     task_default_retry_delay=settings.paper_trading_broker_retry_backoff_seconds,
+    task_annotations=_task_annotations,
     task_publish_retry=True,
     task_publish_retry_policy={
         "max_retries": settings.paper_trading_max_retries,
@@ -77,13 +119,24 @@ celery_app.conf.update(
     task_queues=(
         Queue("backtest"),
         Queue("market_data"),
+        Queue("stress"),
         Queue("paper_trading"),
         Queue("maintenance"),
+        Queue("notifications"),
+        Queue("trade_approval"),
     ),
     task_routes={
         "backtest.*": {"queue": "backtest"},
         "market_data.*": {"queue": "market_data"},
+        "stress.*": {"queue": "stress"},
+        "paper_trading.scheduler_tick": {"queue": "paper_trading"},
+        "paper_trading.run_deployment_runtime": {"queue": "paper_trading"},
         "paper_trading.*": {"queue": "paper_trading"},
         "maintenance.*": {"queue": "maintenance"},
+        "notifications.dispatch_pending": {"queue": "notifications"},
+        "notifications.*": {"queue": "notifications"},
+        "trade_approval.execute_approved_open": {"queue": "trade_approval"},
+        "trade_approval.expire_pending": {"queue": "trade_approval"},
+        "trade_approval.*": {"queue": "trade_approval"},
     },
 )

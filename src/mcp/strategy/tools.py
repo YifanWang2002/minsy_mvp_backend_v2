@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import anyio
 from mcp.server.fastmcp import Context, FastMCP
 
 from src.engine.feature.indicators import IndicatorCategory, IndicatorRegistry
@@ -39,6 +40,7 @@ from src.mcp.context_auth import (
 )
 from src.models import database as db_module
 from src.models.redis import get_redis_client, init_redis
+from src.util.logger import logger
 
 TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
@@ -69,6 +71,26 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
 _VALIDATION_RETRY_COUNTER_KEY_PREFIX = "strategy:validation_retry:"
 _VALIDATION_RETRY_COUNTER_TTL_SECONDS = 60 * 10
 _MAX_VALIDATION_FAILURES_PER_REQUEST = 2
+
+
+def _float_env(name: str, *, default: float, minimum: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return default
+    if parsed < minimum:
+        return minimum
+    return parsed
+
+
+_STRATEGY_VALIDATE_DRAFT_TIMEOUT_SECONDS = _float_env(
+    "STRATEGY_VALIDATE_DRAFT_TIMEOUT_SECONDS",
+    default=8.0,
+    minimum=0.1,
+)
 _ALLOW_IN_MEMORY_VALIDATION_RETRY_FALLBACK = (
     os.getenv("ALLOW_IN_MEMORY_VALIDATION_RETRY_FALLBACK", "").strip().lower()
     in {"1", "true", "yes"}
@@ -412,6 +434,18 @@ def _strategy_metadata_from_receipt(receipt: Any) -> dict[str, Any]:
         "symbol_count": receipt.symbol_count,
         "payload_hash": receipt.payload_hash,
         "last_updated_at": receipt.last_updated_at.isoformat(),
+    }
+
+
+def _set_draft_warning(
+    response_data: dict[str, Any],
+    *,
+    code: str,
+    message: str,
+) -> None:
+    response_data["draft_warning"] = {
+        "code": code,
+        "message": message,
     }
 
 
@@ -942,11 +976,6 @@ async def strategy_validate_dsl(
                     claims=claims,
                 )
                 session_user_id = await get_session_user_id(db, session_id=session_uuid)
-            draft = await create_strategy_draft(
-                user_id=session_user_id,
-                session_id=session_uuid,
-                dsl_json=payload,
-            )
         except StrategyStorageNotFoundError as exc:
             return _payload(
                 tool="strategy_validate_dsl",
@@ -958,13 +987,50 @@ async def strategy_validate_dsl(
             return _payload(
                 tool="strategy_validate_dsl",
                 ok=False,
-                error_code="STRATEGY_DRAFT_STORE_ERROR",
+                error_code="STRATEGY_STORAGE_ERROR",
                 error_message=f"{type(exc).__name__}: {exc}",
             )
 
-        response_data["strategy_draft_id"] = str(draft.strategy_draft_id)
-        response_data["draft_expires_at"] = draft.expires_at.isoformat()
-        response_data["draft_ttl_seconds"] = draft.ttl_seconds
+        try:
+            with anyio.fail_after(_STRATEGY_VALIDATE_DRAFT_TIMEOUT_SECONDS):
+                draft = await create_strategy_draft(
+                    user_id=session_user_id,
+                    session_id=session_uuid,
+                    dsl_json=payload,
+                )
+        except TimeoutError:
+            timeout_message = (
+                "Strategy draft persistence timed out; "
+                "validation result returned without strategy_draft_id."
+            )
+            logger.warning(
+                "strategy_validate_dsl draft timeout session_id=%s timeout_seconds=%.2f",
+                session_uuid,
+                _STRATEGY_VALIDATE_DRAFT_TIMEOUT_SECONDS,
+            )
+            _set_draft_warning(
+                response_data,
+                code="DRAFT_PERSIST_TIMEOUT",
+                message=timeout_message,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "strategy_validate_dsl draft persistence skipped session_id=%s error=%s",
+                session_uuid,
+                type(exc).__name__,
+            )
+            _set_draft_warning(
+                response_data,
+                code="DRAFT_PERSIST_FAILED",
+                message=(
+                    "Strategy draft persistence failed; "
+                    "validation result returned without strategy_draft_id."
+                ),
+            )
+        else:
+            response_data["strategy_draft_id"] = str(draft.strategy_draft_id)
+            response_data["draft_expires_at"] = draft.expires_at.isoformat()
+            response_data["draft_ttl_seconds"] = draft.ttl_seconds
 
     return _payload(
         tool="strategy_validate_dsl",

@@ -33,6 +33,7 @@ from telegram.error import TelegramError
 
 from src.config import settings
 from src.models.social_connector import SocialConnectorBinding
+from src.observability.openai_cost import build_turn_usage_snapshot
 from src.services.social_connector_service import SocialConnectorService
 from src.util.logger import logger
 
@@ -77,6 +78,12 @@ class TelegramTestBatchService:
         """Send feature-test messages in explicit batches after successful bind."""
         if not settings.telegram_test_batches_enabled:
             return
+        try:
+            target_chat_id = await self._resolve_test_target_chat_id(chat_id=chat_id)
+        except ValueError as exc:
+            logger.warning("Telegram test target routing failed: %s", exc)
+            await self._safe_send_message(chat_id=chat_id, text=str(exc))
+            return
 
         signal_id = self._build_signal_id()
         backtest_id = self._build_event_id(prefix="bt")
@@ -95,18 +102,18 @@ class TelegramTestBatchService:
         )
 
         batches = (
-            self._batch_configure_menu(chat_id=chat_id, locale=locale, signal_id=signal_id),
-            self._batch_flow_intro(chat_id=chat_id, locale=locale),
-            self._batch_pre_strategy_scope(chat_id=chat_id, locale=locale),
-            self._batch_trade_opportunity(chat_id=chat_id, locale=locale, signal_id=signal_id),
-            self._batch_chat_intro(chat_id=chat_id, locale=locale),
-            self._batch_deployment_status(chat_id=chat_id, locale=locale),
-            self._batch_backtest_completed(chat_id=chat_id, locale=locale, backtest_id=backtest_id),
-            self._batch_live_trade_open_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
-            self._batch_live_trade_close_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
-            self._batch_market_regime_change(chat_id=chat_id, locale=locale, regime_id=regime_id),
-            self._batch_poll(chat_id=chat_id, locale=locale),
-            self._batch_payments(chat_id=chat_id, locale=locale, signal_id=signal_id),
+            self._batch_configure_menu(chat_id=target_chat_id, locale=locale, signal_id=signal_id),
+            self._batch_flow_intro(chat_id=target_chat_id, locale=locale),
+            self._batch_pre_strategy_scope(chat_id=target_chat_id, locale=locale),
+            self._batch_trade_opportunity(chat_id=target_chat_id, locale=locale, signal_id=signal_id),
+            self._batch_chat_intro(chat_id=target_chat_id, locale=locale),
+            self._batch_deployment_status(chat_id=target_chat_id, locale=locale),
+            self._batch_backtest_completed(chat_id=target_chat_id, locale=locale, backtest_id=backtest_id),
+            self._batch_live_trade_open_reminder(chat_id=target_chat_id, locale=locale, position_id=position_id),
+            self._batch_live_trade_close_reminder(chat_id=target_chat_id, locale=locale, position_id=position_id),
+            self._batch_market_regime_change(chat_id=target_chat_id, locale=locale, regime_id=regime_id),
+            self._batch_poll(chat_id=target_chat_id, locale=locale),
+            self._batch_payments(chat_id=target_chat_id, locale=locale, signal_id=signal_id),
         )
 
         for batch in batches:
@@ -124,6 +131,12 @@ class TelegramTestBatchService:
         binding: SocialConnectorBinding,
     ) -> None:
         """Replay post-strategy alert batches only."""
+        try:
+            target_chat_id = await self._resolve_test_target_chat_id(chat_id=chat_id)
+        except ValueError as exc:
+            logger.warning("Telegram test target routing failed: %s", exc)
+            await self._safe_send_message(chat_id=chat_id, text=str(exc))
+            return
         backtest_id = self._build_event_id(prefix="bt")
         position_id = self._build_event_id(prefix="pos")
         regime_id = self._build_event_id(prefix="reg")
@@ -136,10 +149,10 @@ class TelegramTestBatchService:
             },
         )
         batches = (
-            self._batch_backtest_completed(chat_id=chat_id, locale=locale, backtest_id=backtest_id),
-            self._batch_live_trade_open_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
-            self._batch_live_trade_close_reminder(chat_id=chat_id, locale=locale, position_id=position_id),
-            self._batch_market_regime_change(chat_id=chat_id, locale=locale, regime_id=regime_id),
+            self._batch_backtest_completed(chat_id=target_chat_id, locale=locale, backtest_id=backtest_id),
+            self._batch_live_trade_open_reminder(chat_id=target_chat_id, locale=locale, position_id=position_id),
+            self._batch_live_trade_close_reminder(chat_id=target_chat_id, locale=locale, position_id=position_id),
+            self._batch_market_regime_change(chat_id=target_chat_id, locale=locale, regime_id=regime_id),
         )
         for batch in batches:
             try:
@@ -179,6 +192,12 @@ class TelegramTestBatchService:
             return True
 
         if lowered.startswith("/signal"):
+            target_chat_id = await self._resolve_target_chat_or_report(
+                source_chat_id=chat_id,
+                command="signal",
+            )
+            if target_chat_id is None:
+                return True
             signal_id = self._build_signal_id()
             await self._persist_test_state(
                 binding,
@@ -188,20 +207,38 @@ class TelegramTestBatchService:
                     "last_interval": "1d",
                 },
             )
-            await self._batch_trade_opportunity(chat_id=chat_id, locale=locale, signal_id=signal_id)
+            await self._batch_trade_opportunity(chat_id=target_chat_id, locale=locale, signal_id=signal_id)
             return True
 
         if lowered.startswith("/testall"):
-            await self.send_post_connect_batches(chat_id=chat_id, locale=locale, binding=binding)
+            target_chat_id = await self._resolve_target_chat_or_report(
+                source_chat_id=chat_id,
+                command="testall",
+            )
+            if target_chat_id is None:
+                return True
+            await self.send_post_connect_batches(chat_id=target_chat_id, locale=locale, binding=binding)
             return True
 
         if lowered.startswith("/postflow"):
-            await self.send_post_strategy_batches(chat_id=chat_id, locale=locale, binding=binding)
+            target_chat_id = await self._resolve_target_chat_or_report(
+                source_chat_id=chat_id,
+                command="postflow",
+            )
+            if target_chat_id is None:
+                return True
+            await self.send_post_strategy_batches(chat_id=target_chat_id, locale=locale, binding=binding)
             return True
 
         if lowered.startswith("/help"):
+            target_chat_id = await self._resolve_target_chat_or_report(
+                source_chat_id=chat_id,
+                command="help",
+            )
+            if target_chat_id is None:
+                return True
             help_text = self._build_help_text(locale=locale)
-            await self._safe_send_message(chat_id=chat_id, text=help_text)
+            await self._safe_send_message(chat_id=target_chat_id, text=help_text)
             return True
 
         await self._safe_send_chat_action(chat_id=chat_id)
@@ -213,8 +250,9 @@ class TelegramTestBatchService:
 
         assistant_text: str
         response_id: str | None
+        usage_snapshot: dict[str, Any] | None
         try:
-            assistant_text, response_id = await self._request_openai_response(
+            assistant_text, response_id, usage_snapshot = await self._request_openai_response(
                 user_text=normalized,
                 previous_response_id=prev_id,
                 locale=locale,
@@ -227,13 +265,19 @@ class TelegramTestBatchService:
                 else "OpenAI is temporarily unavailable. Please try again later."
             )
             response_id = None
+            usage_snapshot = None
 
         assistant_text = assistant_text.strip() or (
             "我目前没有可返回的内容。" if locale == "zh" else "No output was returned."
         )
 
+        next_state_updates: dict[str, Any] = {}
         if response_id is not None:
-            await self._persist_test_state(binding, {"previous_response_id": response_id})
+            next_state_updates["previous_response_id"] = response_id
+        if usage_snapshot is not None:
+            next_state_updates["last_openai_usage"] = usage_snapshot
+        if next_state_updates:
+            await self._persist_test_state(binding, next_state_updates)
 
         if placeholder is not None and hasattr(placeholder, "message_id"):
             await self._pseudo_stream_edit(
@@ -1309,7 +1353,7 @@ class TelegramTestBatchService:
         user_text: str,
         previous_response_id: str | None,
         locale: str,
-    ) -> tuple[str, str | None]:
+    ) -> tuple[str, str | None, dict[str, Any] | None]:
         instructions = (
             "你是 Minsy 的交易助手。回答需贴合 KYC→Pre-Strategy→Strategy→Deployment 流程，简洁并提示风险。"
             if locale == "zh"
@@ -1326,7 +1370,12 @@ class TelegramTestBatchService:
         response = await self._get_openai_client().responses.create(**request_kwargs)
         response_id = self._extract_response_id(response)
         text = self._extract_response_text(response)
-        return text, response_id
+        usage_snapshot = self._extract_response_usage_snapshot(
+            response=response,
+            model=settings.openai_response_model,
+            response_id=response_id,
+        )
+        return text, response_id, usage_snapshot
 
     async def _pseudo_stream_edit(self, *, chat_id: str, message_id: int, full_text: str) -> None:
         output = self._trim_telegram_text(full_text)
@@ -1437,6 +1486,35 @@ class TelegramTestBatchService:
         return ""
 
     @staticmethod
+    def _extract_response_usage_snapshot(
+        *,
+        response: Any,
+        model: str,
+        response_id: str | None,
+    ) -> dict[str, Any] | None:
+        raw_usage = getattr(response, "usage", None)
+        if raw_usage is not None and not isinstance(raw_usage, dict) and hasattr(
+            raw_usage,
+            "model_dump",
+        ):
+            try:
+                raw_usage = raw_usage.model_dump(mode="json", exclude_none=True)
+            except Exception:  # noqa: BLE001
+                raw_usage = None
+
+        if not isinstance(raw_usage, dict):
+            return None
+
+        return build_turn_usage_snapshot(
+            raw_usage=raw_usage,
+            model=model,
+            response_id=response_id,
+            at=datetime.now(UTC),
+            pricing=settings.openai_pricing_json,
+            cost_tracking_enabled=settings.openai_cost_tracking_enabled,
+        )
+
+    @staticmethod
     def _chunk_text_for_streaming(text: str, *, chunk_size: int = 220) -> list[str]:
         compact = text.strip()
         if not compact:
@@ -1529,6 +1607,59 @@ class TelegramTestBatchService:
             "/help - show this command list\n"
             "\n💬 You can also send any text to chat."
         )
+
+    async def _resolve_target_chat_or_report(
+        self,
+        *,
+        source_chat_id: str,
+        command: str,
+    ) -> str | None:
+        try:
+            return await self._resolve_test_target_chat_id(chat_id=source_chat_id)
+        except ValueError as exc:
+            logger.warning("Telegram test command routing failed command=%s error=%s", command, exc)
+            await self._safe_send_message(chat_id=source_chat_id, text=str(exc))
+            return None
+
+    async def _resolve_test_target_chat_id(self, *, chat_id: str) -> str:
+        if not settings.telegram_test_force_target_email_enabled:
+            return chat_id
+
+        target_email = settings.telegram_test_target_email.strip().lower()
+        if not target_email:
+            raise ValueError("TELEGRAM_TEST_TARGET_EMAIL is empty; cannot route test messages.")
+
+        binding = await self.social_service.resolve_connected_telegram_binding_by_email(
+            email=target_email,
+            require_connected=settings.telegram_test_target_require_connected,
+        )
+        if binding is None:
+            raise ValueError(
+                f"Test target {target_email} has no connected Telegram binding. "
+                "Testing flow halted by TELEGRAM_TEST_FORCE_TARGET_EMAIL_ENABLED."
+            )
+
+        resolved_chat_id = str(binding.external_chat_id).strip()
+        if not resolved_chat_id:
+            raise ValueError(
+                f"Test target {target_email} has empty external_chat_id. "
+                "Testing flow halted."
+            )
+
+        expected_chat_id = settings.telegram_test_expected_chat_id.strip()
+        if expected_chat_id and resolved_chat_id != expected_chat_id:
+            raise ValueError(
+                "Resolved test target chat_id does not match TELEGRAM_TEST_EXPECTED_CHAT_ID. "
+                "Testing flow halted."
+            )
+
+        logger.info(
+            "Telegram test target resolved test_target_email=%s source_chat_id=%s target_chat_id=%s",
+            target_email,
+            chat_id,
+            resolved_chat_id,
+        )
+        return resolved_chat_id
 
     async def _safe_send_message(
         self,

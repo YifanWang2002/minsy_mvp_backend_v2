@@ -71,7 +71,14 @@ class PostProcessorMixin:
         )
         session.artifacts = result.artifacts
         if result.completed:
-            selected_genui_payloads = []
+            # Completed turns should not keep stale selectable prompts, but
+            # non-choice UI payloads (for example chart refs) are still valid
+            # for transcript rendering.
+            selected_genui_payloads = [
+                payload
+                for payload in selected_genui_payloads
+                if str(payload.get("type", "")).strip().lower() != "choice_prompt"
+            ]
 
         post_process_ctx = PhaseContext(
             user_id=preparation.ctx.user_id,
@@ -105,7 +112,12 @@ class PostProcessorMixin:
                 session=session,
                 to_phase=result.next_phase,
                 trigger="ai_output",
-                metadata={"reason": result.transition_reason or "phase_completed"},
+                metadata={
+                    "reason": result.transition_reason or "phase_completed",
+                    "source": "orchestrator",
+                    "context": {"phase_before": preparation.phase_before},
+                    "recorded_at": datetime.now(UTC).isoformat(),
+                },
             )
             transitioned = True
 
@@ -192,6 +204,24 @@ class PostProcessorMixin:
         stream_state: _TurnStreamState,
         post_process_result: _TurnPostProcessResult,
     ) -> AsyncIterator[str]:
+        turn_usage = build_turn_usage_snapshot(
+            raw_usage=stream_state.completed_usage,
+            model=stream_state.completed_model or stream_state.request_model,
+            response_id=session.previous_response_id,
+            at=datetime.now(UTC),
+            pricing=settings.openai_pricing_json,
+            cost_tracking_enabled=settings.openai_cost_tracking_enabled,
+        )
+        usage_payload = turn_usage or stream_state.completed_usage or None
+        session_openai_cost_totals: dict[str, Any] | None = None
+        if settings.openai_cost_tracking_enabled and turn_usage is not None:
+            next_metadata, totals = merge_session_openai_cost_metadata(
+                session.metadata_,
+                turn_usage,
+            )
+            session.metadata_ = next_metadata
+            session_openai_cost_totals = totals
+
         self.db.add(
             Message(
                 session_id=session.id,
@@ -200,7 +230,7 @@ class PostProcessorMixin:
                 phase=preparation.phase_before,
                 response_id=session.previous_response_id,
                 tool_calls=post_process_result.persisted_tool_calls or None,
-                token_usage=stream_state.completed_usage or None,
+                token_usage=usage_payload,
             )
         )
         session.last_activity_at = datetime.now(UTC)
@@ -262,7 +292,8 @@ class PostProcessorMixin:
                 "missing_fields": post_process_result.missing_fields,
                 "session_title": title_payload.title,
                 "session_title_record": title_payload.record,
-                "usage": stream_state.completed_usage,
+                "usage": usage_payload,
+                "session_openai_cost": session_openai_cost_totals,
                 "stream_error": stream_state.stream_error_message,
                 "stream_error_detail": stream_state.stream_error_detail,
             },

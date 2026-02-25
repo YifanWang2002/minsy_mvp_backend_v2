@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.middleware.auth import get_current_user
@@ -15,8 +16,10 @@ from src.api.schemas.events import (
     TelegramActivitiesResponse,
     TelegramActivityItem,
     TelegramConnectLinkResponse,
+    TelegramTestSendResponse,
+    TelegramTestTargetResponse,
 )
-from src.api.schemas.requests import TelegramConnectLinkRequest
+from src.api.schemas.requests import TelegramConnectLinkRequest, TelegramTestSendRequest
 from src.config import settings
 from src.dependencies import get_db
 from src.models.user import User
@@ -181,3 +184,93 @@ async def telegram_test_webapp_chart(
         signal_id=signal_id,
     )
     return HTMLResponse(content=html)
+
+
+@router.get(
+    "/connectors/telegram/test-target",
+    response_model=TelegramTestTargetResponse,
+)
+async def telegram_test_target_status(
+    user: User = Depends(get_current_user),  # noqa: ARG001
+    db: AsyncSession = Depends(get_db),
+) -> TelegramTestTargetResponse:
+    configured_email = settings.telegram_test_target_email.strip().lower()
+    service = SocialConnectorService(db)
+
+    resolved_user_id = None
+    if configured_email:
+        resolved_user_id = await db.scalar(
+            select(User.id).where(func.lower(User.email) == configured_email)
+        )
+    binding_any = (
+        await service.resolve_connected_telegram_binding_by_email(
+            email=configured_email,
+            require_connected=False,
+        )
+        if configured_email
+        else None
+    )
+    binding_connected = (
+        await service.resolve_connected_telegram_binding_by_email(
+            email=configured_email,
+            require_connected=True,
+        )
+        if configured_email
+        else None
+    )
+    binding = binding_connected or binding_any
+    await db.commit()
+    return TelegramTestTargetResponse(
+        configured_email=configured_email,
+        resolved_user_exists=resolved_user_id is not None,
+        resolved_binding_connected=binding_connected is not None,
+        resolved_chat_id_masked=_mask_chat_id(binding.external_chat_id if binding is not None else None),
+        resolved_binding_id=binding.id if binding is not None else None,
+        resolved_username=binding.external_username if binding is not None else None,
+        resolved_user_id=binding.user_id if binding is not None else resolved_user_id,
+    )
+
+
+@router.post(
+    "/connectors/telegram/test-send",
+    response_model=TelegramTestSendResponse,
+)
+async def telegram_test_send(
+    payload: TelegramTestSendRequest,
+    user: User = Depends(get_current_user),  # noqa: ARG001
+    db: AsyncSession = Depends(get_db),
+) -> TelegramTestSendResponse:
+    service = TelegramService(db)
+    try:
+        result = await service.send_test_message(text=payload.message)
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Telegram test-send failed: {type(exc).__name__}",
+        ) from exc
+
+    target_email = str(result.get("configured_email", "")).strip().lower()
+    target_chat_masked = _mask_chat_id(result.get("target_chat_id"))
+    return TelegramTestSendResponse(
+        ok=True,
+        actual_target=f"{target_email}/{target_chat_masked}",
+        message_id=result.get("message_id"),
+        detail="Message sent.",
+    )
+
+
+def _mask_chat_id(raw: object) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if len(text) <= 4:
+        return "*" * len(text)
+    return f"{text[:2]}***{text[-2:]}"

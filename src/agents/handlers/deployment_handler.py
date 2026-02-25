@@ -43,9 +43,13 @@ class DeploymentHandler:
     ) -> PromptPieces:
         phase_data = ctx.session_artifacts.get(Phase.DEPLOYMENT.value, {})
         profile = dict(phase_data.get("profile", {}))
+        runtime_state = dict(phase_data.get("runtime", {}))
 
         instructions = build_deployment_static_instructions(language=ctx.language)
-        state_block = build_deployment_dynamic_state(collected_fields=profile)
+        state_block = build_deployment_dynamic_state(
+            collected_fields=profile,
+            deployment_state=runtime_state,
+        )
         return PromptPieces(
             instructions=instructions,
             enriched_input=state_block + user_message,
@@ -63,7 +67,7 @@ class DeploymentHandler:
         artifacts = ctx.session_artifacts
         phase_data = artifacts.setdefault(
             Phase.DEPLOYMENT.value,
-            {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)},
+            {"profile": {}, "missing_fields": list(REQUIRED_FIELDS), "runtime": {}},
         )
         profile = dict(phase_data.get("profile", {}))
 
@@ -78,11 +82,7 @@ class DeploymentHandler:
         next_phase: str | None = None
         reason: str | None = None
 
-        if status == "deployed":
-            completed = True
-            next_phase = Phase.COMPLETED.value
-            reason = "deployment_done_to_completed"
-        elif status == "blocked":
+        if status == "blocked":
             completed = True
             next_phase = Phase.STRATEGY.value
             reason = "deployment_blocked_back_to_strategy"
@@ -108,7 +108,7 @@ class DeploymentHandler:
         return payload
 
     def init_artifacts(self) -> dict[str, Any]:
-        return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)}
+        return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS), "runtime": {}}
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
         if ctx.language == "zh":

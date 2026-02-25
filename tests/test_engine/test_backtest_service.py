@@ -12,8 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.engine.backtest import (
     BacktestBarLimitExceededError,
     BacktestJobNotFoundError,
-    BacktestStrategyNotFoundError,
     BacktestJobView,
+    BacktestStrategyNotFoundError,
     create_backtest_job,
     execute_backtest_job,
     execute_backtest_job_with_fresh_session,
@@ -34,8 +34,10 @@ from src.engine.backtest.types import (
 from src.engine.data import DataLoader
 from src.engine.strategy import EXAMPLE_PATH, load_strategy_payload, upsert_strategy_dsl
 from src.models.backtest import BacktestJob
+from src.models.notification_outbox import NotificationOutbox
 from src.models.session import Session as AgentSession
 from src.models.user import User
+from src.services.notification_events import EVENT_BACKTEST_COMPLETED
 
 
 async def _create_strategy(db_session: AsyncSession, *, email: str):
@@ -116,6 +118,16 @@ async def test_backtest_job_lifecycle_done(db_session: AsyncSession, monkeypatch
     queried = await get_backtest_job_view(db_session, job_id=receipt.job_id)
     assert queried.status == "done"
     assert queried.completed_at is not None
+    outbox_rows = (
+        await db_session.scalars(
+            select(NotificationOutbox).where(
+                NotificationOutbox.user_id == strategy.user_id,
+                NotificationOutbox.event_type == EVENT_BACKTEST_COMPLETED,
+            )
+        )
+    ).all()
+    assert len(outbox_rows) == 1
+    assert outbox_rows[0].event_key == f"backtest_completed:{receipt.job_id}"
 
 
 @pytest.mark.asyncio

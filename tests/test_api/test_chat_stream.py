@@ -73,6 +73,15 @@ def test_openai_stream_forwards_openai_events() -> None:
 
     done = next(item for item in payloads if item.get("type") == "done")
     assert "usage" in done
+    usage = done.get("usage")
+    if isinstance(usage, dict) and usage:
+        assert "model" in usage
+        assert "input_tokens" in usage
+        assert "output_tokens" in usage
+        assert "total_tokens" in usage
+        assert "cost_usd" in usage
+    if done.get("session_openai_cost") is not None:
+        assert "total_tokens" in done["session_openai_cost"]
 
     text = "".join(item.get("delta", "") for item in payloads if item.get("type") == "text_delta")
     assert text.strip(), "No text response content"

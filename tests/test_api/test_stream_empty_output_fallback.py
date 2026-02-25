@@ -81,6 +81,12 @@ def test_stream_falls_back_to_output_text_done_when_no_delta() -> None:
             assert "trading experience bucket" in text
 
             done = next(item for item in payloads if item.get("type") == "done")
+            usage = done.get("usage") or {}
+            assert usage["input_tokens"] == 11
+            assert usage["output_tokens"] == 6
+            assert usage["total_tokens"] == 17
+            assert usage["model"]
+            assert "cost_usd" in usage
             session_id = done["session_id"]
 
             detail = client.get(
@@ -88,12 +94,21 @@ def test_stream_falls_back_to_output_text_done_when_no_delta() -> None:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert detail.status_code == 200
-            messages = detail.json()["messages"]
+            body = detail.json()
+            metadata = body["metadata"]
+            openai_cost = metadata.get("openai_cost") or {}
+            assert openai_cost["totals"]["input_tokens"] == 11
+            assert openai_cost["totals"]["output_tokens"] == 6
+            assert openai_cost["totals"]["total_tokens"] == 17
+            assert openai_cost["totals"]["turn_count"] == 1
+
+            messages = body["messages"]
             assistant_messages = [
                 item for item in messages if item.get("role") == "assistant"
             ]
             assert assistant_messages
             assert "trading experience bucket" in assistant_messages[-1]["content"]
+            assert assistant_messages[-1]["token_usage"]["total_tokens"] == 17
 
 
 def test_stream_empty_output_still_emits_non_empty_fallback_text() -> None:
@@ -139,6 +154,12 @@ def test_stream_empty_output_still_emits_non_empty_fallback_text() -> None:
             assert "displayable reply" in text
 
             done = next(item for item in payloads if item.get("type") == "done")
+            usage = done.get("usage") or {}
+            assert usage["input_tokens"] == 9
+            assert usage["output_tokens"] == 5
+            assert usage["total_tokens"] == 14
+            assert usage["model"]
+            assert "cost_usd" in usage
             session_id = done["session_id"]
             assert "trading_years_bucket" in (done.get("missing_fields") or [])
 
@@ -147,10 +168,19 @@ def test_stream_empty_output_still_emits_non_empty_fallback_text() -> None:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert detail.status_code == 200
-            messages = detail.json()["messages"]
+            body = detail.json()
+            metadata = body["metadata"]
+            openai_cost = metadata.get("openai_cost") or {}
+            assert openai_cost["totals"]["input_tokens"] == 9
+            assert openai_cost["totals"]["output_tokens"] == 5
+            assert openai_cost["totals"]["total_tokens"] == 14
+            assert openai_cost["totals"]["turn_count"] == 1
+
+            messages = body["messages"]
             assistant_messages = [
                 item for item in messages if item.get("role") == "assistant"
             ]
             assert assistant_messages
             assert assistant_messages[-1]["content"].strip()
             assert "displayable reply" in assistant_messages[-1]["content"]
+            assert assistant_messages[-1]["token_usage"]["total_tokens"] == 14

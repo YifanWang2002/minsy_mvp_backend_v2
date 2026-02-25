@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 _SKILLS_DIR = Path(__file__).parent
 _DEPLOYMENT_SKILLS_MD = _SKILLS_DIR / "deployment" / "skills.md"
@@ -59,13 +61,16 @@ def build_deployment_static_instructions(*, language: str = "en") -> str:
 def build_deployment_dynamic_state(
     *,
     collected_fields: dict[str, str] | None = None,
+    deployment_state: dict[str, Any] | None = None,
 ) -> str:
     fields = dict(collected_fields or {})
+    runtime_state = dict(deployment_state or {})
     missing = [field for field in REQUIRED_FIELDS if not fields.get(field)]
     has_missing = bool(missing)
     next_missing = missing[0] if missing else "none"
     missing_str = ", ".join(missing) if missing else "none - all collected"
     collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
+    runtime_json = json.dumps(runtime_state, ensure_ascii=True, sort_keys=True)
 
     return (
         "[SESSION STATE]\n"
@@ -73,5 +78,6 @@ def build_deployment_dynamic_state(
         f"- still_missing: {missing_str}\n"
         f"- has_missing_fields: {str(has_missing).lower()}\n"
         f"- next_missing_field: {next_missing}\n"
+        f"- deployment_runtime_state: {runtime_json}\n"
         "[/SESSION STATE]\n\n"
     )

@@ -37,9 +37,9 @@ class SessionStatus(StrEnum):
 VALID_TRANSITIONS: dict[Phase, set[Phase]] = {
     Phase.KYC: {Phase.PRE_STRATEGY, Phase.ERROR},
     Phase.PRE_STRATEGY: {Phase.STRATEGY, Phase.KYC, Phase.ERROR},
-    Phase.STRATEGY: {Phase.PRE_STRATEGY, Phase.ERROR},
+    Phase.STRATEGY: {Phase.PRE_STRATEGY, Phase.DEPLOYMENT, Phase.ERROR},
     Phase.STRESS_TEST: {Phase.STRATEGY, Phase.ERROR},
-    Phase.DEPLOYMENT: {Phase.COMPLETED, Phase.ERROR},
+    Phase.DEPLOYMENT: {Phase.STRATEGY, Phase.COMPLETED, Phase.ERROR},
     Phase.ERROR: {Phase.KYC, Phase.PRE_STRATEGY, Phase.STRATEGY},
     Phase.COMPLETED: set(),
 }

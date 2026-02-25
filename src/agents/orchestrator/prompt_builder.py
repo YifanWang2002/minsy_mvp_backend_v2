@@ -100,6 +100,8 @@ class PromptBuilderMixin:
             return self._build_strategy_runtime_policy(artifacts=artifacts)
         if phase == Phase.STRESS_TEST.value:
             return self._build_stress_test_runtime_policy(artifacts=artifacts)
+        if phase == Phase.DEPLOYMENT.value:
+            return self._build_deployment_runtime_policy(artifacts=artifacts)
         return HandlerRuntimePolicy()
 
     def _build_strategy_runtime_policy(
@@ -192,6 +194,29 @@ class PromptBuilderMixin:
             ),
         ]
 
+    def _build_deployment_runtime_policy(
+        self,
+        *,
+        artifacts: dict[str, Any],
+    ) -> HandlerRuntimePolicy:
+        profile = self._extract_phase_profile(
+            artifacts=artifacts,
+            phase=Phase.DEPLOYMENT.value,
+        )
+        raw_status = profile.get("deployment_status")
+        status = raw_status.strip().lower() if isinstance(raw_status, str) else "ready"
+        if status not in {"ready", "deployed", "blocked"}:
+            status = "ready"
+        return HandlerRuntimePolicy(
+            phase_stage=f"deployment_{status}",
+            tool_mode="replace",
+            allowed_tools=[
+                self._build_trading_tool_def(
+                    allowed_tools=list(_TRADING_DEPLOYMENT_TOOL_NAMES),
+                )
+            ],
+        )
+
     @staticmethod
     def _extract_phase_profile(
         *, artifacts: dict[str, Any], phase: str
@@ -230,6 +255,16 @@ class PromptBuilderMixin:
             "type": "mcp",
             "server_label": "market_data",
             "server_url": settings.market_data_mcp_server_url,
+            "allowed_tools": allowed_tools,
+            "require_approval": "never",
+        }
+
+    @staticmethod
+    def _build_trading_tool_def(*, allowed_tools: list[str]) -> dict[str, Any]:
+        return {
+            "type": "mcp",
+            "server_label": "trading",
+            "server_url": settings.trading_mcp_server_url,
             "allowed_tools": allowed_tools,
             "require_approval": "never",
         }

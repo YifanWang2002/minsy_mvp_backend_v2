@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from starlette.background import BackgroundTask
+
+logger = logging.getLogger(__name__)
 
 _REQUEST_HOP_BY_HOP_HEADERS: frozenset[str] = frozenset(
     {
@@ -89,13 +92,6 @@ _ROUTES: tuple[ProxyRoute, ...] = (
         upstream_env="MCP_PROXY_UPSTREAM_TRADING",
         default_upstream="http://127.0.0.1:8115",
         strip_prefix=True,
-    ),
-    # Backward compatibility for existing single-endpoint clients.
-    ProxyRoute(
-        prefix="/mcp",
-        upstream_env="MCP_PROXY_UPSTREAM_LEGACY",
-        default_upstream="http://127.0.0.1:8111",
-        strip_prefix=False,
     ),
 )
 
@@ -193,7 +189,20 @@ async def proxy_request(path: str, request: Request):
         headers=request_headers,
         content=body,
     )
-    upstream_response = await request.app.state.http.send(upstream_request, stream=True)
+    try:
+        upstream_response = await request.app.state.http.send(upstream_request, stream=True)
+    except httpx.HTTPError as exc:
+        logger.warning(
+            "mcp dev proxy upstream request failed method=%s path=%s upstream=%s error=%s",
+            request.method,
+            incoming_path,
+            upstream_url,
+            exc,
+        )
+        return PlainTextResponse(
+            f"MCP upstream unavailable: {upstream_url}",
+            status_code=502,
+        )
 
     response_headers = {
         key: value

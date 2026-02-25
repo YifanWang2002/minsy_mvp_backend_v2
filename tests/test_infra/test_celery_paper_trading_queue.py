@@ -35,3 +35,23 @@ def test_celery_backtest_stale_cleanup_schedule_matches_settings() -> None:
         assert schedule[key]["task"] == "maintenance.fail_stale_backtest_jobs"
     else:
         assert key not in schedule
+
+
+def test_celery_paper_scheduler_tick_schedule_matches_settings() -> None:
+    schedule = celery_app.conf.beat_schedule or {}
+    key = "paper_trading.scheduler_tick"
+    if settings.paper_trading_enabled:
+        assert key in schedule
+        assert schedule[key]["task"] == "paper_trading.scheduler_tick"
+    else:
+        assert key not in schedule
+
+
+def test_celery_market_data_refresh_schedule_matches_settings() -> None:
+    schedule = celery_app.conf.beat_schedule or {}
+    key = "market_data.refresh_active_subscriptions"
+    if settings.paper_trading_enabled:
+        assert key in schedule
+        assert schedule[key]["task"] == "market_data.refresh_active_subscriptions"
+    else:
+        assert key not in schedule

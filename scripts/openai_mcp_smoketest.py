@@ -52,8 +52,7 @@ def _parse_args() -> argparse.Namespace:
     default_server_url = (
         os.getenv("MCP_SERVER_URL_STRATEGY")
         or os.getenv("MCP_SERVER_URL_STRATEGY_DEV")
-        or os.getenv("MCP_SERVER_URL_DEV")
-        or os.getenv("MCP_SERVER_URL")
+        or os.getenv("MCP_SERVER_URL_STRATEGY_PROD")
         or DEFAULT_SERVER_URL
     )
     parser.add_argument(
@@ -61,7 +60,7 @@ def _parse_args() -> argparse.Namespace:
         default=default_server_url,
         help=(
             "MCP endpoint URL. Default priority: MCP_SERVER_URL_STRATEGY, "
-            "MCP_SERVER_URL_STRATEGY_DEV, MCP_SERVER_URL_DEV, MCP_SERVER_URL, "
+            "MCP_SERVER_URL_STRATEGY_DEV, MCP_SERVER_URL_STRATEGY_PROD, "
             f"fallback {DEFAULT_SERVER_URL}."
         ),
     )

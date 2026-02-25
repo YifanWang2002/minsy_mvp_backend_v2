@@ -7,18 +7,42 @@ import os
 import shutil
 import time
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from uuid import UUID
 
 import yfinance as yf
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from platformdirs import user_cache_dir
 
+from src.config import settings
 from src.engine import DataLoader
+from src.engine.data.local_coverage import (
+    LocalCoverageInputError,
+    deserialize_missing_ranges,
+    detect_missing_ranges,
+    serialize_missing_ranges,
+)
+from src.engine.market_data.sync_service import (
+    MarketDataNoMissingDataError,
+    MarketDataProviderUnavailableError,
+    MarketDataSyncInputError,
+    MarketDataSyncJobNotFoundError,
+    create_market_data_sync_job,
+    execute_market_data_sync_job,
+    get_market_data_sync_job_view,
+    schedule_market_data_sync_job,
+)
+from src.mcp.context_auth import (
+    McpContextClaims,
+    decode_mcp_context_token,
+    extract_mcp_context_token,
+)
 from src.mcp._utils import log_mcp_tool_result, to_json, utc_now_iso
+from src.models import database as db_module
 
 TOOL_NAMES: tuple[str, ...] = (
     "check_symbol_available",
@@ -27,6 +51,9 @@ TOOL_NAMES: tuple[str, ...] = (
     "get_symbol_quote",
     "get_symbol_candles",
     "get_symbol_metadata",
+    "market_data_detect_missing_ranges",
+    "market_data_fetch_missing_ranges",
+    "market_data_get_sync_job",
     # Backward compatibility aliases.
     "market_data_get_quote",
     "market_data_get_candles",
@@ -305,6 +332,70 @@ def _build_error_payload(
         error_message=error_message,
         context=context,
     )
+
+
+def _parse_uuid(value: str, field_name: str) -> UUID:
+    try:
+        return UUID(str(value).strip())
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Invalid {field_name}: {value}") from exc
+
+
+def _parse_datetime_field(value: str, field_name: str) -> datetime:
+    raw = str(value).strip()
+    if not raw:
+        raise ValueError(f"{field_name} cannot be empty")
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Invalid {field_name}: {value}") from exc
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+async def _new_db_session():
+    if db_module.AsyncSessionLocal is None:
+        await db_module.init_postgres(ensure_schema=False)
+    assert db_module.AsyncSessionLocal is not None
+    return db_module.AsyncSessionLocal()
+
+
+def _resolve_context_claims(ctx: Context | None) -> McpContextClaims | None:
+    if ctx is None:
+        return None
+    try:
+        request = ctx.request_context.request
+    except Exception:  # noqa: BLE001
+        return None
+    headers = getattr(request, "headers", None)
+    token = extract_mcp_context_token(headers)
+    if token is None:
+        return None
+    return decode_mcp_context_token(token)
+
+
+def _serialize_sync_view(view: Any) -> dict[str, Any]:
+    return {
+        "sync_job_id": str(view.job_id),
+        "provider": view.provider,
+        "market": view.market,
+        "symbol": view.symbol,
+        "timeframe": view.timeframe,
+        "status": view.status,
+        "progress": view.progress,
+        "current_step": view.current_step,
+        "requested_start": view.requested_start.isoformat(),
+        "requested_end": view.requested_end.isoformat(),
+        "missing_ranges": serialize_missing_ranges(list(view.missing_ranges)),
+        "rows_written": view.rows_written,
+        "range_filled": view.range_filled,
+        "total_ranges": view.total_ranges,
+        "errors": list(view.errors),
+        "submitted_at": view.submitted_at.isoformat(),
+        "completed_at": view.completed_at.isoformat() if view.completed_at else None,
+    }
 
 
 def _resolve_ticker_context(
@@ -946,6 +1037,226 @@ def get_symbol_metadata(symbol: str, market: str) -> str:
     )
 
 
+def market_data_detect_missing_ranges(
+    market: str,
+    symbol: str,
+    timeframe: str,
+    start_date: str,
+    end_date: str,
+) -> str:
+    """Detect local missing timestamp ranges for one symbol/timeframe window."""
+
+    loader = _get_data_loader()
+    try:
+        report = detect_missing_ranges(
+            loader=loader,
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=_parse_datetime_field(start_date, "start_date"),
+            end=_parse_datetime_field(end_date, "end_date"),
+        )
+    except (ValueError, LocalCoverageInputError) as exc:
+        return _build_error_payload(
+            tool="market_data_detect_missing_ranges",
+            error_code="INVALID_RANGE",
+            error_message=str(exc),
+            context={
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _build_error_payload(
+            tool="market_data_detect_missing_ranges",
+            error_code="COVERAGE_LOOKUP_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+            context={
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+        )
+
+    return _build_success_payload(
+        tool="market_data_detect_missing_ranges",
+        data={
+            "market": report.market,
+            "symbol": report.symbol,
+            "timeframe": report.timeframe,
+            "requested_start": report.start.isoformat(),
+            "requested_end": report.end.isoformat(),
+            "expected_bars": report.expected_bars,
+            "present_bars": report.present_bars,
+            "missing_bars": report.missing_bars,
+            "missing_ranges": serialize_missing_ranges(list(report.missing_ranges)),
+            "local_coverage_pct": report.local_coverage_pct,
+        },
+    )
+
+
+async def market_data_fetch_missing_ranges(
+    provider: str,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    start_date: str = "",
+    end_date: str = "",
+    missing_ranges: list[dict[str, Any]] | None = None,
+    max_lookback_days: int = 0,
+    run_async: bool = True,
+    ctx: Context | None = None,
+) -> str:
+    """Create and optionally execute one missing-range sync job."""
+
+    try:
+        claims = _resolve_context_claims(ctx)
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="market_data_fetch_missing_ranges",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
+
+    try:
+        if start_date.strip() and end_date.strip():
+            requested_start = _parse_datetime_field(start_date, "start_date")
+            requested_end = _parse_datetime_field(end_date, "end_date")
+        else:
+            lookback_days = max(int(max_lookback_days), 0) or settings.market_data_sync_default_lookback_days
+            requested_end = datetime.now(UTC)
+            requested_start = requested_end - timedelta(days=lookback_days)
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="market_data_fetch_missing_ranges",
+            error_code="INVALID_RANGE",
+            error_message=str(exc),
+            context={
+                "start_date": start_date,
+                "end_date": end_date,
+                "max_lookback_days": max_lookback_days,
+            },
+        )
+
+    normalized_ranges = serialize_missing_ranges(deserialize_missing_ranges(missing_ranges or []))
+
+    try:
+        async with await _new_db_session() as db:
+            receipt = await create_market_data_sync_job(
+                db,
+                provider=provider,
+                market=market,
+                symbol=symbol,
+                timeframe=timeframe,
+                requested_start=requested_start,
+                requested_end=requested_end,
+                missing_ranges=normalized_ranges or None,
+                user_id=claims.user_id if claims is not None else None,
+                auto_commit=True,
+            )
+
+            queued_task_id: str | None = None
+            if run_async:
+                queued_task_id = await schedule_market_data_sync_job(receipt.job_id)
+                view = await get_market_data_sync_job_view(
+                    db,
+                    job_id=receipt.job_id,
+                    user_id=claims.user_id if claims is not None else None,
+                )
+            else:
+                view = await execute_market_data_sync_job(
+                    db,
+                    job_id=receipt.job_id,
+                    auto_commit=True,
+                )
+
+            data = _serialize_sync_view(view)
+            data["queued_task_id"] = queued_task_id
+            data["run_async"] = bool(run_async)
+            return _build_success_payload(
+                tool="market_data_fetch_missing_ranges",
+                data=data,
+            )
+    except MarketDataNoMissingDataError as exc:
+        return _build_error_payload(
+            tool="market_data_fetch_missing_ranges",
+            error_code="NO_MISSING_DATA",
+            error_message=str(exc),
+            context={
+                "provider": provider,
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe,
+            },
+        )
+    except MarketDataProviderUnavailableError as exc:
+        return _build_error_payload(
+            tool="market_data_fetch_missing_ranges",
+            error_code="PROVIDER_UNAVAILABLE",
+            error_message=str(exc),
+            context={"provider": provider},
+        )
+    except (MarketDataSyncInputError, ValueError) as exc:
+        return _build_error_payload(
+            tool="market_data_fetch_missing_ranges",
+            error_code="INVALID_RANGE",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _build_error_payload(
+            tool="market_data_fetch_missing_ranges",
+            error_code="MARKET_DATA_SYNC_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+
+async def market_data_get_sync_job(
+    sync_job_id: str,
+    ctx: Context | None = None,
+) -> str:
+    """Get one market-data sync job state/result view."""
+
+    try:
+        job_uuid = _parse_uuid(sync_job_id, "sync_job_id")
+        claims = _resolve_context_claims(ctx)
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="market_data_get_sync_job",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
+
+    try:
+        async with await _new_db_session() as db:
+            view = await get_market_data_sync_job_view(
+                db,
+                job_id=job_uuid,
+                user_id=claims.user_id if claims is not None else None,
+            )
+    except MarketDataSyncJobNotFoundError as exc:
+        return _build_error_payload(
+            tool="market_data_get_sync_job",
+            error_code="NOT_FOUND",
+            error_message=str(exc),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _build_error_payload(
+            tool="market_data_get_sync_job",
+            error_code="MARKET_DATA_SYNC_GET_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    return _build_success_payload(
+        tool="market_data_get_sync_job",
+        data=_serialize_sync_view(view),
+    )
+
+
 def market_data_get_quote(symbol: str, venue: str = "US") -> str:
     """Backward compatibility alias for quote tool."""
     market = _VENUE_TO_MARKET.get(venue.strip().upper(), "us_stocks")
@@ -976,6 +1287,9 @@ def register_market_data_tools(mcp: FastMCP) -> None:
         get_symbol_quote,
         get_symbol_candles,
         get_symbol_metadata,
+        market_data_detect_missing_ranges,
+        market_data_fetch_missing_ranges,
+        market_data_get_sync_job,
         market_data_get_quote,
         market_data_get_candles,
     ):

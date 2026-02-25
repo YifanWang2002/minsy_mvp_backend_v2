@@ -13,6 +13,7 @@ from src.config import settings
 from src.models.database import close_postgres, init_postgres
 from src.models.redis import close_redis, init_redis
 from src.observability.sentry_setup import init_backend_sentry
+from src.services.telegram_webhook_sync import sync_telegram_webhook_on_startup
 from src.util.data_setup import ensure_market_data
 from src.util.logger import banner, configure_logging, log_success, logger
 
@@ -30,11 +31,10 @@ async def lifespan(_: FastAPI):
 
     logger.info(
         (
-            "Runtime AI config: model=%s, mcp_server_legacy=%s, "
+            "Runtime AI config: model=%s, "
             "mcp_strategy=%s, mcp_backtest=%s, mcp_market=%s, mcp_stress=%s, mcp_trading=%s"
         ),
         settings.openai_response_model,
-        settings.mcp_server_url,
         settings.strategy_mcp_server_url,
         settings.backtest_mcp_server_url,
         settings.market_data_mcp_server_url,
@@ -53,6 +53,7 @@ async def lifespan(_: FastAPI):
         )
     await init_postgres()
     await init_redis()
+    await sync_telegram_webhook_on_startup()
     log_success("Infrastructure initialized.")
     try:
         yield

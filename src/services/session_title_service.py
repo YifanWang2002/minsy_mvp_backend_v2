@@ -258,6 +258,9 @@ async def refresh_session_title(
             strategy_name=strategy_name,
             instrument=strategy_instrument,
         )
+    elif phase == "deployment":
+        kind = "deployment_in_progress"
+        title = _phase_default_title_en(phase)
     else:
         kind = "phase_default"
         title = _phase_default_title_en(phase)
@@ -267,10 +270,14 @@ async def refresh_session_title(
         "version": SESSION_TITLE_RECORD_VERSION,
         "kind": kind,
         "phase": phase,
-        "market": strategy_market if phase in {"strategy", "stress_test"} else target_market,
+        "market": (
+            strategy_market
+            if phase in {"strategy", "stress_test", "deployment"}
+            else target_market
+        ),
         "instrument": (
             strategy_instrument
-            if phase in {"strategy", "stress_test"}
+            if phase in {"strategy", "stress_test", "deployment"}
             else target_instrument
         ),
         "holding_period_bucket": holding_period_bucket,
@@ -285,4 +292,3 @@ async def refresh_session_title(
     metadata[SESSION_TITLE_RECORD_META_KEY] = record
     session.metadata_ = metadata
     return SessionTitleResult(title=title, record=record)
-

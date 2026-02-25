@@ -40,6 +40,9 @@ class _DummyBot:
     async def edit_message_text(self, **kwargs: Any):
         self.edited_messages.append(dict(kwargs))
 
+    async def edit_message_reply_markup(self, **kwargs: Any):
+        self.edited_messages.append(dict(kwargs))
+
     async def send_chat_action(self, **kwargs: Any):
         self.chat_actions.append(dict(kwargs))
 
@@ -90,8 +93,8 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
         user_text: str,
         previous_response_id: str | None,  # noqa: ARG001
         locale: str,  # noqa: ARG001
-    ) -> tuple[str, str | None]:
-        return f"mock reply: {user_text}", "resp_test_1"
+    ) -> tuple[str, str | None, dict[str, Any] | None]:
+        return f"mock reply: {user_text}", "resp_test_1", None
 
     monkeypatch.setattr(settings, "telegram_enabled", True)
     monkeypatch.setattr(settings, "telegram_bot_token", "123456:test-token")
@@ -100,6 +103,7 @@ def test_telegram_connector_bind_activity_and_disconnect(monkeypatch) -> None:
     monkeypatch.setattr(settings, "telegram_test_batches_enabled", True)
     monkeypatch.setattr(settings, "telegram_webapp_base_url", "https://app.minsyai.com")
     monkeypatch.setattr(settings, "telegram_test_payment_provider_token", "")
+    monkeypatch.setattr(settings, "telegram_test_force_target_email_enabled", False)
     monkeypatch.setattr(TelegramService, "_bot_client", lambda self: dummy_bot)
     monkeypatch.setattr(
         TelegramTestBatchService,
@@ -370,8 +374,8 @@ def test_trade_buttons_follow_user_locale(monkeypatch) -> None:
         user_text: str,  # noqa: ARG001
         previous_response_id: str | None,  # noqa: ARG001
         locale: str,  # noqa: ARG001
-    ) -> tuple[str, str | None]:
-        return "ok", "resp_test_2"
+    ) -> tuple[str, str | None, dict[str, Any] | None]:
+        return "ok", "resp_test_2", None
 
     monkeypatch.setattr(settings, "telegram_enabled", True)
     monkeypatch.setattr(settings, "telegram_bot_token", "123456:test-token")
@@ -380,6 +384,7 @@ def test_trade_buttons_follow_user_locale(monkeypatch) -> None:
     monkeypatch.setattr(settings, "telegram_test_batches_enabled", True)
     monkeypatch.setattr(settings, "telegram_webapp_base_url", "https://app.minsyai.com")
     monkeypatch.setattr(settings, "telegram_test_payment_provider_token", "")
+    monkeypatch.setattr(settings, "telegram_test_force_target_email_enabled", False)
     monkeypatch.setattr(TelegramService, "_bot_client", lambda self: dummy_bot)
     monkeypatch.setattr(
         TelegramTestBatchService,

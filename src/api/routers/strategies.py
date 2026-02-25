@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.orchestrator import ChatOrchestrator
-from src.agents.phases import Phase
+from src.agents.phases import Phase, can_transition
 from src.api.middleware.auth import get_current_user
 from src.api.schemas.events import (
     StrategyBacktestSummary,
@@ -39,6 +39,7 @@ from src.engine.strategy import (
     upsert_strategy_dsl,
 )
 from src.models.backtest import BacktestJob
+from src.models.phase_transition import PhaseTransition
 from src.models.session import Session
 from src.models.strategy import Strategy
 from src.models.user import User
@@ -317,12 +318,30 @@ async def confirm_strategy(
         receipt=receipt,
         scope_updates=scope_updates,
     )
+    previous_phase = session.current_phase
     _apply_strategy_confirm_metadata(
         session=session,
         receipt=receipt,
         scope_updates=scope_updates,
         advance_to_stress_test=payload.advance_to_stress_test,
     )
+    if previous_phase != session.current_phase and can_transition(previous_phase, session.current_phase):
+        db.add(
+            PhaseTransition(
+                session_id=session.id,
+                from_phase=previous_phase,
+                to_phase=session.current_phase,
+                trigger="user_action",
+                metadata_=_build_phase_transition_metadata(
+                    reason="strategy_confirm_to_strategy",
+                    source="api",
+                    context={
+                        "strategy_id": str(receipt.strategy_id),
+                        "strategy_name": receipt.strategy_name,
+                    },
+                ),
+            )
+        )
     await refresh_session_title(db=db, session=session)
 
     await db.commit()
@@ -453,6 +472,29 @@ def _apply_strategy_confirm_artifacts(
     stress_profile.pop("backtest_error_code", None)
     stress_block["profile"] = stress_profile
     stress_block["missing_fields"] = ["backtest_job_id", "backtest_status"]
+
+    deployment_block = artifacts.setdefault(
+        Phase.DEPLOYMENT.value,
+        {"profile": {}, "missing_fields": ["deployment_status"], "runtime": {}},
+    )
+    deployment_profile = dict(deployment_block.get("profile", {}))
+    deployment_profile["strategy_id"] = str(receipt.strategy_id)
+    deployment_profile["strategy_name"] = receipt.strategy_name
+    deployment_profile.update(scope_updates)
+    deployment_profile["deployment_status"] = "ready"
+    deployment_profile["deployment_prepared_at"] = receipt.last_updated_at.isoformat()
+    deployment_block["profile"] = deployment_profile
+    deployment_block["missing_fields"] = []
+    deployment_runtime = dict(deployment_block.get("runtime", {}))
+    deployment_runtime.update(
+        {
+            "strategy_id": str(receipt.strategy_id),
+            "strategy_name": receipt.strategy_name,
+            "deployment_status": "ready",
+            "prepared_at": receipt.last_updated_at.isoformat(),
+        }
+    )
+    deployment_block["runtime"] = deployment_runtime
     session.artifacts = artifacts
 
 
@@ -464,7 +506,7 @@ def _apply_strategy_confirm_metadata(
     advance_to_stress_test: bool,
 ) -> None:
     # Reset response-chain context so post-confirm turns always use refreshed
-    # strategy runtime policy/toolset.
+    # strategy runtime policy/toolset and continue in strategy iteration.
     session.previous_response_id = None
     session.current_phase = Phase.STRATEGY.value
     session.last_activity_at = datetime.now(UTC)
@@ -472,11 +514,12 @@ def _apply_strategy_confirm_metadata(
     next_meta["strategy_id"] = str(receipt.strategy_id)
     next_meta["strategy_name"] = receipt.strategy_name
     next_meta["strategy_confirmed_at"] = receipt.last_updated_at.isoformat()
+    next_meta["deployment_status"] = "ready"
+    next_meta["deployment_prepared_at"] = receipt.last_updated_at.isoformat()
     next_meta.update(scope_updates)
 
-    # Keep the session in strategy phase for performance-driven iteration.
-    # `advance_to_stress_test` is currently ignored until dedicated stress-test
-    # tools are shipped.
+    # `advance_to_stress_test` is currently ignored because strategy iteration
+    # remains inside strategy phase in the current product boundary.
     if advance_to_stress_test:
         next_meta["advance_to_stress_test_ignored"] = True
         next_meta["advance_to_stress_test_ignored_at"] = datetime.now(UTC).isoformat()
@@ -550,6 +593,20 @@ def _default_auto_message(*, language: str, strategy_id: str) -> str:
         f"strategy_id {strategy_id}. "
         "Please start backtesting, create a backtest job, and track it to completion."
     )
+
+
+def _build_phase_transition_metadata(
+    *,
+    reason: str,
+    source: str,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "reason": reason,
+        "source": source,
+        "context": context or {},
+        "recorded_at": datetime.now(UTC).isoformat(),
+    }
 
 
 def _parse_sse_payload(chunk: str) -> dict[str, Any] | None:

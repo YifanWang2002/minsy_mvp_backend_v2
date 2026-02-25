@@ -31,6 +31,7 @@ _BACKTEST_DEFAULT_CHARTS: tuple[str, ...] = (
 )
 _STRATEGY_SCHEMA_ONLY_TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
+    "strategy_upsert_dsl",
 )
 _STRATEGY_ARTIFACT_OPS_TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
@@ -45,9 +46,7 @@ _STRATEGY_ARTIFACT_OPS_TOOL_NAMES: tuple[str, ...] = (
     "get_indicator_detail",
     "get_indicator_catalog",
 )
-_MARKET_DATA_MINIMAL_TOOL_NAMES: tuple[str, ...] = (
-    "get_symbol_data_coverage",
-)
+_MARKET_DATA_MINIMAL_TOOL_NAMES: tuple[str, ...] = ("get_symbol_data_coverage",)
 _BACKTEST_BOOTSTRAP_TOOL_NAMES: tuple[str, ...] = (
     "backtest_create_job",
     "backtest_get_job",
@@ -63,6 +62,15 @@ _BACKTEST_FEEDBACK_TOOL_NAMES: tuple[str, ...] = (
     "backtest_exit_reason_breakdown",
     "backtest_underwater_curve",
     "backtest_rolling_metrics",
+)
+_TRADING_DEPLOYMENT_TOOL_NAMES: tuple[str, ...] = (
+    "trading_create_paper_deployment",
+    "trading_list_deployments",
+    "trading_start_deployment",
+    "trading_pause_deployment",
+    "trading_stop_deployment",
+    "trading_get_positions",
+    "trading_get_orders",
 )
 _MCP_CONTEXT_ENABLED_SERVER_LABELS: frozenset[str] = frozenset(
     {"strategy", "backtest", "market_data", "stress", "trading"}
@@ -91,6 +99,7 @@ __all__ = [
     "_MARKET_DATA_MINIMAL_TOOL_NAMES",
     "_BACKTEST_BOOTSTRAP_TOOL_NAMES",
     "_BACKTEST_FEEDBACK_TOOL_NAMES",
+    "_TRADING_DEPLOYMENT_TOOL_NAMES",
     "_MCP_CONTEXT_ENABLED_SERVER_LABELS",
     "_kyc_handler",
 ]

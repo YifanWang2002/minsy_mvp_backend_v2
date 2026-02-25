@@ -133,8 +133,7 @@ def test_done_event_contains_session_title_for_strategy_phase_session() -> None:
             done = next(item for item in payloads if item.get("type") == "done")
 
             assert isinstance(done.get("session_title"), str)
-            assert "SessionTitleStrategy" in done["session_title"]
+            assert done["session_title"] == "US Stocks · SessionTitleStrategy"
             assert isinstance(done.get("session_title_record"), dict)
             assert done["session_title_record"]["kind"] == "strategy_named"
             assert done["session_title_record"]["phase"] == "strategy"
-            assert done["session_title_record"]["strategy_name"] == "SessionTitleStrategy"

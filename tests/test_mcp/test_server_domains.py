@@ -48,7 +48,7 @@ async def test_market_alias_domain_registers_market_data_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stress_and_trading_domains_expose_placeholder_tools() -> None:
+async def test_stress_and_trading_domains_expose_tools() -> None:
     stress_mcp = create_mcp_server(domain="stress")
     trading_mcp = create_mcp_server(domain="trading")
 
@@ -62,17 +62,21 @@ async def test_stress_and_trading_domains_expose_placeholder_tools() -> None:
 
 
 def test_registered_tool_names_and_domain_validation() -> None:
-    all_names = registered_tool_names(domain="all")
+    strategy_names = registered_tool_names(domain="strategy")
     stress_names = registered_tool_names(domain="stress")
     market_names = registered_tool_names(domain="market_data")
 
-    assert "strategy_validate_dsl" in all_names
-    assert "backtest_create_job" in all_names
-    assert "get_symbol_quote" in all_names
-    assert "stress_ping" not in all_names  # legacy all-mode compatibility
+    assert "strategy_validate_dsl" in strategy_names
+    assert "backtest_create_job" not in strategy_names
+    assert "get_symbol_quote" not in strategy_names
 
-    assert stress_names == ("stress_ping", "stress_capabilities")
+    assert "stress_ping" in stress_names
+    assert "stress_monte_carlo_create_job" in stress_names
+    assert "stress_optimize_get_pareto" in stress_names
+    assert "strategy_validate_dsl" not in stress_names
     assert "get_symbol_quote" in market_names
 
     with pytest.raises(ValueError):
         create_mcp_server(domain="unknown-domain")
+    with pytest.raises(ValueError):
+        registered_tool_names(domain="unknown-domain")
