@@ -2,6 +2,63 @@
 
 > 本文档基于对 `backend/` 代码仓库的递归阅读生成；`tests/` 与 `src/scripts/` 已阅读用于理解系统，但按要求不做逐文件索引展开。
 
+## 0. Refactor 路线图更新（2026-02-25）
+
+### 0.1 当前决定（本轮生效）
+
+- 本轮重构目标保持为单仓库、6-7 个容器服务拆分：`postgres`、`redis`、`api-server`、`mcp-server`、`worker-cpu`、`worker-io`、`scheduler-beat`（`flower` 可选）。
+- MCP 服务定位为 IO/tool facade；`backtest/stress/market_data sync` 等重任务统一通过 Celery 队列执行。
+- **Alembic 暂缓**：为降低本轮风险和工作量，本轮先不引入 Alembic，继续沿用现有 schema 机制，但明确 API 进程是 schema owner。
+
+### 0.2 本轮 schema 约束（无 Alembic 版本）
+
+- `api-server` 启动允许 `init_postgres(ensure_schema=True)`。
+- `worker` / `mcp` 启动必须使用 `ensure_schema=False`。
+- 部署顺序必须保证：先 API 健康，再拉起 MCP/Worker/Beat，避免隐式启动顺序问题。
+
+### 0.3 `deploy.yml`（GitHub CI/CD）重构后应如何改
+
+当前 `deploy.yml` 是 systemd 多 service 重启模型（`minsy-fastapi`、多 MCP、`minsy-celery`、`minsy-celery-beat`）。
+重构后建议切换为 **compose 驱动的容器部署模型**。
+
+建议修改点：
+
+1. 保留部署前备份（`pg_dump` + 用户邮箱导出）。
+2. 代码更新后执行 `uv sync --frozen`。
+3. 用 compose 统一拉起服务，而不是逐个 `systemctl restart`。
+4. 健康检查改为 API + MCP gateway + worker ping 三类。
+5. 本轮不加 Alembic migrate step。
+
+建议的 deploy 逻辑骨架：
+
+```bash
+git fetch --prune origin main
+git reset --hard origin/main
+
+uv sync --frozen
+
+docker compose -f compose/compose.prod.yml pull
+docker compose -f compose/compose.prod.yml up -d --remove-orphans
+
+# API health
+curl -fsS http://127.0.0.1:8000/api/v1/health
+
+# MCP gateway health (200/406 均视为可用)
+CODE="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8110/strategy/mcp || true)"
+test "$CODE" = "200" -o "$CODE" = "406"
+
+# Worker ping
+docker compose -f compose/compose.prod.yml exec -T worker-cpu \
+  celery -A apps.worker.cpu.celery_app:celery_app inspect ping
+docker compose -f compose/compose.prod.yml exec -T worker-io \
+  celery -A apps.worker.io.celery_app:celery_app inspect ping
+```
+
+### 0.4 文档与执行边界
+
+- 本次只更新方案与文档，不做实际拆分落地代码改造。
+- 后续落地将按分阶段执行：配置拆分 -> Celery 拆分 -> API/MCP/Domain 解耦 -> 数据与运行时硬化 -> Alembic（二期）。
+
 ## A. 项目概览 + 快速开始 + 系统架构
 
 ### A.1 项目概览

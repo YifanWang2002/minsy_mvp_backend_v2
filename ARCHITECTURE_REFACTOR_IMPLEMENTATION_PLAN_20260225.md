@@ -309,15 +309,19 @@ Directly impacted files:
 - `src/config.py` (to be split)
 - all settings consumers currently importing `settings`.
 
-## 5.5 Runtime schema ownership to migrations
+## 5.5 Runtime schema ownership (this refactor round: no Alembic)
 
-- Introduce Alembic and move all DDL/constraint patching from runtime to migration scripts.
-- `init_postgres()` becomes connection bootstrap only.
-- API/worker/mcp startup no longer performs schema mutations.
+- This round defers Alembic to reduce scope and delivery risk.
+- Keep current runtime schema path temporarily, but make ownership explicit:
+  - API startup is the only schema owner (`init_postgres(ensure_schema=True)`).
+  - Worker/MCP startup must only use `ensure_schema=False`.
+- Deployment/startup order must ensure API is healthy before starting worker/MCP.
+- Add backlog item: migrate to Alembic in a later iteration after service split stabilizes.
 
 Directly impacted files:
 - `src/models/database.py`
-- new `alembic.ini`, `migrations/`, migration env.
+- `src/main.py`
+- worker/MCP startup scripts and compose dependency order.
 
 ## 5.6 Data bootstrap decoupling
 
@@ -400,6 +404,45 @@ Example commands:
 - queue names stable and explicit for autoscaling metrics.
 - liveness/readiness endpoints for each service.
 
+## 7.4 GitHub Actions `deploy.yml` changes after refactor
+
+Target: align CI/CD with 7-container runtime and keep no-Alembic policy in this round.
+
+Required changes in `.github/workflows/deploy.yml`:
+
+1. Keep pre-deploy backup step (`pg_dump` + user export), then deploy via compose.
+2. Replace systemd multi-service restart with compose orchestration:
+  - `docker compose -f compose/compose.prod.yml pull`
+  - `docker compose -f compose/compose.prod.yml up -d --remove-orphans`
+3. Health checks should verify:
+  - API: `http://127.0.0.1:8000/api/v1/health`
+  - MCP gateway: `http://127.0.0.1:8110/<domain>/mcp` (200/406 accepted)
+  - Celery workers: `celery inspect ping` in `worker-cpu` and `worker-io` containers
+4. Add explicit startup dependency gate:
+  - wait for API ready first
+  - then verify worker and mcp health
+5. Do not add Alembic/migration command in this round.
+
+Recommended deploy block shape:
+
+```bash
+git fetch --prune origin main
+git reset --hard origin/main
+
+uv sync --frozen
+
+docker compose -f compose/compose.prod.yml pull
+docker compose -f compose/compose.prod.yml up -d --remove-orphans
+
+# health checks
+curl -fsS http://127.0.0.1:8000/api/v1/health
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8110/strategy/mcp
+docker compose -f compose/compose.prod.yml exec -T worker-cpu \
+  celery -A apps.worker.cpu.celery_app:celery_app inspect ping
+docker compose -f compose/compose.prod.yml exec -T worker-io \
+  celery -A apps.worker.io.celery_app:celery_app inspect ping
+```
+
 ## 8) Local Developer Experience
 
 ## 8.1 Replace script-driven multi-process startup with compose-first
@@ -472,12 +515,14 @@ Exit criteria:
 - MCP tools still return same response schema.
 - heavy tasks always queued.
 
-## Phase 5 - DB migration ownership move
+## Phase 5 (deferred) - Alembic migration ownership move
 
-- add Alembic, generate initial migration and delta migrations.
-- remove runtime DDL from app startup.
+- Out of scope for current refactor round.
+- Future work:
+  - add Alembic, generate baseline and delta migrations.
+  - remove runtime DDL from app startup.
 
-Exit criteria:
+Exit criteria (future phase):
 - clean DB bootstrap via migration command only.
 - API/worker/mcp startup is schema-side-effect free.
 
@@ -510,10 +555,8 @@ Exit criteria:
 - `compose/compose.base.yml`
 - `compose/compose.dev.yml`
 - `compose/compose.prod.yml`
-- `alembic.ini`
-- `migrations/env.py`
-- `migrations/versions/*.py`
 - `scripts/data_bootstrap.sh`
+- `.github/workflows/deploy.yml` (service orchestration and health checks update)
 
 ## 10.2 Files to refactor in-place
 
@@ -621,8 +664,8 @@ uv run python scripts/live_paper_trading_full_flow.py
 2. Risk: queue split causes lost routing.
 - Mitigation: task-route snapshot tests + per-queue smoke tests.
 
-3. Risk: migration from runtime DDL to Alembic may break existing DBs.
-- Mitigation: generate forward-only migration with idempotent guards and rehearsal against DB backup.
+3. Risk: keeping runtime DDL (while Alembic deferred) can still create startup-order coupling.
+- Mitigation: enforce API-first startup and disallow schema mutation in worker/MCP paths.
 
 4. Risk: MCP behavior drift during decoupling.
 - Mitigation: keep tool response schema frozen and add MCP contract tests.
@@ -638,6 +681,5 @@ uv run python scripts/live_paper_trading_full_flow.py
 4. Celery split into `worker-cpu`, `worker-io`, `beat`.
 5. MCP heavy operations queue-only, no sync execution for stress/market sync.
 6. API/MCP/domain no direct worker or router-internal coupling.
-7. Alembic migration ownership for schema lifecycle.
+7. CI/CD (`deploy.yml`) switched to container-oriented deployment checks.
 8. All existing tests and E2E flows green.
-
