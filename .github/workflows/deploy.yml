@@ -130,6 +130,19 @@ jobs:
             echo "=== Backup complete ==="
 
             # Deploy
+            RUNTIME_DIR="$APP_DIR/runtime"
+            mkdir -p "$RUNTIME_DIR"
+            if [ ! -w "$RUNTIME_DIR" ]; then
+              echo "runtime dir is not writable, attempting ownership fix: $RUNTIME_DIR"
+            fi
+            sudo mkdir -p "$RUNTIME_DIR/backups" "$RUNTIME_DIR/exports"
+            sudo chown -R "$(id -un):$(id -gn)" "$RUNTIME_DIR" || true
+            if [ ! -w "$RUNTIME_DIR" ]; then
+              echo "ERROR: runtime dir remains not writable: $RUNTIME_DIR" >&2
+              ls -ld "$RUNTIME_DIR" >&2 || true
+              exit 1
+            fi
+
             git fetch --prune origin main
             git reset --hard origin/main
 
