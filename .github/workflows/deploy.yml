@@ -54,13 +54,10 @@ jobs:
 
             # Match backend runtime env loading order (base + service overlays).
             MINSY_ENV_PROFILE="${MINSY_ENV_PROFILE:-dev}"
-            case "$MINSY_ENV_PROFILE" in
-              dev|prod) ;;
-              *)
-                echo "ERROR: MINSY_ENV_PROFILE must be dev or prod (got: $MINSY_ENV_PROFILE)" >&2
-                exit 1
-                ;;
-            esac
+            if [ "$MINSY_ENV_PROFILE" != "dev" ] && [ "$MINSY_ENV_PROFILE" != "prod" ]; then
+              echo "ERROR: MINSY_ENV_PROFILE must be dev or prod (got: $MINSY_ENV_PROFILE)" >&2
+              exit 1
+            fi
 
             if [ ! -f "env/.env.${MINSY_ENV_PROFILE}" ]; then
               echo "ERROR: missing required profile file env/.env.${MINSY_ENV_PROFILE}" >&2
@@ -99,7 +96,7 @@ jobs:
               printf '%s' "$_value"
             }
 
-            # ── Pre-deploy backup ────────────────────────────────
+            # Pre-deploy backup
             echo "=== Pre-deploy backup ==="
             BACKUP_DIR="backups/postgres"
             EXPORT_DIR="exports"
@@ -132,7 +129,7 @@ jobs:
 
             echo "=== Backup complete ==="
 
-            # ── Deploy ───────────────────────────────────────────
+            # Deploy
             git fetch --prune origin main
             git reset --hard origin/main
 
@@ -201,10 +198,25 @@ jobs:
               exit 1
             fi
 
-            if ! wait_mcp_domain strategy; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_domain backtest; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_domain market; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_domain stress; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_domain trading; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_domain strategy; then
+              dump_service_diagnostics
+              exit 1
+            fi
+            if ! wait_mcp_domain backtest; then
+              dump_service_diagnostics
+              exit 1
+            fi
+            if ! wait_mcp_domain market; then
+              dump_service_diagnostics
+              exit 1
+            fi
+            if ! wait_mcp_domain stress; then
+              dump_service_diagnostics
+              exit 1
+            fi
+            if ! wait_mcp_domain trading; then
+              dump_service_diagnostics
+              exit 1
+            fi
 
             echo "Deploy success."
