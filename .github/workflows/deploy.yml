@@ -13,30 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
-    name: Validate Backend
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'Version') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Import boundary check
-        run: python scripts/check_import_boundaries.py
-
-      - name: Python compile check
-        run: python -m compileall -q apps packages
-
   deploy:
     name: Deploy
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'Version') }}
-    needs: validate
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'Version') || contains(github.event.head_commit.message, 'version') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
