@@ -1,0 +1,1 @@
+{"status":"ok","db":true,"redis":true,"state_stores":{"runtime_state_store":{"enabled":false,"active":false,"fallback_hits":0,"entries":0,"last_error":null,"mode":"memory"},"signal_store":{"enabled":false,"active":false,"fallback_hits":0,"entries":0,"last_error":null,"mode":"memory"}},"services":{"api":"ok","postgres":"ok","redis":"ok"}}

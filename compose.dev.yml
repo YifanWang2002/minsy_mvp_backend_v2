@@ -1,17 +1,39 @@
+name: minsy-backend
+
+x-backend-common: &backend-common
+  image: minsy-backend:dev
+  restart: unless-stopped
+  working_dir: /app
+  environment:
+    PYTHONUNBUFFERED: "1"
+    MINSY_ENV_PROFILE: dev
+  volumes:
+    - ./env:/app/env:ro
+    - ./data:/app/data
+    - ./runtime:/app/runtime
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: minsy-postgres-dev
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-minsy_pgsql}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - minsy_pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-minsy_pgsql}"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-minsy_pgsql}
       interval: 5s
       timeout: 5s
       retries: 20
@@ -19,16 +41,133 @@ services:
   redis:
     image: redis:7-alpine
     container_name: minsy-redis-dev
-    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - minsy_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD
+        - redis-cli
+        - ping
       interval: 5s
       timeout: 5s
       retries: 20
+
+  mcp:
+    <<: *backend-common
+    container_name: minsy-mcp-dev
+    command:
+      - .venv/bin/python
+      - -m
+      - apps.mcp.launch_all
+      - --router-host
+      - 0.0.0.0
+      - --router-port
+      - "8110"
+    ports:
+      - "8110:8110"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',8110),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  api:
+    <<: *backend-common
+    container_name: minsy-api-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - .venv/bin/uvicorn
+      - apps.api.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health',timeout=2);sys.exit(0)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  worker-cpu:
+    <<: *backend-common
+    container_name: minsy-worker-cpu-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command:
+      - .venv/bin/celery
+      - -A
+      - apps.worker.cpu.celery_app:celery_app
+      - worker
+      - --loglevel=INFO
+      - --hostname=worker-cpu@%h
+      - -Q
+      - backtest,stress
+      - --concurrency=2
+
+  worker-io:
+    <<: *backend-common
+    container_name: minsy-worker-io-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command:
+      - .venv/bin/celery
+      - -A
+      - apps.worker.io.celery_app:celery_app
+      - worker
+      - --loglevel=INFO
+      - --hostname=worker-io@%h
+      - -Q
+      - market_data,paper_trading,maintenance,notifications,trade_approval
+      - --concurrency=4
+
+  beat:
+    <<: *backend-common
+    container_name: minsy-beat-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command:
+      - .venv/bin/celery
+      - -A
+      - apps.beat.celery_app:celery_app
+      - beat
+      - --loglevel=INFO
 
 volumes:
   minsy_pg_data:

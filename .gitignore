@@ -6,18 +6,20 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
-ENV/
 
-# Environment variables
+
+# Environment variables — runtime files (secrets, service configs)
 .env
-.env.local
-.env.*.local
 .env.dev
 .env.prod
 .env.runtime
+env/.env.secrets
 env/.env.common
 env/.env.dev
+env/.env.dev.*
 env/.env.prod
+env/.env.prod.*
+!env/.env.*.example
 
 # IDE
 .idea/

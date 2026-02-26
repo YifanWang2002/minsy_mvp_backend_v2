@@ -1,0 +1,1 @@
+"""CPU worker app entrypoint."""

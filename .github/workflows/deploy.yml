@@ -3,68 +3,150 @@ name: Deploy to GCP VM
 on:
   push:
     branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: deploy-main
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  validate:
+    name: Validate Backend
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'Version') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Import boundary check
+        run: python scripts/check_import_boundaries.py
+
+      - name: Python compile check
+        run: python -m compileall -q apps packages
+
+  deploy:
+    name: Deploy
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, 'Version') }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          MINSY_DEPLOY_APP_DIR: ${{ secrets.MINSY_DEPLOY_APP_DIR }}
+          MINSY_ENV_PROFILE: ${{ secrets.MINSY_ENV_PROFILE }}
+          MINSY_COMPOSE_FILE: ${{ secrets.MINSY_COMPOSE_FILE }}
         with:
           host: ${{ secrets.GCP_VM_HOST }}
           username: ${{ secrets.GCP_VM_USER }}
           key: ${{ secrets.GCP_VM_SSH_KEY }}
           port: 22
           script_stop: true
+          envs: MINSY_DEPLOY_APP_DIR,MINSY_ENV_PROFILE,MINSY_COMPOSE_FILE
           script: |
             set -eu
             if (set -o pipefail) >/dev/null 2>&1; then
               set -o pipefail
             fi
             export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-            APP_DIR="/home/yifan/minsy_mvp_backend_v2"
+            APP_DIR="${MINSY_DEPLOY_APP_DIR:-/home/yifan/minsy_mvp_backend_v2}"
+            COMPOSE_FILE="${MINSY_COMPOSE_FILE:-compose.dev.yml}"
             cd "$APP_DIR"
+
+            if [ ! -f "$COMPOSE_FILE" ]; then
+              echo "ERROR: compose file not found: $COMPOSE_FILE" >&2
+              exit 1
+            fi
+
+            COMPOSE_CMD="docker compose -f $COMPOSE_FILE"
+
+            # Match backend runtime env loading order (base + service overlays).
+            MINSY_ENV_PROFILE="${MINSY_ENV_PROFILE:-dev}"
+            case "$MINSY_ENV_PROFILE" in
+              dev|prod) ;;
+              *)
+                echo "ERROR: MINSY_ENV_PROFILE must be dev or prod (got: $MINSY_ENV_PROFILE)" >&2
+                exit 1
+                ;;
+            esac
+
+            if [ ! -f "env/.env.${MINSY_ENV_PROFILE}" ]; then
+              echo "ERROR: missing required profile file env/.env.${MINSY_ENV_PROFILE}" >&2
+              exit 1
+            fi
+
+            ENV_BASE_LAYERS="
+            env/.env.secrets
+            env/.env.common
+            env/.env.${MINSY_ENV_PROFILE}
+            "
+
+            read_env_value() {
+              _key="$1"
+              _default="${2:-}"
+              _service="${3:-}"
+              _value=""
+              _layers="$ENV_BASE_LAYERS"
+
+              if [ -n "$_service" ]; then
+                _layers="${_layers}
+            env/.env.${MINSY_ENV_PROFILE}.${_service}
+            "
+              fi
+
+              for _env_file in $_layers; do
+                [ -f "$_env_file" ] || continue
+                _line="$(grep -E "^[[:space:]]*${_key}=" "$_env_file" | tail -n1 || true)"
+                [ -n "$_line" ] || continue
+                _value="${_line#*=}"
+              done
+
+              if [ -z "$_value" ]; then
+                _value="$_default"
+              fi
+              printf '%s' "$_value"
+            }
 
             # ── Pre-deploy backup ────────────────────────────────
             echo "=== Pre-deploy backup ==="
             BACKUP_DIR="backups/postgres"
             EXPORT_DIR="exports"
             STAMP=$(date -u +"%Y%m%d_%H%M%S")
-            DB_NAME="$(grep -E '^POSTGRES_DB=' .env | tail -n1 | cut -d= -f2- || true)"
-            DB_USER="$(grep -E '^POSTGRES_USER=' .env | tail -n1 | cut -d= -f2- || true)"
-            DB_HOST="$(grep -E '^POSTGRES_HOST=' .env | tail -n1 | cut -d= -f2- || true)"
-            DB_PORT="$(grep -E '^POSTGRES_PORT=' .env | tail -n1 | cut -d= -f2- || true)"
-            DB_PASS="$(grep -E '^POSTGRES_PASSWORD=' .env | tail -n1 | cut -d= -f2- || true)"
-            DB_NAME="${DB_NAME:-minsy_pgsql}"
-            DB_USER="${DB_USER:-postgres}"
-            DB_HOST="${DB_HOST:-localhost}"
-            DB_PORT="${DB_PORT:-5432}"
-            DB_PASS="${DB_PASS:-}"
+            DB_NAME="$(read_env_value POSTGRES_DB minsy_pgsql api)"
+            DB_USER="$(read_env_value POSTGRES_USER postgres api)"
+            DB_PASS="$(read_env_value POSTGRES_PASSWORD '' api)"
 
             mkdir -p "$BACKUP_DIR" "$EXPORT_DIR"
 
             BACKUP_FILE="$BACKUP_DIR/${DB_NAME}_predeploy_${STAMP}.dump"
-            PGPASSWORD="$DB_PASS" pg_dump \
-              --format=custom --clean --if-exists --no-owner --no-privileges \
-              --host "$DB_HOST" --port "$DB_PORT" \
-              --username "$DB_USER" --dbname "$DB_NAME" \
-              --file "$BACKUP_FILE" \
-              && echo "DB backup saved: $BACKUP_FILE ($(stat -c%s "$BACKUP_FILE") bytes)" \
-              || echo "WARNING: pg_dump failed, continuing deploy"
+            if $COMPOSE_CMD ps -q postgres >/dev/null 2>&1; then
+              $COMPOSE_CMD exec -T postgres sh -lc \
+                "PGPASSWORD='$DB_PASS' pg_dump --format=custom --clean --if-exists --no-owner --no-privileges --username '$DB_USER' --dbname '$DB_NAME'" \
+                > "$BACKUP_FILE" \
+                && echo "DB backup saved: $BACKUP_FILE ($(stat -c%s "$BACKUP_FILE") bytes)" \
+                || echo "WARNING: pg_dump failed, continuing deploy"
 
-            PGPASSWORD="$DB_PASS" psql \
-              -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
-              -t -A -c "SELECT email FROM users ORDER BY email" \
-              > "$EXPORT_DIR/user_emails_predeploy_${STAMP}.csv" 2>/dev/null \
-              && echo "User emails exported." \
-              || echo "WARNING: email export failed, continuing deploy"
+              $COMPOSE_CMD exec -T postgres sh -lc \
+                "PGPASSWORD='$DB_PASS' psql -U '$DB_USER' -d '$DB_NAME' -t -A -c \"SELECT email FROM users ORDER BY email\"" \
+                > "$EXPORT_DIR/user_emails_predeploy_${STAMP}.csv" 2>/dev/null \
+                && echo "User emails exported." \
+                || echo "WARNING: email export failed, continuing deploy"
+            else
+              echo "WARNING: postgres service is not running; skip pre-deploy DB backup/export."
+            fi
 
             # Keep only the latest 14 pre-deploy backups
             ls -1t "$BACKUP_DIR"/*_predeploy_*.dump 2>/dev/null | tail -n +15 | xargs -r rm -f || true
@@ -72,22 +154,9 @@ jobs:
             echo "=== Backup complete ==="
 
             # ── Deploy ───────────────────────────────────────────
-            # 备份 .env（不在 git 中管理，reset 后还原）
-            ENV_BAK=".env.bak.${STAMP}"
-            cp .env "$ENV_BAK"
-
-            # 强制与 main 对齐
             git fetch --prune origin main
             git reset --hard origin/main
 
-            # 还原 .env
-            cp "$ENV_BAK" .env
-            rm -f "$ENV_BAK"
-
-            # 使用 uv 同步依赖
-            uv sync --frozen
-
-            # 同步 Caddyfile 并 reload（仅在变化时，先 validate）
             if ! sudo cmp -s /etc/caddy/Caddyfile Caddyfile; then
               sudo install -m 644 Caddyfile /etc/caddy/Caddyfile
               sudo caddy validate --config /etc/caddy/Caddyfile
@@ -95,34 +164,24 @@ jobs:
               echo "Caddyfile updated and Caddy reloaded."
             fi
 
-            # 若 unit 发生变化，确保 systemd 识别
-            sudo systemctl daemon-reload
+            # Compose-based deploy (single orchestration entrypoint).
+            $COMPOSE_CMD up -d --build --remove-orphans
 
-            # 重启应用服务（MCP 拆分后逐个服务）
-            SERVICES="minsy-fastapi minsy-mcp-strategy minsy-mcp-backtest minsy-mcp-market minsy-mcp-stress minsy-mcp-trading minsy-celery minsy-celery-beat"
-
-            FLOWER_ENABLED_RAW="$(grep -E '^FLOWER_ENABLED=' .env | tail -n1 | cut -d= -f2- || true)"
-            FLOWER_ENABLED_NORM="$(echo "${FLOWER_ENABLED_RAW:-false}" | tr '[:upper:]' '[:lower:]' | xargs)"
-            if [ "$FLOWER_ENABLED_NORM" = "1" ] || [ "$FLOWER_ENABLED_NORM" = "true" ] || [ "$FLOWER_ENABLED_NORM" = "yes" ] || [ "$FLOWER_ENABLED_NORM" = "on" ]; then
-              SERVICES="$SERVICES minsy-flower"
-            fi
-
-            for svc in $SERVICES; do
-              sudo systemctl restart "$svc"
-            done
-
-            # systemd active 检查
-            for svc in $SERVICES; do
-              sudo systemctl is-active --quiet "$svc"
+            REQUIRED_SERVICES="postgres redis mcp api worker-cpu worker-io beat"
+            for svc in $REQUIRED_SERVICES; do
+              if ! $COMPOSE_CMD ps --status running --services | grep -Fxq "$svc"; then
+                echo "ERROR: compose service is not running: $svc" >&2
+                $COMPOSE_CMD ps
+                exit 1
+              fi
             done
 
             dump_service_diagnostics() {
-              echo "=== Service diagnostics ==="
-              for svc in $SERVICES; do
-                echo "--- systemctl status: ${svc} ---"
-                sudo systemctl --no-pager -l status "$svc" || true
-                echo "--- journalctl tail: ${svc} ---"
-                sudo journalctl -u "$svc" -n 80 --no-pager || true
+              echo "=== Compose diagnostics ==="
+              $COMPOSE_CMD ps || true
+              for svc in $REQUIRED_SERVICES; do
+                echo "--- compose logs: ${svc} ---"
+                $COMPOSE_CMD logs --no-color --tail=120 "$svc" || true
               done
             }
 
@@ -141,32 +200,32 @@ jobs:
               return 1
             }
 
-            wait_mcp_port() {
-              _port="$1"
+            wait_mcp_domain() {
+              _domain="$1"
               _attempt=1
               _max_attempts=30
               while [ "$_attempt" -le "$_max_attempts" ]; do
-                _code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${_port}/mcp" || true)"
+                _code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8110/${_domain}/mcp" || true)"
                 if [ "$_code" = "200" ] || [ "$_code" = "406" ]; then
-                  echo "MCP port ${_port} health check passed (${_code})."
+                  echo "MCP domain ${_domain} health check passed (${_code})."
                   return 0
                 fi
                 sleep 2
                 _attempt=$((_attempt + 1))
               done
-              echo "MCP port ${_port} did not become ready in time (last code: ${_code})."
+              echo "MCP domain ${_domain} did not become ready in time (last code: ${_code})."
               return 1
             }
 
-            # 进程健康检查（带重试，避免刚重启时的短暂不可用）
             if ! wait_fastapi_health; then
               dump_service_diagnostics
               exit 1
             fi
-            if ! wait_mcp_port 8111; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_port 8112; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_port 8113; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_port 8114; then dump_service_diagnostics; exit 1; fi
-            if ! wait_mcp_port 8115; then dump_service_diagnostics; exit 1; fi
+
+            if ! wait_mcp_domain strategy; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_domain backtest; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_domain market; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_domain stress; then dump_service_diagnostics; exit 1; fi
+            if ! wait_mcp_domain trading; then dump_service_diagnostics; exit 1; fi
 
             echo "Deploy success."

@@ -54,5 +54,5 @@ select = ["E", "F", "I", "N", "W", "UP"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["test"]
 asyncio_mode = "auto"

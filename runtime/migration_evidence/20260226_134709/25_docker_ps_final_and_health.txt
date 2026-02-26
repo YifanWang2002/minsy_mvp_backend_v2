@@ -1,0 +1,13 @@
+== docker ps final ==
+UTC 2026-02-26 05:52:55
+NAMES                  IMAGE                STATUS                    PORTS
+minsy-beat-dev         minsy-backend:dev    Up Less than a second     8000/tcp
+minsy-worker-io-dev    minsy-backend:dev    Up Less than a second     8000/tcp
+minsy-worker-cpu-dev   minsy-backend:dev    Up Less than a second     8000/tcp
+minsy-api-dev          minsy-backend:dev    Up 10 seconds (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+minsy-mcp-dev          minsy-backend:dev    Up 21 seconds (healthy)   0.0.0.0:8110->8110/tcp, [::]:8110->8110/tcp
+minsy-postgres-dev     postgres:16-alpine   Up 9 hours (healthy)      0.0.0.0:5433->5432/tcp, [::]:5433->5432/tcp
+minsy-redis-dev        redis:7-alpine       Up 9 hours (healthy)      0.0.0.0:6380->6379/tcp, [::]:6380->6379/tcp
+postgres               postgres:16          Up 3 days                 0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+redis                  redis:8              Up 3 days                 0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp
+API_HEALTH_OK=1

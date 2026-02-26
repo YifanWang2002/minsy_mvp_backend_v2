@@ -1,0 +1,290 @@
+# Main 分支测试功能清单
+
+来源: `/Users/yifanwang/minsy_mvp_remastered/.codex_tmp/backend-main/tests`
+
+- 历史测试文件总数: 130
+- 历史测试用例总数: 311
+
+## 按大类统计
+- test_agents: 文件 7 / 用例 27
+- test_api: 文件 45 / 用例 113
+- test_engine: 文件 37 / 用例 96
+- test_infra: 文件 22 / 用例 66
+- test_mcp: 文件 9 / 用例 9
+- test_models: 文件 9 / 用例 0
+- test_services: 文件 1 / 用例 0
+
+## test_agents
+- 文件: `test_agents/test_genui_registry.py`
+  - 覆盖用例: test_unknown_genui_type_can_passthrough,test_registered_genui_normalizer_is_used test_backtest_charts_payload_is_normalized,test_choice_prompt_payload_with_empty_options_is_preserved_for_handler_fill
+- 文件: `test_agents/test_orchestrator_runtime_policy.py`
+  - 覆盖用例: test_redact_stream_request_kwargs_masks_mcp_context_headers,test_extract_wrapped_payloads_strips_mcp_pseudo_tags
+- 文件: `test_agents/test_phase_handlers.py`
+  - 覆盖用例: test_handler_registry_uses_real_handlers_for_later_phases
+- 文件: `test_agents/test_pre_strategy_dynamic_rules.py`
+  - 覆盖用例: test_market_catalog_filters_benchmark_symbols,test_symbol_conversion_rules_across_markets test_dynamic_state_uses_catalog_and_normalized_values,test_sanitize_profile_infers_market_and_drops_cross_market_instrument test_validate_patch_normalizes_market_alias_and_symbol_case,test_validate_patch_rejects_non_canonical_selected_keys test_infer_instrument_supports_market_data_style_aliases,test_infer_instrument_does_not_false_positive_on_short_alias test_validate_patch_rejects_injection_like_values,test_build_prompt_injects_market_data_tools_when_symbol_is_newly_provided test_dynamic_state_handles_empty_market_catalog
+- 文件: `test_agents/test_session_title_service.py`
+  - 覆盖用例: test_read_session_title_from_metadata_handles_missing_data
+- 文件: `test_agents/test_static_instruction_cache.py`
+  - 覆盖用例: test_kyc_static_instruction_cache_hits_same_key,test_pre_strategy_static_instruction_cache_hits_same_key test_strategy_static_instruction_cache_distinguishes_stage,test_strategy_schema_only_does_not_embed_patch_workflow test_strategy_artifact_ops_includes_backtest_bar_limit_guardrail,test_stress_test_static_instruction_cache_distinguishes_stage test_deployment_static_instruction_cache_distinguishes_language
+- 文件: `test_agents/test_stub_handler_stage_loading.py`
+  - 覆盖用例: test_stub_handler_loads_strategy_stage_markdown
+
+## test_api
+- 文件: `test_api/test_auth_flow_from_script.py`
+  - 覆盖用例: test_auth_flow_script_equivalent
+- 文件: `test_api/test_broker_accounts_credentials.py`
+  - 覆盖用例: test_broker_account_credentials_rotation_and_audit_log,test_rotate_credentials_rejects_invalid_probe_result
+- 文件: `test_api/test_broker_accounts_paper_only.py`
+  - 覆盖用例: test_create_broker_account_rejects_live_mode,test_create_broker_account_validates_by_default test_create_broker_account_validate_false_skips_probe,test_validate_endpoint_updates_status_when_probe_fails
+- 文件: `test_api/test_change_password.py`
+  - 覆盖用例: test_change_password_success_and_new_password_login_works,test_change_password_with_wrong_current_password_returns_401 test_change_password_without_token_returns_401,test_change_password_with_same_password_returns_400
+- 文件: `test_api/test_chat_debug_trace_header.py`
+  - 覆盖用例: test_chat_stream_sets_trace_header_when_enabled
+- 文件: `test_api/test_chat_stream.py`
+  - 覆盖用例: test_openai_stream_emits_text_and_done,test_openai_stream_forwards_openai_events
+- 文件: `test_api/test_chat_stream_transport_resilience.py`
+  - 覆盖用例: test_chat_stream_emits_keepalive_comment_when_upstream_is_temporarily_idle,test_chat_stream_continues_to_persist_assistant_message_after_client_disconnect
+- 文件: `test_api/test_cors_mode.py`
+  - 覆盖用例: test_dev_mode_relaxes_cors,test_prod_mode_uses_configured_cors_origins
+- 文件: `test_api/test_deployment_signal_order_flow.py`
+  - 覆盖用例: test_deployment_signal_to_order_flow,test_process_now_records_event_when_deployment_locked test_process_now_hydrates_market_data_from_provider_when_runtime_cache_empty,test_process_now_fail_fast_when_redis_market_data_unavailable test_noop_cycle_updates_position_mark_price_and_unrealized_pnl
+- 文件: `test_api/test_deployments_lifecycle.py`
+  - 覆盖用例: test_deployments_lifecycle_and_permissions,test_create_deployment_auto_capital_from_probe_metadata
+- 文件: `test_api/test_health.py`
+  - 覆盖用例: test_health_returns_ok_with_db_and_redis_true
+- 文件: `test_api/test_jwt.py`
+  - 覆盖用例: test_token_format_is_jwt_like,test_expired_token_returns_401 test_forged_token_returns_401
+- 文件: `test_api/test_kyc_e2e_verbose.py`
+  - 覆盖用例: test_full_kyc_flow_with_real_openai_verbose
+- 文件: `test_api/test_kyc_flow.py`
+  - 覆盖用例: test_new_thread_creates_kyc_session,test_kyc_flow_completes_and_updates_user_profile test_stream_failure_is_gracefully_closed_with_done_event,test_pre_strategy_phase_uses_pre_strategy_instructions test_new_thread_starts_pre_strategy_when_user_kyc_completed,test_pre_strategy_flow_completes_and_transitions_to_strategy test_pre_strategy_instrument_options_are_filtered_by_target_market,test_pre_strategy_instrument_empty_options_are_backfilled test_pre_strategy_injects_fallback_choice_prompt_when_model_omits_genui,test_pre_strategy_injects_fallback_choice_and_chart_after_instrument_patch_only test_pre_strategy_can_emit_chart_and_choice_in_same_turn,test_transition_emits_phase_change_without_entry_guidance test_runtime_policy_can_replace_tools,test_pre_strategy_normalizes_alias_market_and_symbol_end_to_end test_pre_strategy_drops_cross_market_instrument_from_patch,test_session_artifacts_no_legacy_flat_keys
+- 文件: `test_api/test_kyc_flow_from_script.py`
+  - 覆盖用例: test_kyc_flow_script_equivalent
+- 文件: `test_api/test_login.py`
+  - 覆盖用例: test_login_correct_password_returns_200_and_tokens,test_login_wrong_password_returns_401
+- 文件: `test_api/test_login_response.py`
+  - 覆盖用例: test_login_response_contains_kyc_status
+- 文件: `test_api/test_manual_trade_actions.py`
+  - 覆盖用例: test_manual_trade_actions_execute_through_runtime,test_manual_trade_action_permissions_and_validation
+- 文件: `test_api/test_market_data_endpoints.py`
+  - 覆盖用例: test_market_data_quote_and_bars_endpoints,test_market_data_subscription_endpoints
+- 文件: `test_api/test_mcp_history_persistence.py`
+  - 覆盖用例: test_session_history_persists_mcp_final_results_only,test_session_history_drops_retry_failures_when_later_call_succeeds test_session_history_keeps_non_retryable_validation_failure_even_if_later_success
+- 文件: `test_api/test_me.py`
+  - 覆盖用例: test_me_with_valid_token_returns_user_info,test_me_without_token_returns_401
+- 文件: `test_api/test_notification_preferences.py`
+  - 覆盖用例: test_notification_preferences_get_and_update
+- 文件: `test_api/test_paper_trading_full_pipeline.py`
+  - 覆盖用例: test_paper_trading_full_flow_btc_eth_multi_strategy
+- 文件: `test_api/test_portfolio_endpoints.py`
+  - 覆盖用例: test_portfolio_and_stream_endpoints,test_stream_emits_trade_approval_updates
+- 文件: `test_api/test_pre_strategy_robustness.py`
+  - 覆盖用例: test_invalid_market_patch_is_ignored,test_non_string_patch_values_are_ignored_safely test_legacy_market_id_is_recovered_by_valid_symbol_inference,test_malformed_choice_options_do_not_crash_and_keep_phase test_structurally_valid_wrong_options_fallback_to_market_symbols
+- 文件: `test_api/test_pre_strategy_to_strategy_e2e_live.py`
+  - 覆盖用例: test_full_pre_strategy_to_strategy_flow_no_manual_session_intervention_live,test_saved_strategy_modification_flow_no_manual_refresh_live test_full_mcp_tool_coverage_no_manual_actions_live
+- 文件: `test_api/test_preferences.py`
+  - 覆盖用例: test_get_preferences_returns_defaults_when_not_persisted,test_put_preferences_upserts_and_get_returns_saved_values test_put_preferences_with_invalid_value_returns_422,test_get_preferences_without_token_returns_401
+- 文件: `test_api/test_rate_limit.py`
+  - 覆盖用例: test_rate_limit_hits_429_on_31st_request_and_recovers_after_window
+- 文件: `test_api/test_refresh.py`
+  - 覆盖用例: test_valid_refresh_token_returns_new_pair,test_expired_refresh_token_returns_401
+- 文件: `test_api/test_register.py`
+  - 覆盖用例: test_register_success_returns_201_and_tokens,test_register_duplicate_email_returns_409
+- 文件: `test_api/test_session_titles.py`
+  - 覆盖用例: test_new_thread_and_session_endpoints_expose_session_title_fields,test_done_event_contains_session_title_for_strategy_phase_session
+- 文件: `test_api/test_sessions_archive.py`
+  - 覆盖用例: test_archive_unarchive_and_delete_session
+- 文件: `test_api/test_social_connectors.py`
+  - 覆盖用例: test_telegram_connector_bind_activity_and_disconnect,test_telegram_test_chart_webapp_endpoint test_trade_buttons_follow_user_locale
+- 文件: `test_api/test_startup_shutdown.py`
+  - 覆盖用例: test_app_lifespan_startup_shutdown_no_leak
+- 文件: `test_api/test_status.py`
+  - 覆盖用例: test_status_returns_frontend_contract,test_status_marks_overall_down_when_core_service_down
+- 文件: `test_api/test_status_live_trading_probe.py`
+  - 覆盖用例: test_status_live_trading_probe_healthy,test_status_live_trading_probe_down_by_global_kill_switch test_status_live_trading_probe_down_by_stale_data_and_no_worker,test_status_live_trading_probe_degraded_when_order_execution_simulated
+- 文件: `test_api/test_strategies_list_versions.py`
+  - 覆盖用例: test_list_strategies_returns_current_user_rows_with_latest_backtest,test_strategy_versions_include_version_specific_backtest_summary test_strategy_diff_returns_display_items_with_old_and_new_values,test_strategy_versions_and_diff_are_hidden_from_other_users test_list_strategies_fallbacks_to_latest_job_without_version_snapshot,test_strategy_versions_only_attach_backtest_to_matching_version test_strategy_diff_returns_404_for_missing_revision
+- 文件: `test_api/test_strategy_confirm.py`
+  - 覆盖用例: test_strategy_confirm_persists_and_auto_starts_backtest_turn_in_strategy_phase,test_chat_can_advance_strategy_to_deployment_without_confirm_endpoint test_get_strategy_detail_by_id,test_get_strategy_draft_detail_by_id
+- 文件: `test_api/test_strategy_stream_live.py`
+  - 覆盖用例: test_openai_stream_strategy_phase_uses_real_prompt_and_skills
+- 文件: `test_api/test_stream_empty_output_fallback.py`
+  - 覆盖用例: test_stream_falls_back_to_output_text_done_when_no_delta,test_stream_empty_output_still_emits_non_empty_fallback_text
+- 文件: `test_api/test_stream_error_detail.py`
+  - 覆盖用例: test_done_event_contains_structured_stream_error_detail
+- 文件: `test_api/test_telegram_test_target_endpoint.py`
+  - 覆盖用例: test_telegram_test_target_status_and_send
+- 文件: `test_api/test_telegram_trade_approval_callback.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_api/test_trade_approvals_flow.py`
+  - 覆盖用例: test_process_now_creates_pending_trade_approval,test_api_can_approve_trade_approval_and_enqueue_execution test_api_can_reject_trade_approval
+- 文件: `test_api/test_trading_preferences.py`
+  - 覆盖用例: test_get_and_update_trading_preferences
+
+## test_engine
+- 文件: `test_engine/test_alpaca_account_probe.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_alpaca_market_data_client_symbol_normalization.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_alpaca_order_sync.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_alpaca_quote_endpoint_fallback.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_alpaca_stream_reconnect.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_backtest_analytics.py`
+  - 覆盖用例: test_build_backtest_overview_compacts_performance_series,test_compact_performance_and_analytics_outputs test_equity_curve_supports_sampling_and_downsampling,test_rolling_metrics_handles_non_datetime_returns_index test_rolling_metrics_uses_trade_based_win_rate_pct,test_entry_time_analytics_handles_empty_or_invalid_trades
+- 文件: `test_engine/test_backtest_condition_vectorized.py`
+  - 覆盖用例: test_vectorized_condition_matches_scalar_semantics
+- 文件: `test_engine/test_backtest_engine.py`
+  - 覆盖用例: test_event_driven_engine_opens_and_closes_on_signal,test_stop_loss_has_priority_over_signal_exit test_multi_output_factor_refs_macd_are_resolved,test_single_output_factor_alias_ref_is_materialized_and_tradeable test_engine_skips_entries_when_price_is_non_positive,test_take_profit_triggered_when_target_is_hit test_stop_is_prioritized_when_stop_and_take_hit_in_same_bar,test_bracket_rr_derives_take_from_stop test_bracket_rr_derives_stop_from_take,test_end_of_data_auto_closes_open_position test_slippage_and_commission_are_applied_to_trade_pnl,test_short_position_is_liquidated_and_drawdown_capped_at_100_pct
+- 文件: `test_engine/test_backtest_service.py`
+  - 覆盖用例: test_serialize_backtest_result_applies_result_caps
+- 文件: `test_engine/test_bar_aggregator_boundaries.py`
+  - 覆盖用例: test_aggregator_closes_5m_bucket_on_boundary,test_aggregator_closes_hour_bucket_on_hour_switch test_aggregator_respects_timezone_for_daily_boundary
+- 文件: `test_engine/test_black_swan_scenarios.py`
+  - 覆盖用例: test_list_windows_contains_global_and_market_specific,test_resolve_custom_window_set
+- 文件: `test_engine/test_broker_adapter_contract.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_credentials_cipher.py`
+  - 覆盖用例: test_credential_cipher_round_trip,test_credential_key_fingerprint_is_stable_by_key_id test_credential_key_fingerprint_fallback_without_key_id
+- 文件: `test_engine/test_data_loader.py`
+  - 覆盖用例: test_load_resample_to_15m,test_load_5m_falls_back_to_1m_when_5m_file_missing test_symbols_and_metadata
+- 文件: `test_engine/test_factor_cache_dedup.py`
+  - 覆盖用例: test_factor_cache_hits_for_same_signature_and_bar,test_factor_cache_recomputes_for_new_bar_timestamp
+- 文件: `test_engine/test_feature_indicator_wrapper.py`
+  - 覆盖用例: test_sma_and_macd_can_be_calculated_from_migrated_indicators
+- 文件: `test_engine/test_feature_registry.py`
+  - 覆盖用例: test_indicator_registry_is_backed_by_feature_registry,test_feature_registry_supports_non_indicator_factor_kinds
+- 文件: `test_engine/test_live_dsl_signal_runtime.py`
+  - 覆盖用例: test_live_signal_runtime_generates_open_long,test_live_signal_runtime_generates_close_for_long_position test_live_signal_runtime_returns_noop_on_insufficient_bars
+- 文件: `test_engine/test_local_coverage_detector.py`
+  - 覆盖用例: test_detect_missing_ranges_single_gap,test_detect_missing_ranges_when_local_absent_marks_full_window_missing test_detect_missing_ranges_rejects_unsupported_timeframe
+- 文件: `test_engine/test_market_data_redis_store.py`
+  - 覆盖用例: test_redis_market_data_store_roundtrip_quote_bars_and_checkpoint,test_redis_subscription_store_bidirectional_index test_market_data_runtime_dual_write_keeps_memory_and_redis_consistent,test_market_data_runtime_reads_redis_first_when_enabled
+- 文件: `test_engine/test_market_data_sync_service.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_monte_carlo_statistics.py`
+  - 覆盖用例: test_monte_carlo_reproducible_with_same_seed,test_statistics_helpers_return_expected_shapes
+- 文件: `test_engine/test_optimization_algorithms.py`
+  - 覆盖用例: test_generate_grid_candidates_budget_capped,test_generate_random_candidates_within_bounds test_generate_bayes_like_candidates_returns_budget_size
+- 文件: `test_engine/test_optimization_pareto.py`
+  - 覆盖用例: test_pareto_front_indices_excludes_dominated_points,test_build_metric_points_shapes
+- 文件: `test_engine/test_order_idempotency.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_order_state_machine.py`
+  - 覆盖用例: test_order_state_machine_happy_path_transitions,test_order_state_machine_rejects_invalid_transition test_order_state_machine_normalizes_pending_and_expired_status
+- 文件: `test_engine/test_param_mutation.py`
+  - 覆盖用例: test_list_tunable_params_extracts_numeric_fields,test_apply_param_values_supports_dot_and_json_path_keys
+- 文件: `test_engine/test_param_sensitivity_scan.py`
+  - 覆盖用例: test_scan_param_sensitivity_outputs_variants_and_rank
+- 文件: `test_engine/test_performance_quantstats.py`
+  - 覆盖用例: test_quantstats_wrapper_returns_stable_serializable_shape,test_backtest_engine_result_contains_performance_block test_quantstats_metrics_change_with_timestamp_frequency,test_quantstats_series_is_capped_when_max_series_points_is_set
+- 文件: `test_engine/test_pnl_engine.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_position_reconcile.py`
+  - 覆盖用例: test_reconcile_positions_detects_create_update_remove
+- 文件: `test_engine/test_ring_buffer.py`
+  - 覆盖用例: test_ring_buffer_append_and_latest_window,test_ring_buffer_overwrite_when_capacity_exceeded test_ring_buffer_zero_or_negative_latest
+- 文件: `test_engine/test_risk_gate.py`
+  - 覆盖用例: test_risk_gate_rejects_when_symbol_exposure_exceeded,test_risk_gate_rejects_when_daily_loss_exceeded test_risk_gate_accepts_valid_order
+- 文件: `test_engine/test_strategy_dsl_pipeline.py`
+  - 覆盖用例: test_example_strategy_passes_schema_and_semantic_validation,test_schema_error_for_missing_required_field test_schema_error_for_additional_property,test_schema_error_for_type_mismatch test_schema_error_for_unsupported_timeframe_value,test_schema_error_for_missing_trade_side test_schema_error_for_invalid_not_structure,test_semantic_error_for_unknown_factor_ref test_semantic_error_for_unsupported_factor_type,test_semantic_error_for_invalid_factor_param_value test_semantic_error_for_unsupported_factor_param,test_semantic_error_for_invalid_output_name test_semantic_error_for_multi_output_ref_without_dot_notation,test_semantic_error_for_known_multi_output_ref_without_dot_even_with_single_alias test_semantic_allows_single_output_factor_alias_ref,test_semantic_error_for_factor_id_mismatch test_semantic_error_for_temporal_condition,test_semantic_error_for_invalid_atr_ref test_semantic_error_for_future_look_offset,test_semantic_error_for_unsupported_dsl_major_version test_semantic_direct_check_for_factor_id_format_error,test_semantic_direct_check_for_bracket_rr_conflict test_load_strategy_payload_from_path_round_trip
+- 文件: `test_engine/test_strategy_storage.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_stress_job_service.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_engine/test_timeframe_scheduler.py`
+  - 覆盖用例: test_timeframe_to_seconds_parses_supported_units,test_timeframe_to_seconds_falls_back_for_invalid_values test_should_trigger_cycle_advances_by_bucket
+
+## test_infra
+- 文件: `test_infra/test_backtest_tasks.py`
+  - 覆盖用例: test_enqueue_backtest_job_submits_celery_task,test_execute_backtest_job_task_runs_service_with_uuid test_execute_backtest_job_task_rejects_invalid_uuid,test_execute_backtest_job_task_resets_db_resources_per_task test_backtest_task_is_configured_to_avoid_oom_redelivery_loops
+- 文件: `test_infra/test_broker_retry_and_circuit_breaker.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_infra/test_celery_limits.py`
+  - 覆盖用例: test_celery_worker_time_and_memory_limits_match_settings
+- 文件: `test_infra/test_celery_paper_trading_queue.py`
+  - 覆盖用例: test_celery_includes_paper_trading_tasks_module,test_celery_has_paper_trading_queue_and_route test_celery_worker_has_time_and_memory_limits,test_celery_backtest_stale_cleanup_schedule_matches_settings test_celery_paper_scheduler_tick_schedule_matches_settings,test_celery_market_data_refresh_schedule_matches_settings
+- 文件: `test_infra/test_celery_trade_approval_queue.py`
+  - 覆盖用例: test_celery_includes_trade_approval_tasks_module,test_celery_has_trade_approval_queue_and_routes test_celery_trade_approval_expire_schedule_matches_settings
+- 文件: `test_infra/test_chat_debug_trace.py`
+  - 覆盖用例: test_trace_default_disabled_without_header,test_trace_header_can_enable_when_default_disabled test_trace_header_can_disable_when_default_enabled,test_invalid_trace_id_falls_back_to_generated_value test_set_and_reset_trace_context
+- 文件: `test_infra/test_config.py`
+  - 覆盖用例: test_settings_reads_dotenv_file,test_settings_missing_required_env_raises_validation_error test_domain_mcp_server_urls_use_env_file_values_over_process_env,test_domain_mcp_server_url_uses_prod_slot_in_prod_env test_domain_mcp_server_url_is_controlled_by_app_env,test_sentry_http_status_capture_settings_parse_and_validate test_sentry_http_status_capture_invalid_range_raises_validation_error,test_celery_worker_max_memory_per_child_reads_from_env test_celery_worker_max_memory_per_child_invalid_raises_validation_error,test_backtest_limits_read_from_env test_backtest_limits_invalid_values_raise_validation_error,test_domain_mcp_server_urls_use_domain_defaults test_market_data_redis_feature_switches_read_from_env,test_market_data_effective_defaults_follow_runtime_env test_domain_mcp_server_urls_prefer_domain_specific_values,test_domain_mcp_server_urls_switch_by_app_env test_runtime_env_aliases_and_dev_mode_flag,test_effective_mcp_context_secret_falls_back_to_secret_key test_effective_mcp_context_secret_prefers_override,test_get_settings_uses_minsy_env_file
+- 文件: `test_infra/test_db_connection.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_infra/test_deployment_runtime_lock.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_infra/test_maintenance_tasks.py`
+  - 覆盖用例: test_prune_old_backups_keeps_latest_by_filename,test_export_user_emails_csv_keeps_history_and_deduplicates test_backup_postgres_full_task_creates_backup_and_prunes_old,test_fail_stale_backtest_jobs_marks_running_jobs_failed test_fail_stale_backtest_jobs_task_wraps_async_cleanup
+- 文件: `test_infra/test_market_data_refresh_dedupe.py`
+  - 覆盖用例: test_refresh_active_subscriptions_task_dedupes_same_symbol_within_window
+- 文件: `test_infra/test_market_data_tasks_redis_dual_write.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_infra/test_mcp_context_auth.py`
+  - 覆盖用例: test_create_and_decode_mcp_context_token_roundtrip,test_decode_mcp_context_token_rejects_invalid_payload test_extract_mcp_context_token_from_headers_case_insensitive
+- 文件: `test_infra/test_openai_cost_tracker.py`
+  - 覆盖用例: test_normalize_openai_usage_accepts_prompt_completion_shape,test_build_turn_usage_snapshot_includes_model_and_cost test_merge_session_openai_cost_metadata_accumulates_totals_and_by_model
+- 文件: `test_infra/test_openai_stream_service_errors.py`
+  - 覆盖用例: test_mcp_list_tools_diagnostics_expose_root_cause,test_non_mcp_424_is_not_classified_as_list_tools_error test_network_error_is_classified_as_network
+- 文件: `test_infra/test_redis_connection.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_infra/test_runtime_kill_switch.py`
+  - 覆盖用例: test_runtime_kill_switch_scopes,test_process_now_honors_global_kill_switch
+- 文件: `test_infra/test_runtime_state_store.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_infra/test_sentry_http_status_middleware.py`
+  - 覆盖用例: test_should_capture_http_status_event_respects_bounds_and_exclusions,test_middleware_captures_403_with_request_context test_middleware_does_not_capture_200,test_middleware_captures_404_for_missing_route
+- 文件: `test_infra/test_sentry_integration_bootstrap.py`
+  - 覆盖用例: test_fastapi_create_app_bootstraps_sentry,test_celery_module_bootstraps_sentry_on_import test_mcp_main_bootstraps_sentry
+- 文件: `test_infra/test_sentry_setup.py`
+  - 覆盖用例: test_sentry_before_send_redacts_sensitive_headers_and_fields,test_sentry_before_send_does_not_mutate_original_event
+- 文件: `test_infra/test_signal_store_externalization.py`
+  - 覆盖用例: (无 def test_)
+
+## test_mcp
+- 文件: `test_mcp/test_backtest_tools.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_mcp/test_dev_proxy.py`
+  - 覆盖用例: test_resolve_proxy_target_strategy_path_strips_prefix,test_resolve_proxy_target_exact_prefix_maps_to_root test_resolve_proxy_target_honors_env_override,test_resolve_proxy_target_unknown_path_returns_none test_build_upstream_url_joins_query,test_proxy_request_returns_502_when_upstream_unreachable
+- 文件: `test_mcp/test_market_data_sync_tools.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_mcp/test_market_data_tools.py`
+  - 覆盖用例: test_yf_cache_guard_clears_cache_when_near_limit,test_yf_cache_guard_resets_counter_on_new_day
+- 文件: `test_mcp/test_market_data_tools_live.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_mcp/test_server_domains.py`
+  - 覆盖用例: test_registered_tool_names_and_domain_validation
+- 文件: `test_mcp/test_strategy_tools.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_mcp/test_stress_tools.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_mcp/test_trading_tools.py`
+  - 覆盖用例: (无 def test_)
+
+## test_models
+- 文件: `test_models/test_auth_service.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_constraints.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_jsonb_fields.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_models.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_relationships.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_seed_data_from_script.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_trade_approval_request_model.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_trading_models.py`
+  - 覆盖用例: (无 def test_)
+- 文件: `test_models/test_user_settings.py`
+  - 覆盖用例: (无 def test_)
+
+## test_services
+- 文件: `test_services/test_notification_outbox_service.py`
+  - 覆盖用例: (无 def test_)
+

@@ -23,40 +23,43 @@ api.minsyai.com {
 mcp.minsyai.com {
 	@strategy path /strategy/*
 	handle @strategy {
-		uri strip_prefix /strategy
-		reverse_proxy 127.0.0.1:8111 {
+		reverse_proxy 127.0.0.1:8110 {
 			flush_interval -1
 		}
 	}
 
 	@backtest path /backtest/*
 	handle @backtest {
-		uri strip_prefix /backtest
-		reverse_proxy 127.0.0.1:8112 {
+		reverse_proxy 127.0.0.1:8110 {
 			flush_interval -1
 		}
 	}
 
 	@market path /market/*
 	handle @market {
-		uri strip_prefix /market
-		reverse_proxy 127.0.0.1:8113 {
+		reverse_proxy 127.0.0.1:8110 {
 			flush_interval -1
 		}
 	}
 
 	@stress path /stress/*
 	handle @stress {
-		uri strip_prefix /stress
-		reverse_proxy 127.0.0.1:8114 {
+		reverse_proxy 127.0.0.1:8110 {
 			flush_interval -1
 		}
 	}
 
 	@trading path /trading/*
 	handle @trading {
-		uri strip_prefix /trading
-		reverse_proxy 127.0.0.1:8115 {
+		reverse_proxy 127.0.0.1:8110 {
+			flush_interval -1
+		}
+	}
+
+	# Legacy all-in-one route for backward compatibility.
+	@legacy path /mcp*
+	handle @legacy {
+		reverse_proxy 127.0.0.1:8110 {
 			flush_interval -1
 		}
 	}

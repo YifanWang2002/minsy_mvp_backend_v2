@@ -1,0 +1,1 @@
+"""Beat scheduler app entrypoint."""

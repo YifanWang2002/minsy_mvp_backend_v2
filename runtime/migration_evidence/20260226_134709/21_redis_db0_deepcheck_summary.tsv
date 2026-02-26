@@ -1,0 +1,7 @@
+metric	value
+source_db0_keys	5276
+dest_db0_keys	5571
+missing_in_dest	0
+value_mismatch	325
+extra_in_dest	295
+dbsize_mismatch_dbs_0_15	3

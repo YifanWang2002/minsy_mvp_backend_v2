@@ -1,0 +1,3 @@
+db	source_keys	dest_keys	missing_in_dest	value_mismatch	extra_in_dest
+0	5276	5874	0	0	598
+1	2	5	0	0	3
