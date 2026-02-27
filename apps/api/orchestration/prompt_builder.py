@@ -19,6 +19,8 @@ class PromptBuilderMixin:
         phase_turn_count: int,
         handler: Any,
         turn_request_id: str,
+        turn_id: str,
+        user_message_id: UUID,
     ) -> _TurnPreparation:
         artifacts = copy.deepcopy(session.artifacts or {})
         artifacts = self._ensure_phase_keyed(artifacts)
@@ -64,6 +66,8 @@ class PromptBuilderMixin:
             request_id=turn_request_id,
         )
         return _TurnPreparation(
+            turn_id=turn_id,
+            user_message_id=user_message_id,
             phase_before=phase_before,
             phase_turn_count=phase_turn_count,
             prompt_user_message=prompt_user_message,

@@ -18,6 +18,7 @@ from packages.infra.db.models.user import User
 from packages.domain.session.services.session_title_service import read_session_title_from_metadata
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
+_STREAM_RECOVERY_META_KEY = "stream_recovery"
 
 
 @router.get("", response_model=list[SessionListItem])
@@ -68,7 +69,12 @@ async def get_session(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
 
     ordered_messages = sorted(session.messages, key=lambda item: item.created_at)
-    title_payload = read_session_title_from_metadata(dict(session.metadata_ or {}))
+    metadata = dict(session.metadata_ or {})
+    title_payload = read_session_title_from_metadata(metadata)
+    raw_stream_recovery = metadata.get(_STREAM_RECOVERY_META_KEY)
+    stream_recovery = (
+        dict(raw_stream_recovery) if isinstance(raw_stream_recovery, dict) else None
+    )
     return SessionDetailResponse(
         session_id=session.id,
         current_phase=session.current_phase,
@@ -77,7 +83,8 @@ async def get_session(
         session_title=title_payload.title,
         session_title_record=title_payload.record,
         artifacts=dict(session.artifacts or {}),
-        metadata=dict(session.metadata_ or {}),
+        metadata=metadata,
+        stream_recovery=stream_recovery,
         last_activity_at=session.last_activity_at,
         messages=[
             MessageItem(

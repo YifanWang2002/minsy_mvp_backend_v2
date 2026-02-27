@@ -169,6 +169,8 @@ class PostProcessorMixin:
             kyc_status=kyc_status,
             transitioned=transitioned,
             stop_criteria_delta=stop_criteria_delta,
+            transition_from_phase=preparation.phase_before if transitioned else None,
+            transition_to_phase=session.current_phase if transitioned else None,
         )
 
     def _resolve_assistant_text_fallbacks(
@@ -203,6 +205,7 @@ class PostProcessorMixin:
         preparation: _TurnPreparation,
         stream_state: _TurnStreamState,
         post_process_result: _TurnPostProcessResult,
+        turn_id: str,
     ) -> AsyncIterator[str]:
         turn_usage = build_turn_usage_snapshot(
             raw_usage=stream_state.completed_usage,
@@ -222,16 +225,23 @@ class PostProcessorMixin:
             session.metadata_ = next_metadata
             session_openai_cost_totals = totals
 
-        self.db.add(
-            Message(
-                session_id=session.id,
-                role="assistant",
-                content=post_process_result.assistant_text,
-                phase=preparation.phase_before,
-                response_id=session.previous_response_id,
-                tool_calls=post_process_result.persisted_tool_calls or None,
-                token_usage=usage_payload,
-            )
+        assistant_message = Message(
+            session_id=session.id,
+            role="assistant",
+            content=post_process_result.assistant_text,
+            phase=preparation.phase_before,
+            response_id=session.previous_response_id,
+            tool_calls=post_process_result.persisted_tool_calls or None,
+            token_usage=usage_payload,
+        )
+        self.db.add(assistant_message)
+        await self.db.flush()
+        self._update_stream_recovery(
+            session=session,
+            turn_id=turn_id,
+            state=_STREAM_RECOVERY_STATE_COMPLETED,
+            assistant_message_id=str(assistant_message.id),
+            error=stream_state.stream_error_message,
         )
         session.last_activity_at = datetime.now(UTC)
         title_payload = await refresh_session_title(db=self.db, session=session)
@@ -296,6 +306,8 @@ class PostProcessorMixin:
                 "session_openai_cost": session_openai_cost_totals,
                 "stream_error": stream_state.stream_error_message,
                 "stream_error_detail": stream_state.stream_error_detail,
+                "turn_id": turn_id,
+                "assistant_message_id": str(assistant_message.id),
             },
         )
 

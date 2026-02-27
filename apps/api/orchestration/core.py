@@ -13,9 +13,64 @@ from .strategy_context import StrategyContextMixin
 from .stream_handler import StreamHandlerMixin
 
 
+class _KycHandlerRef:
+    """Lazy reference to KYC handler to avoid circular imports."""
+
+    @staticmethod
+    def is_profile_complete(profile: UserProfile | None) -> bool:
+        from apps.api.agents.handlers.kyc_handler import KYCHandler
+
+        return KYCHandler().is_profile_complete(profile)
+
+    @staticmethod
+    def build_profile_from_user_profile(profile: UserProfile) -> dict[str, Any]:
+        from apps.api.agents.handlers.kyc_handler import KYCHandler
+
+        return KYCHandler().build_profile_from_user_profile(profile)
+
+    @staticmethod
+    def _compute_missing(profile: dict[str, Any]) -> list[str]:
+        from apps.api.agents.handlers.kyc_handler import KYCHandler
+
+        return KYCHandler()._compute_missing(profile)
+
+
+_kyc_handler = _KycHandlerRef()
+
+
 class OrchestratorCoreMixin:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
+
+    def _compute_initial_phase(self, profile: UserProfile | None) -> str:
+        """Determine which phase to start a new session in.
+
+        KYC only needs to be done once per user; completed-KYC users
+        always start from PRE_STRATEGY.
+        """
+        if _kyc_handler.is_profile_complete(profile):
+            return Phase.PRE_STRATEGY.value
+        return Phase.KYC.value
+
+    @staticmethod
+    def _resolve_handler_from_module(phase: str) -> Any:
+        # Keep package-level monkeypatch hooks working after package split.
+        from apps.api import orchestration as orchestrator_mod
+
+        return orchestrator_mod.get_handler(phase)
+
+    @staticmethod
+    def _ensure_phase_keyed(artifacts: dict[str, Any]) -> dict[str, Any]:
+        """Ensure session artifacts are phase-keyed and initialized."""
+        normalized = dict(artifacts)
+        for phase in WORKFLOW_PHASES:
+            phase_block = normalized.get(phase)
+            if isinstance(phase_block, dict) and "profile" in phase_block:
+                continue
+            handler = OrchestratorCoreMixin._resolve_handler_from_module(phase)
+            if handler:
+                normalized[phase] = handler.init_artifacts()
+        return normalized
 
     async def create_session(
         self,
@@ -77,7 +132,8 @@ class OrchestratorCoreMixin:
         )
         await self._enforce_strategy_only_boundary(session=session)
         phase_before = session.current_phase
-        turn_request_id = f"turn_{uuid4().hex}"
+        turn_id = self._resolve_turn_id(payload.client_turn_id)
+        turn_request_id = turn_id
         user_runtime_policy = self._build_runtime_policy(payload)
         carryover_block = self._consume_phase_carryover_memory(
             session=session, phase=phase_before
@@ -89,18 +145,26 @@ class OrchestratorCoreMixin:
         )
 
         # -- persist user message ----------------------------------------
-        self.db.add(
-            Message(
-                session_id=session.id,
-                role="user",
-                content=payload.message,
-                phase=phase_before,
-            )
+        user_message = Message(
+            session_id=session.id,
+            role="user",
+            content=payload.message,
+            phase=phase_before,
+        )
+        self.db.add(user_message)
+        await self.db.flush()
+        self._update_stream_recovery(
+            session=session,
+            turn_id=turn_id,
+            state=_STREAM_RECOVERY_STATE_STREAMING,
+            user_message_id=str(user_message.id),
         )
         phase_turn_count = self._increment_phase_turn_count(
             session=session,
             phase=phase_before,
         )
+        await self.db.commit()
+        await self.db.refresh(session)
 
         yield self._sse(
             "stream",
@@ -108,6 +172,7 @@ class OrchestratorCoreMixin:
                 "type": "stream_start",
                 "session_id": str(session.id),
                 "phase": phase_before,
+                "turn_id": turn_id,
             },
         )
 
@@ -116,13 +181,19 @@ class OrchestratorCoreMixin:
         if handler is None:
             # Terminal phases (completed, error) or unknown
             assistant_text = f"{phase_before} phase has no active handler."
-            self.db.add(
-                Message(
-                    session_id=session.id,
-                    role="assistant",
-                    content=assistant_text,
-                    phase=session.current_phase,
-                )
+            assistant_message = Message(
+                session_id=session.id,
+                role="assistant",
+                content=assistant_text,
+                phase=session.current_phase,
+            )
+            self.db.add(assistant_message)
+            await self.db.flush()
+            self._update_stream_recovery(
+                session=session,
+                turn_id=turn_id,
+                state=_STREAM_RECOVERY_STATE_COMPLETED,
+                assistant_message_id=str(assistant_message.id),
             )
             session.last_activity_at = datetime.now(UTC)
             title_payload = await refresh_session_title(db=self.db, session=session)
@@ -141,6 +212,8 @@ class OrchestratorCoreMixin:
                     "missing_fields": [],
                     "session_title": title_payload.title,
                     "session_title_record": title_payload.record,
+                    "turn_id": turn_id,
+                    "assistant_message_id": str(assistant_message.id),
                 },
             )
             log_agent(
@@ -160,33 +233,60 @@ class OrchestratorCoreMixin:
             phase_turn_count=phase_turn_count,
             handler=handler,
             turn_request_id=turn_request_id,
+            turn_id=turn_id,
+            user_message_id=user_message.id,
         )
         stream_state = _TurnStreamState()
-        async for stream_event in self._stream_openai_and_collect(
-            session=session,
-            streamer=streamer,
-            preparation=preparation,
-            stream_state=stream_state,
-        ):
-            yield stream_event
+        try:
+            async for stream_event in self._stream_openai_and_collect(
+                session=session,
+                streamer=streamer,
+                preparation=preparation,
+                stream_state=stream_state,
+            ):
+                yield stream_event
 
-        post_process_result = await self._post_process_turn(
-            session=session,
-            user=user,
-            payload=payload,
-            language=language,
-            preparation=preparation,
-            stream_state=stream_state,
-        )
-        async for tail_event in self._emit_tail_events_and_persist(
-            session=session,
-            preparation=preparation,
-            stream_state=stream_state,
-            post_process_result=post_process_result,
-        ):
-            yield tail_event
+            post_process_result = await self._post_process_turn(
+                session=session,
+                user=user,
+                payload=payload,
+                language=language,
+                preparation=preparation,
+                stream_state=stream_state,
+            )
+            async for tail_event in self._emit_tail_events_and_persist(
+                session=session,
+                preparation=preparation,
+                stream_state=stream_state,
+                post_process_result=post_process_result,
+                turn_id=turn_id,
+            ):
+                yield tail_event
 
-        log_agent("orchestrator", f"session={session.id} phase={session.current_phase}")
+            # Auto follow-up for strategy -> deployment transition to avoid
+            # requiring user to send "yes deploy" twice.
+            if (
+                post_process_result.transition_from_phase == Phase.STRATEGY.value
+                and post_process_result.transition_to_phase == Phase.DEPLOYMENT.value
+            ):
+                async for followup_event in self._run_deployment_auto_followup(
+                    user=user,
+                    session=session,
+                    streamer=streamer,
+                    language=language,
+                ):
+                    yield followup_event
+
+            log_agent("orchestrator", f"session={session.id} phase={session.current_phase}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await self._mark_stream_recovery_failed(
+                session=session,
+                turn_id=turn_id,
+                error=str(exc),
+            )
+            raise
 
     async def _resolve_session(
         self, *, user_id: UUID, session_id: UUID | None
@@ -217,6 +317,101 @@ class OrchestratorCoreMixin:
         if profile is None:
             return "incomplete"
         return profile.kyc_status
+
+    @staticmethod
+    def _resolve_turn_id(client_turn_id: str | None) -> str:
+        normalized = client_turn_id.strip() if isinstance(client_turn_id, str) else ""
+        if normalized:
+            return normalized
+        return f"turn_{uuid4().hex}"
+
+    def _update_stream_recovery(
+        self,
+        *,
+        session: Session,
+        turn_id: str,
+        state: str,
+        user_message_id: str | None = None,
+        assistant_message_id: str | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        metadata = dict(session.metadata_ or {})
+        existing = metadata.get(_STREAM_RECOVERY_META_KEY)
+        existing_record = dict(existing) if isinstance(existing, dict) else {}
+        existing_turn_id = str(existing_record.get("turn_id", "")).strip()
+        same_turn = existing_turn_id == turn_id
+
+        now_iso = datetime.now(UTC).isoformat()
+        started_at = existing_record.get("started_at") if same_turn else None
+        if not isinstance(started_at, str) or not started_at.strip():
+            started_at = now_iso
+
+        resolved_user_message_id = (
+            user_message_id
+            if isinstance(user_message_id, str) and user_message_id.strip()
+            else None
+        )
+        if resolved_user_message_id is None and same_turn:
+            raw_user_message_id = existing_record.get("user_message_id")
+            if isinstance(raw_user_message_id, str) and raw_user_message_id.strip():
+                resolved_user_message_id = raw_user_message_id.strip()
+
+        resolved_assistant_message_id = (
+            assistant_message_id
+            if isinstance(assistant_message_id, str) and assistant_message_id.strip()
+            else None
+        )
+        if resolved_assistant_message_id is None and same_turn:
+            raw_assistant_message_id = existing_record.get("assistant_message_id")
+            if isinstance(raw_assistant_message_id, str) and raw_assistant_message_id.strip():
+                resolved_assistant_message_id = raw_assistant_message_id.strip()
+
+        record: dict[str, Any] = {
+            "turn_id": turn_id,
+            "state": state,
+            "started_at": started_at,
+            "updated_at": now_iso,
+        }
+        if resolved_user_message_id is not None:
+            record["user_message_id"] = resolved_user_message_id
+        if resolved_assistant_message_id is not None:
+            record["assistant_message_id"] = resolved_assistant_message_id
+
+        error_text = error.strip() if isinstance(error, str) else ""
+        if error_text:
+            record["error"] = error_text[:600]
+
+        metadata[_STREAM_RECOVERY_META_KEY] = record
+        session.metadata_ = metadata
+        return record
+
+    async def _mark_stream_recovery_failed(
+        self,
+        *,
+        session: Session,
+        turn_id: str,
+        error: str | None,
+    ) -> None:
+        try:
+            self._update_stream_recovery(
+                session=session,
+                turn_id=turn_id,
+                state=_STREAM_RECOVERY_STATE_FAILED,
+                error=error,
+            )
+            await self.db.commit()
+        except Exception as commit_exc:  # noqa: BLE001
+            try:
+                await self.db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            log_agent(
+                "orchestrator",
+                (
+                    f"session={session.id} turn={turn_id} "
+                    f"stream_recovery_failed_commit_error={type(commit_exc).__name__}"
+                ),
+            )
 
     async def _transition_phase(
         self,
@@ -255,35 +450,59 @@ class OrchestratorCoreMixin:
             )
         )
 
-    def _compute_initial_phase(self, profile: UserProfile | None) -> str:
-        """Determine which phase to start a new session in.
+    async def _run_deployment_auto_followup(
+        self,
+        *,
+        user: User,
+        session: Session,
+        streamer: ResponsesEventStreamer,
+        language: str,
+    ) -> AsyncIterator[str]:
+        """Auto follow-up turn after strategy -> deployment transition.
 
-        KYC only needs to be done once per user; completed-KYC users
-        always start from PRE_STRATEGY.
+        This eliminates the need for users to send "yes deploy" twice by
+        automatically triggering a deployment turn after the phase transition.
         """
-        if _kyc_handler.is_profile_complete(profile):
-            return Phase.PRE_STRATEGY.value
-        return Phase.KYC.value
+        auto_message = _default_deployment_auto_message(language=language)
+        follow_up_payload = ChatSendRequest(
+            session_id=session.id,
+            message=auto_message,
+        )
 
-    @staticmethod
-    def _ensure_phase_keyed(artifacts: dict[str, Any]) -> dict[str, Any]:
-        """Ensure session artifacts are phase-keyed and initialized."""
-        normalized = dict(artifacts)
-        for phase in WORKFLOW_PHASES:
-            phase_block = normalized.get(phase)
-            if isinstance(phase_block, dict) and "profile" in phase_block:
-                continue
-            handler = ChatOrchestrator._resolve_handler_from_module(phase)
-            if handler:
-                normalized[phase] = handler.init_artifacts()
-        return normalized
+        log_agent(
+            "orchestrator",
+            f"session={session.id} deployment_auto_followup_start",
+        )
 
-    @staticmethod
-    def _resolve_handler_from_module(phase: str) -> Any:
-        # Keep package-level monkeypatch hooks working after package split.
-        from apps.api import orchestration as orchestrator_mod
+        try:
+            async for chunk in self.handle_message_stream(
+                user,
+                follow_up_payload,
+                streamer,
+                language=language,
+            ):
+                yield chunk
+        except Exception as exc:  # noqa: BLE001
+            err_name = type(exc).__name__
+            log_agent(
+                "orchestrator",
+                f"session={session.id} deployment_auto_followup_error={err_name}",
+            )
+            # Swallow the error to avoid breaking the main turn; user can
+            # manually retry deployment in the next message.
 
-        return orchestrator_mod.get_handler(phase)
+
+def _default_deployment_auto_message(*, language: str) -> str:
+    """Generate the auto follow-up message for deployment phase."""
+    if language.startswith("zh"):
+        return (
+            "用户已确认策略并准备部署。"
+            "请检查部署状态，如果一切就绪，创建并启动 paper deployment。"
+        )
+    return (
+        "The user has confirmed the strategy and is ready to deploy. "
+        "Please check deployment readiness and create/start a paper deployment."
+    )
 
 
 class ChatOrchestrator(

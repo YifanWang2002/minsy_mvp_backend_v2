@@ -58,6 +58,7 @@ class SessionDetailResponse(BaseModel):
     session_title_record: dict[str, Any] | None = None
     artifacts: dict[str, Any]
     metadata: dict[str, Any]
+    stream_recovery: dict[str, Any] | None = None
     last_activity_at: datetime
     messages: list[MessageItem] = Field(default_factory=list)
 

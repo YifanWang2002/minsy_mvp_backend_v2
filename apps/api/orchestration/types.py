@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
 from apps.api.agents.handler_protocol import PhaseContext
 
 
 @dataclass(slots=True)
 class _TurnPreparation:
+    turn_id: str
+    user_message_id: UUID
     phase_before: str
     phase_turn_count: int
     prompt_user_message: str
@@ -45,3 +48,5 @@ class _TurnPostProcessResult:
     kyc_status: str
     transitioned: bool
     stop_criteria_delta: str | None
+    transition_from_phase: str | None = None
+    transition_to_phase: str | None = None

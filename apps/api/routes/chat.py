@@ -18,6 +18,7 @@ from apps.api.dependencies import get_db, get_responses_event_streamer
 from packages.infra.db.models.user import User
 from apps.api.orchestration.openai_stream_service import ResponsesEventStreamer
 from packages.domain.session.services.session_title_service import read_session_title_from_metadata
+from packages.infra.observability.logger import logger
 from apps.api.orchestration.chat_debug_trace import (
     CHAT_TRACE_HEADER_ENABLED,
     CHAT_TRACE_HEADER_ID,
@@ -89,6 +90,7 @@ async def send_message_stream(
         producer_queue: asyncio.Queue[str] = asyncio.Queue()
         producer_finished = asyncio.Event()
         producer_error: Exception | None = None
+        client_disconnected = False
 
         async def _produce_chunks() -> None:
             nonlocal producer_error
@@ -136,14 +138,47 @@ async def send_message_stream(
         except asyncio.CancelledError:
             # Client disconnected: keep consuming upstream stream so this turn can
             # still reach `done` and persist full assistant output.
+            client_disconnected = True
             current_task = asyncio.current_task()
-            if current_task is not None and hasattr(current_task, "uncancel"):
-                current_task.uncancel()
-            with suppress(Exception):
-                await asyncio.shield(producer_task)
+            if (
+                current_task is not None
+                and hasattr(current_task, "cancelling")
+                and hasattr(current_task, "uncancel")
+            ):
+                while current_task.cancelling():
+                    current_task.uncancel()
+
+            while not producer_task.done():
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(producer_task),
+                        timeout=_CHAT_SSE_HEARTBEAT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    if (
+                        current_task is not None
+                        and hasattr(current_task, "cancelling")
+                        and hasattr(current_task, "uncancel")
+                    ):
+                        while current_task.cancelling():
+                            current_task.uncancel()
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    producer_error = exc
+                    break
+
+            if producer_error is not None:
+                logger.warning(
+                    "chat.stream producer failed after disconnect user_id=%s error_class=%s error=%s",
+                    str(user.id),
+                    type(producer_error).__name__,
+                    str(producer_error),
+                )
             return
         finally:
-            if not producer_task.done():
+            if not producer_task.done() and not client_disconnected:
                 producer_task.cancel()
                 with suppress(Exception):
                     await producer_task

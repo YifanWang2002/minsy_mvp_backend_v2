@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+_TURN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
 
 
 class NewThreadRequest(BaseModel):
@@ -40,6 +43,7 @@ class ChatSendRequest(BaseModel):
 
     session_id: UUID | None = None
     message: str = Field(min_length=1, max_length=4000)
+    client_turn_id: str | None = Field(default=None, max_length=96)
     runtime_policy: RuntimePolicy | None = None
 
     @field_validator("message")
@@ -48,6 +52,20 @@ class ChatSendRequest(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("message cannot be empty.")
+        return normalized
+
+    @field_validator("client_turn_id")
+    @classmethod
+    def validate_client_turn_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if _TURN_ID_PATTERN.match(normalized) is None:
+            raise ValueError(
+                "client_turn_id must be 1-96 chars of [A-Za-z0-9._:-]."
+            )
         return normalized
 
 
@@ -118,17 +136,16 @@ class TelegramConnectLinkRequest(BaseModel):
 class BrokerAccountCreateRequest(BaseModel):
     """Create one broker account binding for current user."""
 
-    provider: Literal["alpaca", "ccxt"]
+    provider: Literal["alpaca", "ccxt", "sandbox"]
     mode: Literal["paper"] = "paper"
     credentials: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("credentials")
-    @classmethod
-    def validate_credentials(cls, value: dict[str, Any]) -> dict[str, Any]:
-        if not value:
+    @model_validator(mode="after")
+    def validate_credentials(self) -> BrokerAccountCreateRequest:
+        if self.provider != "sandbox" and not self.credentials:
             raise ValueError("credentials cannot be empty.")
-        return value
+        return self
 
 
 class BrokerAccountCredentialsUpdateRequest(BaseModel):
