@@ -5,8 +5,6 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from apps.api.agents.skills.state_compact import compact_state_block
-
 _SKILLS_DIR = Path(__file__).parent
 _STRESS_SKILLS_MD = _SKILLS_DIR / "stress_test" / "skills.md"
 _STRESS_STAGE_DIR = _SKILLS_DIR / "stress_test" / "stages"
@@ -104,14 +102,13 @@ def build_stress_test_dynamic_state(
     collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
     decision = str(fields.get("stress_test_decision", "")).strip().lower() or "hold"
 
-    return compact_state_block(
-        items=(
-            ("phase", "stress_test"),
-            ("collected", collected),
-            ("missing", missing_str),
-            ("has_missing", has_missing),
-            ("next_missing", next_missing),
-            ("stress_test_decision", decision),
-            ("stress_test_decision_options", "hold"),
-        )
+    return (
+        "[SESSION STATE]\n"
+        f"- already_collected: {collected}\n"
+        f"- still_missing: {missing_str}\n"
+        f"- has_missing_fields: {str(has_missing).lower()}\n"
+        f"- next_missing_field: {next_missing}\n"
+        f"- stress_test_decision: {decision}\n"
+        "- stress_test_decision_options: hold\n"
+        "[/SESSION STATE]\n\n"
     )

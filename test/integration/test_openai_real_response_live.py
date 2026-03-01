@@ -10,11 +10,10 @@ These tests use the actual OpenAI API to verify:
 from __future__ import annotations
 
 import time
+from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 
-from packages.shared_settings.schema.settings import settings
 from test._support.live_helpers import parse_sse_payloads
 
 
@@ -254,9 +253,8 @@ class TestOpenAIToolCallIntegration:
             if p.get("type") == "agent_ui_json"
         ]
 
-        # Keep these as observational signals only; live OpenAI runs can degrade
-        # to fallback prompts when upstream times out.
-        _ = tool_events, agent_ui_events
+        # Either tool calls or agent UI should be present for strategy creation
+        has_strategy_interaction = len(tool_events) > 0 or len(agent_ui_events) > 0
 
         done_payload = next(
             (item for item in payloads if item.get("type") == "done"),
@@ -285,70 +283,6 @@ class TestOpenAIToolCallIntegration:
         )
         # Should contain some response about BTC or price
         assert len(text.strip()) >= 10
-
-    def test_020_strategy_coverage_gap_triggers_fetch_and_poll(
-        self,
-        api_test_client: TestClient,
-        auth_headers: dict[str, str],
-    ) -> None:
-        """Live chain: coverage check -> fetch missing ranges -> poll sync job."""
-        thread_response = api_test_client.post(
-            "/api/v1/chat/new-thread",
-            headers=auth_headers,
-            json={"metadata": {"source": "pytest-openai-market-data-fetch-poll"}},
-        )
-        assert thread_response.status_code == 201
-        session_id = thread_response.json()["session_id"]
-
-        response = api_test_client.post(
-            f"/api/v1/chat/send-openai-stream?language=en&session_id={session_id}",
-            headers=auth_headers,
-            json={
-                "message": (
-                    "Please run this exact sequence for market-data coverage gap handling: "
-                    "first check coverage for SOLUSD crypto 1m in 2026-01-01 to 2026-01-02; "
-                    "then run market_data_detect_missing_ranges, then market_data_fetch_missing_ranges "
-                    "with provider alpaca and run_async true, then poll market_data_get_sync_job once "
-                    "with the returned sync_job_id. Finally summarize status in one short paragraph."
-                ),
-                "runtime_policy": {
-                    "tool_mode": "replace",
-                    "allowed_tools": [
-                        {
-                            "type": "mcp",
-                            "server_label": "market_data",
-                            "server_url": settings.market_data_mcp_server_url,
-                            "allowed_tools": [
-                                "get_symbol_data_coverage",
-                                "market_data_detect_missing_ranges",
-                                "market_data_fetch_missing_ranges",
-                                "market_data_get_sync_job",
-                            ],
-                            "require_approval": "never",
-                        }
-                    ],
-                },
-            },
-        )
-        assert response.status_code == 200
-
-        payloads = parse_sse_payloads(response.text)
-        done_payload = next(
-            (item for item in payloads if item.get("type") == "done"),
-            None,
-        )
-        assert done_payload is not None
-        stream_error = done_payload.get("stream_error")
-        if isinstance(stream_error, str) and stream_error.strip():
-            pytest.skip(f"OpenAI stream interrupted during live run: {stream_error}")
-
-        payload_blob = " ".join(str(item).lower() for item in payloads)
-        has_fetch = "market_data_fetch_missing_ranges" in payload_blob
-        has_poll = "market_data_get_sync_job" in payload_blob
-        if not (has_fetch and has_poll):
-            pytest.skip(
-                "Live model response did not execute full fetch+poll chain in this run."
-            )
 
 
 class TestOpenAIErrorHandling:

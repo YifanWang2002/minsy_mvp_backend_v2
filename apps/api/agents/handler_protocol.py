@@ -55,8 +55,6 @@ class PromptPieces:
     # Reasoning configuration for o-series / gpt-5+ models.
     # Example: {"effort": "none"} or {"effort": "low", "summary": "concise"}
     reasoning: dict[str, Any] | None = None
-    # Optional output budget for OpenAI Responses API.
-    max_output_tokens: int | None = None
 
 
 @dataclass

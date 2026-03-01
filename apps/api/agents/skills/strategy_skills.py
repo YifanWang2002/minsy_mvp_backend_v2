@@ -5,8 +5,6 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from apps.api.agents.skills.state_compact import compact_state_block
-
 _SKILLS_DIR = Path(__file__).parent
 _STRATEGY_SKILLS_MD = _SKILLS_DIR / "strategy" / "skills.md"
 _STRATEGY_STAGE_DIR = _SKILLS_DIR / "strategy" / "stages"
@@ -159,19 +157,18 @@ def build_strategy_dynamic_state(
         session_id.strip() if isinstance(session_id, str) and session_id.strip() else "none"
     )
 
-    return compact_state_block(
-        items=(
-            ("phase", "strategy"),
-            ("pre_scope", pre_scope),
-            ("collected", collected),
-            ("strategy_id", strategy_id),
-            ("strategy_market", strategy_market),
-            ("strategy_primary_symbol", strategy_primary_symbol),
-            ("strategy_tickers_csv", strategy_tickers_csv),
-            ("strategy_timeframe", strategy_timeframe),
-            ("tool_compat_session_id", tool_compat_session_id),
-            ("missing", missing_str),
-            ("has_missing", has_missing),
-            ("next_missing", next_missing),
-        )
+    return (
+        "[SESSION STATE]\n"
+        f"- pre_strategy_scope: {pre_scope}\n"
+        f"- already_collected: {collected}\n"
+        f"- confirmed_strategy_id: {strategy_id}\n"
+        f"- strategy_market: {strategy_market}\n"
+        f"- strategy_primary_symbol: {strategy_primary_symbol}\n"
+        f"- strategy_tickers_csv: {strategy_tickers_csv}\n"
+        f"- strategy_timeframe: {strategy_timeframe}\n"
+        f"- tool_compat_session_id: {tool_compat_session_id}\n"
+        f"- still_missing: {missing_str}\n"
+        f"- has_missing_fields: {str(has_missing).lower()}\n"
+        f"- next_missing_field: {next_missing}\n"
+        "[/SESSION STATE]\n\n"
     )

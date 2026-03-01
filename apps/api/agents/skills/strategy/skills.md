@@ -82,10 +82,7 @@ Reply in **{{LANG_NAME}}**.
 - Prefer this order:
   1) pre-confirm draft: `strategy_validate_dsl(dsl_json)` and return `strategy_ref` by `strategy_draft_id`
   2) post-confirm updates: `strategy_get_dsl` -> `strategy_patch_dsl`
-  3) post-confirm backtest:
-     - `strategy_get_dsl` -> `get_symbol_data_coverage`
-     - if coverage is insufficient: `market_data_detect_missing_ranges` -> `market_data_fetch_missing_ranges` -> `market_data_get_sync_job`
-     - then re-check coverage and run: `backtest_create_job` -> `backtest_get_job`
+  3) post-confirm backtest: `strategy_get_dsl` -> `get_symbol_data_coverage` -> `backtest_create_job` -> `backtest_get_job`
 - In this phase, only use:
   - `strategy_validate_dsl`
   - `strategy_upsert_dsl`
@@ -107,11 +104,6 @@ Reply in **{{LANG_NAME}}**.
   - `backtest_underwater_curve`
   - `backtest_rolling_metrics`
   - `get_symbol_data_coverage`
-  - `market_data_detect_missing_ranges`
-  - `market_data_fetch_missing_ranges`
-  - `market_data_get_sync_job`
-  - `get_symbol_metadata`
-  - `get_symbol_candles`
   - `get_indicator_catalog`
 - `get_indicator_detail`
 - `strategy_upsert_dsl` requires `dsl_json`.
@@ -123,9 +115,6 @@ Reply in **{{LANG_NAME}}**.
 - `strategy_diff_versions` requires `strategy_id`, `from_version`, `to_version`.
 - `strategy_rollback_dsl` requires `strategy_id`, `target_version`, optional `expected_version`.
 - `get_symbol_data_coverage` requires `market` and `symbol`.
-- `market_data_detect_missing_ranges` requires `market`, `symbol`, `timeframe`, `start_date`, `end_date`.
-- `market_data_fetch_missing_ranges` requires `provider`, `market`, `symbol`, `timeframe`; use `provider="alpaca"` and `run_async=true`.
-- `market_data_get_sync_job` requires `sync_job_id`.
 - Keep patches minimal: prefer `replace`/`add`/`remove` and include `test` guards when practical.
 - Use `get_indicator_catalog` to inspect available factor categories and registry contracts.
 - Use `get_indicator_detail` when you need full skill detail for one or more indicators.

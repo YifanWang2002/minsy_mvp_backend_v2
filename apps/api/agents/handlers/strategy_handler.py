@@ -272,8 +272,6 @@ def _coerce_bool(value: Any) -> bool | None:
 
 
 def _build_strategy_tools() -> list[dict[str, Any]]:
-    # Runtime tool policy is authored in orchestration.constants phase matrix.
-    # Keep this as a minimal fallback for non-orchestrated prompt construction only.
     return [
         {
             "type": "mcp",
@@ -282,6 +280,15 @@ def _build_strategy_tools() -> list[dict[str, Any]]:
             "allowed_tools": [
                 "strategy_validate_dsl",
                 "strategy_upsert_dsl",
+                "strategy_get_dsl",
+                "strategy_list_tunable_params",
+                "strategy_patch_dsl",
+                "strategy_list_versions",
+                "strategy_get_version_dsl",
+                "strategy_diff_versions",
+                "strategy_rollback_dsl",
+                "get_indicator_detail",
+                "get_indicator_catalog",
             ],
             "require_approval": "never",
         }
