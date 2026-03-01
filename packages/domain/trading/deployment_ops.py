@@ -11,13 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from packages.shared_settings.schema.settings import settings
-from packages.domain.exceptions import DomainError
-from packages.infra.providers.trading.adapters.alpaca_trading import AlpacaTradingAdapter
-from packages.infra.providers.trading.credentials import CredentialCipher
 from packages.core.events.notification_events import EVENT_DEPLOYMENT_STARTED
-from packages.domain.notification.services.notification_outbox_service import NotificationOutboxService
+from packages.domain.exceptions import DomainError
+from packages.domain.notification.services.notification_outbox_service import (
+    NotificationOutboxService,
+)
 from packages.domain.trading.runtime.timeframe_scheduler import timeframe_to_seconds
+from packages.domain.trading.services.broker_provider_service import (
+    BrokerProviderService,
+)
 from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.deployment_run import DeploymentRun
@@ -28,9 +30,11 @@ from packages.infra.db.models.session import Session
 from packages.infra.db.models.strategy import Strategy
 from packages.infra.observability.logger import logger
 from packages.infra.redis.stores.runtime_state_store import runtime_state_store
+from packages.shared_settings.schema.settings import settings
 
 _DEPLOYABLE_STRATEGY_STATUSES = {"validated", "backtested", "deployed"}
 _DEPLOYMENT_PHASE = "deployment"
+_broker_provider_service = BrokerProviderService()
 _VALID_PHASE_TRANSITIONS: dict[str, set[str]] = {
     "kyc": {"pre_strategy", "error"},
     "pre_strategy": {"strategy", "kyc", "error"},
@@ -89,16 +93,6 @@ def _positive_decimal_or_none(value: Any) -> Decimal | None:
     return parsed.quantize(Decimal("0.01"))
 
 
-def _extract_credential_value(credentials: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        raw = credentials.get(key)
-        if isinstance(raw, str):
-            normalized = raw.strip()
-            if normalized:
-                return normalized
-    return ""
-
-
 def _resolve_capital_from_validation_metadata(account: BrokerAccount) -> Decimal | None:
     metadata = account.validation_metadata if isinstance(account.validation_metadata, dict) else {}
     for key in ("paper_equity", "paper_cash", "paper_buying_power", "equity", "cash", "buying_power"):
@@ -120,38 +114,18 @@ async def _resolve_deployment_capital_allocated(
     if from_probe is not None:
         return from_probe
 
-    if account.provider != "alpaca" or account.last_validated_status != "paper_probe_ok":
+    binding = _broker_provider_service.build_adapter_binding_from_account(account)
+    adapter = binding.adapter
+    if adapter is None:
         return Decimal("10000.00")
 
-    try:
-        credentials = CredentialCipher().decrypt(account.encrypted_credentials)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "[deployment_ops] decrypt broker credentials failed broker_account_id=%s error=%s",
-            account.id,
-            type(exc).__name__,
-        )
-        return Decimal("10000.00")
-
-    api_key = _extract_credential_value(credentials, "APCA-API-KEY-ID", "api_key", "key")
-    api_secret = _extract_credential_value(credentials, "APCA-API-SECRET-KEY", "api_secret", "secret")
-    trading_base_url = _extract_credential_value(credentials, "trading_base_url", "base_url")
-    if not trading_base_url:
-        trading_base_url = settings.alpaca_paper_trading_base_url
-    if not api_key or not api_secret:
-        return Decimal("10000.00")
-
-    adapter = AlpacaTradingAdapter(
-        api_key=api_key,
-        api_secret=api_secret,
-        trading_base_url=trading_base_url,
-    )
     try:
         state = await adapter.fetch_account_state()
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "[deployment_ops] fetch account state failed broker_account_id=%s error=%s",
+            "[deployment_ops] fetch account state failed broker_account_id=%s provider=%s error=%s",
             account.id,
+            binding.provider,
             type(exc).__name__,
         )
         return Decimal("10000.00")
@@ -163,6 +137,14 @@ async def _resolve_deployment_capital_allocated(
         if capital is not None:
             return capital
     return Decimal("10000.00")
+
+
+async def _resolve_broker_provider_for_run(db: AsyncSession, *, run: DeploymentRun) -> str:
+    account = await db.scalar(select(BrokerAccount).where(BrokerAccount.id == run.broker_account_id))
+    if account is None:
+        return "unknown"
+    provider = str(account.provider).strip().lower()
+    return provider or "unknown"
 
 
 def _latest_run(deployment: Deployment) -> DeploymentRun | None:
@@ -586,10 +568,12 @@ async def apply_status_transition(
                 "updated_at": now.isoformat(),
             }
         )
+        broker_provider = await _resolve_broker_provider_for_run(db, run=run)
         execution.update(
             {
                 "order_execution_mode": "broker" if settings.paper_trading_execute_orders else "simulated",
-                "market_data_source": "alpaca_rest",
+                "market_data_source": f"{broker_provider}_rest",
+                "broker_provider": broker_provider,
                 "updated_at": now.isoformat(),
             }
         )

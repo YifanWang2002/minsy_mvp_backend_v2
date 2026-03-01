@@ -466,6 +466,10 @@ class Settings(BaseSettings):
         default=30,
         alias="MARKET_DATA_SYNC_DEFAULT_LOOKBACK_DAYS",
     )
+    market_data_sync_lock_ttl_seconds: int = Field(
+        default=1800,
+        alias="MARKET_DATA_SYNC_LOCK_TTL_SECONDS",
+    )
     ccxt_market_data_enabled: bool = Field(
         default=True,
         alias="CCXT_MARKET_DATA_ENABLED",
@@ -970,6 +974,7 @@ class Settings(BaseSettings):
         "market_data_sync_batch_limit",
         "market_data_sync_max_ranges",
         "market_data_sync_default_lookback_days",
+        "market_data_sync_lock_ttl_seconds",
     )
     @classmethod
     def _validate_market_data_sync_limits(cls, value: int) -> int:

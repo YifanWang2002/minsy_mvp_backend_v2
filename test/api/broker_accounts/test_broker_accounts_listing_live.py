@@ -31,7 +31,7 @@ def test_010_broker_account_detail_or_not_found(
         assert detail.status_code == 200, detail.text
         payload = detail.json()
         assert str(payload["broker_account_id"]) == str(account_id)
-        assert payload["provider"] in {"alpaca", "ccxt"}
+        assert payload["provider"] in {"alpaca", "ccxt", "sandbox"}
         return
 
     missing = api_test_client.get(

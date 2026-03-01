@@ -7,6 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from apps.api.agents.skills.state_compact import compact_state_block
+
 _SKILLS_DIR = Path(__file__).parent
 _DEPLOYMENT_SKILLS_MD = _SKILLS_DIR / "deployment" / "skills.md"
 _UTILS_SKILLS_MD = _SKILLS_DIR / "utils" / "skills.md"
@@ -72,12 +74,13 @@ def build_deployment_dynamic_state(
     collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
     runtime_json = json.dumps(runtime_state, ensure_ascii=True, sort_keys=True)
 
-    return (
-        "[SESSION STATE]\n"
-        f"- already_collected: {collected}\n"
-        f"- still_missing: {missing_str}\n"
-        f"- has_missing_fields: {str(has_missing).lower()}\n"
-        f"- next_missing_field: {next_missing}\n"
-        f"- deployment_runtime_state: {runtime_json}\n"
-        "[/SESSION STATE]\n\n"
+    return compact_state_block(
+        items=(
+            ("phase", "deployment"),
+            ("collected", collected),
+            ("missing", missing_str),
+            ("has_missing", has_missing),
+            ("next_missing", next_missing),
+            ("deployment_runtime_state", runtime_json),
+        )
     )

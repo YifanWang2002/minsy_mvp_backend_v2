@@ -21,7 +21,7 @@ class BrokerAccountAuditLog(Base):
     __tablename__ = "broker_account_audit_logs"
     __table_args__ = (
         CheckConstraint(
-            "action IN ('create', 'update', 'validate', 'deactivate')",
+            "action IN ('create', 'update', 'validate', 'deactivate', 'set_default')",
             name="ck_broker_account_audit_logs_action",
         ),
         CheckConstraint(

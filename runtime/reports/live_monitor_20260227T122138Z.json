@@ -1,0 +1,352 @@
+{
+  "started_at_utc": "2026-02-27T12:19:08.325468+00:00",
+  "ended_at_utc": "2026-02-27T12:21:38.744108+00:00",
+  "monitor_seconds": 150,
+  "interval_seconds": 15,
+  "email": "2@test.com",
+  "broker_account_id": "6dc48de8-e3b5-4f71-b4d0-5d40a40e4112",
+  "broker_last_validated_status": "paper_probe_ok",
+  "strategy_id": "70f17c75-492c-42d4-aceb-0cd7667d974c",
+  "strategy_name": "Codex Live 1m ebdcf37f",
+  "deployment_id": "70717228-f31b-4342-8b13-1c1dc4d8260d",
+  "queued_task_id": "a090db2d-5937-419c-b3c6-c5672eb1ce10",
+  "samples_count": 11,
+  "unique_trigger_buckets": [],
+  "bucket_transitions": 0,
+  "final_deployment_status": "stopped",
+  "stop_action_status": "completed",
+  "samples": [
+    {
+      "sampled_at": "2026-02-27T12:19:08.325468+00:00",
+      "elapsed_seconds": 0.0,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:19:23.364701+00:00",
+      "elapsed_seconds": 15.0,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:19:38.391417+00:00",
+      "elapsed_seconds": 30.1,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:19:53.427102+00:00",
+      "elapsed_seconds": 45.1,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:20:08.459343+00:00",
+      "elapsed_seconds": 60.1,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:20:23.502392+00:00",
+      "elapsed_seconds": 75.2,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:20:38.537332+00:00",
+      "elapsed_seconds": 90.2,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:20:53.592281+00:00",
+      "elapsed_seconds": 105.3,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "last_bar_time": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 0,
+      "signals_top": [],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": null
+    },
+    {
+      "sampled_at": "2026-02-27T12:21:08.628858+00:00",
+      "elapsed_seconds": 120.3,
+      "deployment_status": "active",
+      "run_status": "running",
+      "last_bar_time": "2026-02-27T12:16:00Z",
+      "last_trigger_bucket": null,
+      "last_enqueued_at": "2026-02-27T12:21:07.991348Z",
+      "runtime_last_signal": "NOOP",
+      "runtime_last_signal_reason": "no_entry",
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 1,
+      "signals_top": [
+        {
+          "signal_event_id": "85d12c31-baca-49fd-a4e5-14e3a35cf8ba",
+          "deployment_id": "70717228-f31b-4342-8b13-1c1dc4d8260d",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:16:00Z",
+          "reason": "no_entry",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:21:06.860772+00:00"
+          }
+        }
+      ],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": {
+        "provider": "alpaca",
+        "source": "broker_reported",
+        "sync_status": "ok",
+        "fetched_at": "2026-02-27T12:21:06.860772Z",
+        "equity": 98755.8,
+        "cash": 98755.8,
+        "buying_power": 197511.6,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "positions_count": 0,
+        "symbols": [],
+        "error": null,
+        "updated_at": null
+      }
+    },
+    {
+      "sampled_at": "2026-02-27T12:21:23.664596+00:00",
+      "elapsed_seconds": 135.3,
+      "deployment_status": "active",
+      "run_status": "running",
+      "last_bar_time": "2026-02-27T12:16:00Z",
+      "last_trigger_bucket": null,
+      "last_enqueued_at": "2026-02-27T12:21:07.991348Z",
+      "runtime_last_signal": "NOOP",
+      "runtime_last_signal_reason": "no_entry",
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 1,
+      "signals_top": [
+        {
+          "signal_event_id": "85d12c31-baca-49fd-a4e5-14e3a35cf8ba",
+          "deployment_id": "70717228-f31b-4342-8b13-1c1dc4d8260d",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:16:00Z",
+          "reason": "no_entry",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:21:06.860772+00:00"
+          }
+        }
+      ],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": {
+        "provider": "alpaca",
+        "source": "broker_reported",
+        "sync_status": "ok",
+        "fetched_at": "2026-02-27T12:21:06.860772Z",
+        "equity": 98755.8,
+        "cash": 98755.8,
+        "buying_power": 197511.6,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "positions_count": 0,
+        "symbols": [],
+        "error": null,
+        "updated_at": null
+      }
+    },
+    {
+      "sampled_at": "2026-02-27T12:21:38.701166+00:00",
+      "elapsed_seconds": 150.4,
+      "deployment_status": "active",
+      "run_status": "running",
+      "last_bar_time": "2026-02-27T12:16:00Z",
+      "last_trigger_bucket": null,
+      "last_enqueued_at": "2026-02-27T12:21:07.991348Z",
+      "runtime_last_signal": "NOOP",
+      "runtime_last_signal_reason": "no_entry",
+      "execution": {
+        "updated_at": "2026-02-27T12:19:08.255360+00:00",
+        "broker_provider": "alpaca",
+        "market_data_source": "alpaca_rest",
+        "order_execution_mode": "simulated"
+      },
+      "signals_count": 1,
+      "signals_top": [
+        {
+          "signal_event_id": "85d12c31-baca-49fd-a4e5-14e3a35cf8ba",
+          "deployment_id": "70717228-f31b-4342-8b13-1c1dc4d8260d",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:16:00Z",
+          "reason": "no_entry",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:21:06.860772+00:00"
+          }
+        }
+      ],
+      "orders_count": 0,
+      "positions_count": 0,
+      "portfolio_broker_account": {
+        "provider": "alpaca",
+        "source": "broker_reported",
+        "sync_status": "ok",
+        "fetched_at": "2026-02-27T12:21:06.860772Z",
+        "equity": 98755.8,
+        "cash": 98755.8,
+        "buying_power": 197511.6,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "positions_count": 0,
+        "symbols": [],
+        "error": null,
+        "updated_at": null
+      }
+    }
+  ]
+}

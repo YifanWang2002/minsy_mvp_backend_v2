@@ -1,0 +1,231 @@
+{
+  "timestamp": "2026-02-28T03:25:53.209414",
+  "phase": "Phase 3: Multi-Asset Validation",
+  "assets": [
+    "BTCUSD",
+    "ETHUSD"
+  ],
+  "timeframe": "5m",
+  "results": {
+    "Baseline_BTCUSD_IS": {
+      "total_trades": 1144,
+      "winning_trades": 345,
+      "losing_trades": 799,
+      "win_rate": 30.157342657342657,
+      "total_pnl": -3833.5628746655666,
+      "total_return": -38.335628746655665,
+      "final_equity": 6166.437125334433,
+      "max_drawdown_pct": 42.870596079110456,
+      "expectancy": -3.351016498833537
+    },
+    "TrendStrength_BTCUSD_IS": {
+      "total_trades": 206,
+      "winning_trades": 56,
+      "losing_trades": 150,
+      "win_rate": 27.184466019417474,
+      "total_pnl": -1000.9926842765043,
+      "total_return": -10.009926842765044,
+      "final_equity": 8999.007315723498,
+      "max_drawdown_pct": 11.47184635857471,
+      "expectancy": -4.859187787750021
+    },
+    "TrendStructure_BTCUSD_IS": {
+      "total_trades": 479,
+      "winning_trades": 149,
+      "losing_trades": 330,
+      "win_rate": 31.106471816283925,
+      "total_pnl": -1917.0380125860188,
+      "total_return": -19.170380125860188,
+      "final_equity": 8082.961987413995,
+      "max_drawdown_pct": 21.51740439936718,
+      "expectancy": -4.002167040889392
+    },
+    "RangeATR_BTCUSD_IS": {
+      "total_trades": 405,
+      "winning_trades": 122,
+      "losing_trades": 283,
+      "win_rate": 30.12345679012346,
+      "total_pnl": -1797.7546469260465,
+      "total_return": -17.977546469260464,
+      "final_equity": 8202.245353073953,
+      "max_drawdown_pct": 20.968719173877204,
+      "expectancy": -4.438900362780362
+    },
+    "MTFAlignment_BTCUSD_IS": {
+      "total_trades": 1144,
+      "winning_trades": 345,
+      "losing_trades": 799,
+      "win_rate": 30.157342657342657,
+      "total_pnl": -3833.5628746655707,
+      "total_return": -38.33562874665571,
+      "final_equity": 6166.437125334433,
+      "max_drawdown_pct": 42.20405318053033,
+      "expectancy": -3.3510164988335407
+    },
+    "Baseline_ETHUSD_IS": {
+      "total_trades": 1108,
+      "winning_trades": 335,
+      "losing_trades": 773,
+      "win_rate": 30.234657039711195,
+      "total_pnl": -2871.6017260598182,
+      "total_return": -28.716017260598182,
+      "final_equity": 7128.398273940182,
+      "max_drawdown_pct": 29.463512135410895,
+      "expectancy": -2.5916983087182475
+    },
+    "TrendStrength_ETHUSD_IS": {
+      "total_trades": 230,
+      "winning_trades": 61,
+      "losing_trades": 169,
+      "win_rate": 26.521739130434785,
+      "total_pnl": -1379.250607087172,
+      "total_return": -13.79250607087172,
+      "final_equity": 8620.749392912823,
+      "max_drawdown_pct": 13.940573427152009,
+      "expectancy": -5.996741769944227
+    },
+    "TrendStructure_ETHUSD_IS": {
+      "total_trades": 459,
+      "winning_trades": 139,
+      "losing_trades": 320,
+      "win_rate": 30.28322440087146,
+      "total_pnl": -1581.6035167013156,
+      "total_return": -15.816035167013156,
+      "final_equity": 8418.396483298668,
+      "max_drawdown_pct": 16.928499693541713,
+      "expectancy": -3.445759295645568
+    },
+    "RangeATR_ETHUSD_IS": {
+      "total_trades": 395,
+      "winning_trades": 126,
+      "losing_trades": 269,
+      "win_rate": 31.89873417721519,
+      "total_pnl": -477.43609126743956,
+      "total_return": -4.774360912674395,
+      "final_equity": 9522.563908732556,
+      "max_drawdown_pct": 9.686107780398508,
+      "expectancy": -1.2086989652340243
+    },
+    "MTFAlignment_ETHUSD_IS": {
+      "total_trades": 1108,
+      "winning_trades": 335,
+      "losing_trades": 773,
+      "win_rate": 30.234657039711195,
+      "total_pnl": -2871.601726059819,
+      "total_return": -28.716017260598193,
+      "final_equity": 7128.398273940182,
+      "max_drawdown_pct": 29.327707906918555,
+      "expectancy": -2.5916983087182484
+    },
+    "Baseline_BTCUSD_OOS": {
+      "total_trades": 1115,
+      "winning_trades": 355,
+      "losing_trades": 760,
+      "win_rate": 31.838565022421523,
+      "total_pnl": -2305.6260043058646,
+      "total_return": -23.056260043058646,
+      "final_equity": 7694.373995694135,
+      "max_drawdown_pct": 31.35515868698536,
+      "expectancy": -2.067826012830372
+    },
+    "TrendStrength_BTCUSD_OOS": {
+      "total_trades": 212,
+      "winning_trades": 79,
+      "losing_trades": 133,
+      "win_rate": 37.264150943396224,
+      "total_pnl": 774.4293909340327,
+      "total_return": 7.744293909340326,
+      "final_equity": 10774.429390934027,
+      "max_drawdown_pct": 4.038273988338421,
+      "expectancy": 3.6529688251605315
+    },
+    "TrendStructure_BTCUSD_OOS": {
+      "total_trades": 483,
+      "winning_trades": 172,
+      "losing_trades": 311,
+      "win_rate": 35.61076604554865,
+      "total_pnl": 295.26689564441915,
+      "total_return": 2.9526689564441915,
+      "final_equity": 10295.266895644423,
+      "max_drawdown_pct": 9.511954132364586,
+      "expectancy": 0.611318624522607
+    },
+    "RangeATR_BTCUSD_OOS": {
+      "total_trades": 338,
+      "winning_trades": 116,
+      "losing_trades": 222,
+      "win_rate": 34.319526627218934,
+      "total_pnl": -112.71809551508728,
+      "total_return": -1.127180955150873,
+      "final_equity": 9887.281904484898,
+      "max_drawdown_pct": 6.1044170021783435,
+      "expectancy": -0.33348548968960734
+    },
+    "MTFAlignment_BTCUSD_OOS": {
+      "total_trades": 1115,
+      "winning_trades": 355,
+      "losing_trades": 760,
+      "win_rate": 31.838565022421523,
+      "total_pnl": -2305.6260043058915,
+      "total_return": -23.056260043058916,
+      "final_equity": 7694.373995694135,
+      "max_drawdown_pct": 31.26869752585718,
+      "expectancy": -2.067826012830396
+    },
+    "Baseline_ETHUSD_OOS": {
+      "total_trades": 1069,
+      "winning_trades": 360,
+      "losing_trades": 709,
+      "win_rate": 33.67633302151544,
+      "total_pnl": 828.7711248855758,
+      "total_return": 8.287711248855757,
+      "final_equity": 10828.771124885576,
+      "max_drawdown_pct": 18.63307437461546,
+      "expectancy": 0.7752770111184057
+    },
+    "TrendStrength_ETHUSD_OOS": {
+      "total_trades": 200,
+      "winning_trades": 83,
+      "losing_trades": 117,
+      "win_rate": 41.5,
+      "total_pnl": 1503.862032322604,
+      "total_return": 15.03862032322604,
+      "final_equity": 11503.8620323226,
+      "max_drawdown_pct": 6.091157833345426,
+      "expectancy": 7.51931016161302
+    },
+    "TrendStructure_ETHUSD_OOS": {
+      "total_trades": 468,
+      "winning_trades": 168,
+      "losing_trades": 300,
+      "win_rate": 35.8974358974359,
+      "total_pnl": 784.6932722706206,
+      "total_return": 7.846932722706206,
+      "final_equity": 10784.693272270622,
+      "max_drawdown_pct": 8.853179063168124,
+      "expectancy": 1.6766950262192748
+    },
+    "RangeATR_ETHUSD_OOS": {
+      "total_trades": 335,
+      "winning_trades": 116,
+      "losing_trades": 219,
+      "win_rate": 34.626865671641795,
+      "total_pnl": -1268.564819268753,
+      "total_return": -12.685648192687529,
+      "final_equity": 8731.435180731252,
+      "max_drawdown_pct": 17.12624826598244,
+      "expectancy": -3.7867606545335906
+    },
+    "MTFAlignment_ETHUSD_OOS": {
+      "total_trades": 1069,
+      "winning_trades": 360,
+      "losing_trades": 709,
+      "win_rate": 33.67633302151544,
+      "total_pnl": 828.7711248855925,
+      "total_return": 8.287711248855926,
+      "final_equity": 10828.771124885576,
+      "max_drawdown_pct": 18.587672818840257,
+      "expectancy": 0.7752770111184214
+    }
+  }
+}

@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-import json
-import os
-import shutil
-import time
-from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from pathlib import Path
-from threading import Lock
 from typing import Any
 from uuid import UUID
 
-import yfinance as yf
+import httpx
 from mcp.server.fastmcp import Context, FastMCP
-from platformdirs import user_cache_dir
 
-from packages.shared_settings.schema.settings import settings
+from apps.mcp.auth.context_auth import (
+    McpContextClaims,
+    decode_mcp_context_token,
+    extract_mcp_context_token,
+)
+from apps.mcp.common.utils import log_mcp_tool_result, to_json, utc_now_iso
 from packages.domain.market_data.data import DataLoader
 from packages.domain.market_data.data.local_coverage import (
     LocalCoverageInputError,
@@ -35,13 +32,10 @@ from packages.domain.market_data.sync_service import (
     get_market_data_sync_job_view,
     schedule_market_data_sync_job,
 )
-from apps.mcp.auth.context_auth import (
-    McpContextClaims,
-    decode_mcp_context_token,
-    extract_mcp_context_token,
-)
-from apps.mcp.common.utils import log_mcp_tool_result, to_json, utc_now_iso
 from packages.infra.db import session as db_module
+from packages.infra.providers.market_data.alpaca_client import AlpacaMarketDataClient
+from packages.infra.providers.trading.adapters.base import OhlcvBar, QuoteSnapshot
+from packages.shared_settings.schema.settings import settings
 
 TOOL_NAMES: tuple[str, ...] = (
     "check_symbol_available",
@@ -56,21 +50,17 @@ TOOL_NAMES: tuple[str, ...] = (
     "market_data_get_candles",
 )
 
-VALID_INTERVALS = (
-    "1m",
-    "2m",
-    "5m",
-    "15m",
-    "30m",
-    "60m",
-    "90m",
-    "1h",
-    "1d",
-    "5d",
-    "1wk",
-    "1mo",
-    "3mo",
-)
+_INTERVAL_TO_ALPACA_TIMEFRAME: dict[str, str] = {
+    "1m": "1Min",
+    "5m": "5Min",
+    "15m": "15Min",
+    "60m": "1Hour",
+    "1h": "1Hour",
+    "1d": "1Day",
+    "1wk": "1Week",
+    "1mo": "1Month",
+}
+VALID_INTERVALS = tuple(_INTERVAL_TO_ALPACA_TIMEFRAME)
 VALID_PERIODS = (
     "1d",
     "5d",
@@ -84,6 +74,7 @@ VALID_PERIODS = (
     "ytd",
     "max",
 )
+_ALPACA_SUPPORTED_MARKETS: frozenset[str] = frozenset({"us_stocks", "crypto"})
 
 _MARKET_ALIASES: dict[str, str] = {
     "stock": "us_stocks",
@@ -95,180 +86,9 @@ _MARKET_ALIASES: dict[str, str] = {
     "futures": "futures",
 }
 
-_VENUE_TO_MARKET: dict[str, str] = {
-    "US": "us_stocks",
-    "STOCK": "us_stocks",
-    "STOCKS": "us_stocks",
-    "CRYPTO": "crypto",
-    "FOREX": "forex",
-    "FX": "forex",
-    "FUTURES": "futures",
-}
-
-_KNOWN_FUTURES_YF_MAP: dict[str, str] = {
-    "ES": "ES=F",
-    "NQ": "NQ=F",
-    "YM": "YM=F",
-    "RTY": "RTY=F",
-    "CL": "CL=F",
-    "GC": "GC=F",
-    "SI": "SI=F",
-    "HG": "HG=F",
-    "NG": "NG=F",
-    "ZN": "ZN=F",
-    "ZB": "ZB=F",
-}
-
-_YF_GUARD_LOCK = Lock()
-
-
 @lru_cache(maxsize=1)
 def _get_data_loader() -> DataLoader:
     return DataLoader()
-
-
-def _parse_bool_env(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw.strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def _yf_guard_state_file() -> Path:
-    configured = os.getenv("YF_CACHE_GUARD_STATE_FILE", "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return Path("/tmp/minsy_yfinance_guard_state.json")
-
-
-def _yf_guard_limit() -> int:
-    return max(1, _parse_int_env("YF_CACHE_GUARD_LIMIT", 800))
-
-
-def _yf_guard_buffer() -> int:
-    return max(0, _parse_int_env("YF_CACHE_GUARD_BUFFER", 80))
-
-
-def _yf_guard_trigger(limit: int, buffer: int) -> int:
-    # Trigger a little before hard limit; at least 1.
-    return max(1, limit - min(buffer, limit - 1))
-
-
-def _load_yf_guard_state(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return {}
-
-
-def _save_yf_guard_state(path: Path, state: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(state, ensure_ascii=True)
-    path.write_text(payload, encoding="utf-8")
-
-
-def _resolve_yfinance_cache_dir() -> Path:
-    configured = os.getenv("YF_CACHE_DIR", "").strip()
-    if configured:
-        return Path(configured).expanduser()
-    return Path(user_cache_dir()) / "py-yfinance"
-
-
-def _clear_yfinance_cache() -> None:
-    """Clear yfinance persistent + in-memory cache best-effort."""
-    try:
-        from yfinance import cache as yf_cache
-
-        for manager_name in ("_CookieDBManager", "_TzDBManager", "_ISINDBManager"):
-            manager = getattr(yf_cache, manager_name, None)
-            close_db = getattr(manager, "close_db", None)
-            if callable(close_db):
-                close_db()
-    except Exception:  # noqa: BLE001
-        pass
-
-    cache_dir = _resolve_yfinance_cache_dir()
-    for pattern in (
-        "cookies.db*",
-        "tkr-tz.db*",
-        "isin-tkr.db*",
-    ):
-        for cache_file in cache_dir.glob(pattern):
-            try:
-                if cache_file.is_file():
-                    cache_file.unlink(missing_ok=True)
-                elif cache_file.is_dir():
-                    shutil.rmtree(cache_file, ignore_errors=True)
-            except Exception:  # noqa: BLE001
-                continue
-
-    try:
-        from yfinance import data as yf_data
-
-        yf_data_singleton = yf_data.YfData()
-        cache_get = getattr(yf_data_singleton, "cache_get", None)
-        if callable(getattr(cache_get, "cache_clear", None)):
-            cache_get.cache_clear()
-        session = getattr(yf_data_singleton, "_session", None)
-        if session is not None and hasattr(session, "cookies"):
-            session.cookies.clear()
-        yf_data_singleton._cookie = None
-        yf_data_singleton._crumb = None
-        yf_data_singleton._cookie_strategy = "basic"
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _record_yf_request_and_maybe_clear_cache() -> None:
-    """Track yfinance usage locally and clear cache near configured limit."""
-    if not _parse_bool_env("YF_CACHE_GUARD_ENABLED", True):
-        return
-
-    state_file = _yf_guard_state_file()
-    limit = _yf_guard_limit()
-    buffer = _yf_guard_buffer()
-    trigger = _yf_guard_trigger(limit, buffer)
-    today = datetime.now(UTC).date().isoformat()
-
-    with _YF_GUARD_LOCK:
-        state = _load_yf_guard_state(state_file)
-        if str(state.get("date")) != today:
-            state = {
-                "date": today,
-                "count": 0,
-                "limit": limit,
-                "buffer": buffer,
-                "trigger": trigger,
-                "clear_count": 0,
-                "last_clear_utc": "",
-            }
-
-        count = int(state.get("count", 0))
-        count += 1
-        state["count"] = count
-        state["limit"] = limit
-        state["buffer"] = buffer
-        state["trigger"] = trigger
-
-        if count >= trigger:
-            _clear_yfinance_cache()
-            state["count"] = 0
-            state["clear_count"] = int(state.get("clear_count", 0)) + 1
-            state["last_clear_utc"] = utc_now_iso()
-
-        _save_yf_guard_state(state_file, state)
 
 
 def _payload(
@@ -395,15 +215,58 @@ def _serialize_sync_view(view: Any) -> dict[str, Any]:
     }
 
 
-def _resolve_ticker_context(
+def _timeframe_to_seconds(timeframe: str) -> int | None:
+    normalized = str(timeframe).strip().lower()
+    if normalized == "1m":
+        return 60
+    if normalized == "5m":
+        return 300
+    if normalized == "15m":
+        return 900
+    if normalized in {"60m", "1h"}:
+        return 3600
+    if normalized == "1d":
+        return 86400
+    if normalized == "1wk":
+        return 604800
+    if normalized == "1mo":
+        return 2592000
+    return None
+
+
+def _estimate_sync_wait_seconds(
     *,
-    market: str,
-    symbol: str,
-) -> tuple[str, str, str, yf.Ticker]:
-    market_key = _normalize_market(market)
-    symbol_key = _normalize_symbol(symbol)
-    yfinance_symbol = _to_yfinance_symbol(market=market_key, symbol=symbol_key)
-    return market_key, symbol_key, yfinance_symbol, yf.Ticker(yfinance_symbol)
+    timeframe: str,
+    requested_start: datetime,
+    requested_end: datetime,
+    missing_ranges: list[dict[str, Any]],
+) -> int | None:
+    timeframe_seconds = _timeframe_to_seconds(timeframe)
+    if timeframe_seconds is None:
+        return None
+
+    requested_span_seconds = max(
+        1,
+        int((_ensure_utc(requested_end) - _ensure_utc(requested_start)).total_seconds()),
+    )
+    expected_bars = max(1, requested_span_seconds // timeframe_seconds)
+    range_count = max(1, len(missing_ranges))
+    # Heuristic: for typical Alpaca sync jobs this yields a practical
+    # waiting estimate without exposing worker internals.
+    estimate = int((expected_bars * 0.03) + (range_count * 8))
+    return max(15, min(estimate, 900))
+
+
+def _recommended_poll_interval_seconds(estimated_wait_seconds: int | None) -> int:
+    if estimated_wait_seconds is None:
+        return 10
+    if estimated_wait_seconds <= 60:
+        return 5
+    if estimated_wait_seconds <= 180:
+        return 10
+    if estimated_wait_seconds <= 600:
+        return 20
+    return 30
 
 
 def _build_market_input_context(
@@ -416,46 +279,6 @@ def _build_market_input_context(
     if isinstance(extra_context, dict) and extra_context:
         context.update(extra_context)
     return context
-
-
-def _run_market_tool(
-    *,
-    tool: str,
-    market: str,
-    symbol: str,
-    fetch_error_code: str,
-    runner: Callable[[str, str, str, yf.Ticker], str],
-    extra_context: dict[str, Any] | None = None,
-) -> str:
-    try:
-        market_key, symbol_key, yfinance_symbol, ticker = _resolve_ticker_context(
-            market=market,
-            symbol=symbol,
-        )
-        return runner(market_key, symbol_key, yfinance_symbol, ticker)
-    except ValueError as exc:
-        return _build_error_payload(
-            tool=tool,
-            error_code="INVALID_INPUT",
-            error_message=str(exc),
-            context=_build_market_input_context(
-                market=market,
-                symbol=symbol,
-                extra_context=extra_context,
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001
-        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else fetch_error_code
-        return _build_error_payload(
-            tool=tool,
-            error_code=code,
-            error_message=f"{type(exc).__name__}: {exc}",
-            context=_build_market_input_context(
-                market=market,
-                symbol=symbol,
-                extra_context=extra_context,
-            ),
-        )
 
 
 def _normalize_market(market: str) -> str:
@@ -476,118 +299,130 @@ def _normalize_symbol(symbol: str) -> str:
     return normalized
 
 
-def _to_yfinance_symbol(*, market: str, symbol: str) -> str:
-    market_key = _normalize_market(market)
-    symbol_key = _normalize_symbol(symbol)
-
-    if market_key == "us_stocks":
-        # BRK.B -> BRK-B
-        return symbol_key.replace(".", "-")
-
-    if market_key == "crypto":
-        if symbol_key.endswith("-USD") or symbol_key.endswith("-USDT"):
-            return symbol_key.replace("-USDT", "-USD")
-        compact = symbol_key.replace("-", "").replace("/", "")
-        if compact.endswith("USDT"):
-            return f"{compact[:-4]}-USD"
-        if compact.endswith("USD"):
-            return f"{compact[:-3]}-USD"
-        return f"{compact}-USD"
-
-    if market_key == "forex":
-        if symbol_key.endswith("=X"):
-            return symbol_key
-        compact = symbol_key.replace("-", "").replace("/", "")
-        if len(compact) != 6:
-            raise ValueError(
-                f"Unsupported forex symbol '{symbol}'. Expected 6-letter pair like EURUSD."
-            )
-        return f"{compact}=X"
-
-    # futures
-    if symbol_key.endswith("=F"):
-        return symbol_key
-    return _KNOWN_FUTURES_YF_MAP.get(symbol_key, f"{symbol_key}=F")
+def _normalize_sync_provider(provider: str) -> str:
+    requested = provider.strip().lower()
+    if requested in {"", "default", "local_parquet"}:
+        return "alpaca"
+    return requested
 
 
-def _coerce_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, Mapping):
-        return dict(value)
-    return {}
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
-def _ticker_info_summary(ticker: yf.Ticker) -> dict[str, Any]:
-    info = _coerce_mapping(ticker.info)
-    if not info:
-        return {}
-    keys = [
-        "shortName",
-        "longName",
-        "symbol",
-        "exchange",
-        "market",
-        "quoteType",
-        "currency",
-        "marketCap",
-        "enterpriseValue",
-        "trailingPE",
-        "forwardPE",
-        "dividendYield",
-        "beta",
-        "fiftyTwoWeekHigh",
-        "fiftyTwoWeekLow",
-        "regularMarketPrice",
-        "regularMarketOpen",
-        "regularMarketDayHigh",
-        "regularMarketDayLow",
-        "regularMarketVolume",
-        "averageVolume",
-        "sector",
-        "industry",
-        "country",
-    ]
-    return {key: info[key] for key in keys if key in info}
+def _datetime_to_utc_z(value: datetime) -> str:
+    return _ensure_utc(value).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _ticker_fast_info_summary(
-    ticker: yf.Ticker,
-    *,
-    yfinance_symbol: str,
-) -> dict[str, Any]:
-    try:
-        fast_info = ticker.fast_info
-    except Exception:  # noqa: BLE001
-        return {}
-    if fast_info is None:
-        return {}
-    if isinstance(fast_info, Mapping):
-        getter = fast_info.get
-    elif callable(getattr(fast_info, "get", None)):
-        getter = fast_info.get
-    else:
-        return {}
+def _validate_alpaca_market(market: str) -> None:
+    if market in _ALPACA_SUPPORTED_MARKETS:
+        return
+    raise ValueError(
+        f"Market '{market}' is not supported by Alpaca in this tool. "
+        "Use one of: stock/us_stocks, crypto."
+    )
 
-    summary = {
-        "symbol": yfinance_symbol,
-        "currency": getter("currency"),
-        "exchange": getter("exchange"),
-        "marketCap": getter("marketCap"),
-        "regularMarketPrice": getter("lastPrice"),
-        "regularMarketOpen": getter("open"),
-        "regularMarketDayHigh": getter("dayHigh"),
-        "regularMarketDayLow": getter("dayLow"),
-        "regularMarketVolume": getter("lastVolume"),
-        "fiftyDayAverage": getter("fiftyDayAverage"),
-        "twoHundredDayAverage": getter("twoHundredDayAverage"),
-        "yearHigh": getter("yearHigh"),
-        "yearLow": getter("yearLow"),
+
+def _to_alpaca_timeframe(interval: str) -> str:
+    normalized = interval.strip().lower()
+    timeframe = _INTERVAL_TO_ALPACA_TIMEFRAME.get(normalized)
+    if timeframe is None:
+        raise ValueError(
+            f"Invalid interval '{interval}'. Supported intervals: {sorted(VALID_INTERVALS)}"
+        )
+    return timeframe
+
+
+def _period_start(*, period: str, anchor: datetime) -> datetime:
+    normalized = period.strip().lower()
+    if normalized not in VALID_PERIODS:
+        raise ValueError(f"Invalid period '{period}'")
+    if normalized == "ytd":
+        return datetime(anchor.year, 1, 1, tzinfo=UTC)
+    if normalized == "max":
+        return anchor - timedelta(days=365 * 10)
+
+    mapping: dict[str, timedelta] = {
+        "1d": timedelta(days=1),
+        "5d": timedelta(days=5),
+        "1mo": timedelta(days=30),
+        "3mo": timedelta(days=90),
+        "6mo": timedelta(days=180),
+        "1y": timedelta(days=365),
+        "2y": timedelta(days=365 * 2),
+        "5y": timedelta(days=365 * 5),
+        "10y": timedelta(days=365 * 10),
     }
-    return {key: value for key, value in summary.items() if value is not None}
+    return anchor - mapping[normalized]
+
+
+def _resolve_candle_window(
+    *,
+    period: str,
+    start: str | None,
+    end: str | None,
+) -> tuple[datetime, datetime | None]:
+    resolved_end = _parse_datetime_field(end, "end") if end else None
+
+    if start:
+        resolved_start = _parse_datetime_field(start, "start")
+        if resolved_end is not None and resolved_end < resolved_start:
+            raise ValueError("end must be greater than or equal to start")
+        return resolved_start, resolved_end
+
+    anchor = resolved_end or datetime.now(UTC)
+    resolved_start = _period_start(period=period, anchor=anchor)
+    return resolved_start, resolved_end
+
+
+def _bars_to_records(
+    *,
+    bars: list[OhlcvBar],
+    end: datetime | None = None,
+) -> list[dict[str, Any]]:
+    bound = _ensure_utc(end) if end is not None else None
+    records: list[dict[str, Any]] = []
+    ordered = sorted(bars, key=lambda item: _ensure_utc(item.timestamp))
+    for bar in ordered:
+        ts = _ensure_utc(bar.timestamp)
+        if bound is not None and ts > bound:
+            continue
+        records.append(
+            {
+                "datetime": _datetime_to_utc_z(ts),
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+                "volume": float(bar.volume),
+            }
+        )
+    return records
+
+
+def _metadata_from_quote(quote: QuoteSnapshot) -> dict[str, Any]:
+    return {
+        "bid": float(quote.bid) if quote.bid is not None else None,
+        "ask": float(quote.ask) if quote.ask is not None else None,
+        "last": float(quote.last) if quote.last is not None else None,
+        "timestamp_utc": _datetime_to_utc_z(quote.timestamp),
+    }
+
+
+def _metadata_from_bar(bar: OhlcvBar) -> dict[str, Any]:
+    return {
+        "last": float(bar.close),
+        "timestamp_utc": _datetime_to_utc_z(bar.timestamp),
+    }
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = exc.response
+        if response is not None and response.status_code == 429:
+            return True
     error_text = str(exc).lower()
     hints = (
         "too many requests",
@@ -597,69 +432,8 @@ def _is_rate_limit_error(exc: Exception) -> bool:
         "response code=429",
         "http 429",
         "429 client error",
-        "yf ratelimiterror",
     )
     return any(hint in error_text for hint in hints)
-
-
-def _retry_yfinance_call(func: Any, *args: Any, **kwargs: Any) -> Any:
-    delays = (0.6, 1.2)
-    for attempt in range(len(delays) + 1):
-        try:
-            _record_yf_request_and_maybe_clear_cache()
-            return func(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001
-            if attempt >= len(delays) or not _is_rate_limit_error(exc):
-                raise
-            _clear_yfinance_cache()
-            time.sleep(delays[attempt])
-
-
-def _retry_optional_yfinance_call(
-    func: Any,
-    *args: Any,
-    default: Any,
-    **kwargs: Any,
-) -> Any:
-    """Best-effort fetch for optional yfinance endpoints.
-
-    Some endpoints (notably ``Ticker.info``) are far more prone to Yahoo 429s
-    than others. For these optional fields we degrade gracefully instead of
-    failing the entire tool call.
-    """
-    try:
-        return _retry_yfinance_call(func, *args, **kwargs)
-    except Exception as exc:  # noqa: BLE001
-        if _is_rate_limit_error(exc):
-            return default
-        raise
-
-
-def _history_to_records(history_df: Any) -> list[dict[str, Any]]:
-    if history_df.empty:
-        return []
-
-    normalized = history_df.copy()
-    if getattr(normalized.index, "tz", None) is not None:
-        datetimes = normalized.index.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-    else:
-        datetimes = normalized.index.strftime("%Y-%m-%dT%H:%M:%SZ")
-    normalized = normalized.assign(datetime=datetimes)
-
-    has_volume = "Volume" in normalized.columns
-    records = []
-    for _, row in normalized.iterrows():
-        records.append(
-            {
-                "datetime": row["datetime"],
-                "open": float(row.get("Open", 0.0)),
-                "high": float(row.get("High", 0.0)),
-                "low": float(row.get("Low", 0.0)),
-                "close": float(row.get("Close", 0.0)),
-                "volume": float(row.get("Volume", 0.0)) if has_volume else 0.0,
-            }
-        )
-    return records
 
 
 def _symbol_available_in_market(
@@ -801,7 +575,7 @@ def get_symbol_data_coverage(market: str, symbol: str) -> str:
 
 
 
-def get_symbol_candles(
+async def get_symbol_candles(
     symbol: str,
     market: str,
     period: str = "1d",
@@ -815,91 +589,9 @@ def get_symbol_candles(
 
     Provide `symbol` and `market`.
     """
-    def _runner(
-        market_key: str,
-        symbol_key: str,
-        yfinance_symbol: str,
-        ticker: yf.Ticker,
-    ) -> str:
-        if interval not in VALID_INTERVALS:
-            raise ValueError(f"Invalid interval '{interval}'")
-        if not start and period not in VALID_PERIODS:
-            raise ValueError(f"Invalid period '{period}'")
-
-        kwargs: dict[str, Any] = {
-            "interval": interval,
-            "auto_adjust": False,
-            "actions": False,
-        }
-        if start:
-            kwargs["start"] = start
-            if end:
-                kwargs["end"] = end
-        else:
-            kwargs["period"] = period
-
-        try:
-            history_df = _retry_yfinance_call(ticker.history, **kwargs)
-        except Exception as exc:  # noqa: BLE001
-            if _is_rate_limit_error(exc) and interval in {
-                "1m",
-                "2m",
-                "5m",
-                "15m",
-                "30m",
-                "60m",
-                "90m",
-                "1h",
-            }:
-                fallback_kwargs = dict(kwargs)
-                fallback_kwargs["interval"] = "1d"
-                if "period" in fallback_kwargs:
-                    fallback_kwargs["period"] = "1mo"
-                history_df = _retry_yfinance_call(ticker.history, **fallback_kwargs)
-            else:
-                raise
-
-        records = _history_to_records(history_df)
-        if not records:
-            return _build_error_payload(
-                tool="get_symbol_candles",
-                error_code="CANDLES_NOT_FOUND",
-                error_message=f"No candles found for {symbol_key}",
-                context={
-                    "market": market_key,
-                    "symbol": symbol_key,
-                    "yfinance_symbol": yfinance_symbol,
-                    "period": period,
-                    "interval": interval,
-                },
-            )
-
-        safe_limit = max(1, min(limit, 2000))
-        truncated = len(records) > safe_limit
-        if truncated:
-            records = records[-safe_limit:]
-        return _build_success_payload(
-            tool="get_symbol_candles",
-            data={
-                "market": market_key,
-                "symbol": symbol_key,
-                "yfinance_symbol": yfinance_symbol,
-                "period": period,
-                "interval": interval,
-                "start": start,
-                "end": end,
-                "rows": len(records),
-                "truncated": truncated,
-                "candles": records,
-            },
-        )
-
-    return _run_market_tool(
-        tool="get_symbol_candles",
+    context = _build_market_input_context(
         market=market,
         symbol=symbol,
-        fetch_error_code="CANDLES_FETCH_ERROR",
-        runner=_runner,
         extra_context={
             "period": period,
             "interval": interval,
@@ -908,61 +600,140 @@ def get_symbol_candles(
         },
     )
 
+    try:
+        market_key = _normalize_market(market)
+        _validate_alpaca_market(market_key)
+        symbol_key = _normalize_symbol(symbol)
+        timeframe = _to_alpaca_timeframe(interval)
+        requested_start, requested_end = _resolve_candle_window(
+            period=period,
+            start=start,
+            end=end,
+        )
+        safe_limit = max(1, min(int(limit), 2000))
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="get_symbol_candles",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context=context,
+        )
 
-def get_symbol_metadata(symbol: str, market: str) -> str:
+    client = AlpacaMarketDataClient()
+    try:
+        bars = await client.fetch_ohlcv(
+            symbol=symbol_key,
+            market=market_key,
+            timeframe=timeframe,
+            since=requested_start,
+            limit=safe_limit,
+        )
+    except Exception as exc:  # noqa: BLE001
+        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "CANDLES_FETCH_ERROR"
+        return _build_error_payload(
+            tool="get_symbol_candles",
+            error_code=code,
+            error_message=f"{type(exc).__name__}: {exc}",
+            context=context,
+        )
+    finally:
+        await client.aclose()
+
+    records = _bars_to_records(
+        bars=bars,
+        end=requested_end,
+    )
+    if not records:
+        return _build_error_payload(
+            tool="get_symbol_candles",
+            error_code="CANDLES_NOT_FOUND",
+            error_message=f"No candles found for {symbol_key}",
+            context=context,
+        )
+
+    truncated = len(records) > safe_limit
+    if truncated:
+        records = records[-safe_limit:]
+    return _build_success_payload(
+        tool="get_symbol_candles",
+        data={
+            "market": market_key,
+            "symbol": symbol_key,
+            "provider": "alpaca",
+            "period": period,
+            "interval": interval,
+            "start": start,
+            "end": end,
+            "rows": len(records),
+            "truncated": truncated,
+            "candles": records,
+        },
+    )
+
+
+async def get_symbol_metadata(symbol: str, market: str) -> str:
     """
-    Get symbol/company metadata from yfinance.
+    Get latest symbol metadata from Alpaca.
 
     Provide `symbol` and `market`.
     """
-    def _runner(
-        market_key: str,
-        symbol_key: str,
-        yfinance_symbol: str,
-        ticker: yf.Ticker,
-    ) -> str:
-        info = _coerce_mapping(
-            _retry_optional_yfinance_call(
-                lambda: ticker.info,
-                default={},
-            )
+    context = _build_market_input_context(market=market, symbol=symbol)
+    try:
+        market_key = _normalize_market(market)
+        _validate_alpaca_market(market_key)
+        symbol_key = _normalize_symbol(symbol)
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="get_symbol_metadata",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context=context,
         )
-        metadata_source = "info"
-        if not info:
-            info = _ticker_fast_info_summary(
-                ticker,
-                yfinance_symbol=yfinance_symbol,
+
+    client = AlpacaMarketDataClient()
+    try:
+        quote = await client.fetch_latest_quote(symbol_key, market=market_key)
+        if quote is not None:
+            return _build_success_payload(
+                tool="get_symbol_metadata",
+                data={
+                    "market": market_key,
+                    "symbol": symbol_key,
+                    "provider": "alpaca",
+                    "metadata_source": "latest_quote",
+                    "metadata": _metadata_from_quote(quote),
+                },
             )
-            metadata_source = "fast_info"
-        if not info:
+
+        latest_bar = await client.fetch_latest_bar(symbol_key, market=market_key)
+        if latest_bar is None:
             return _build_error_payload(
                 tool="get_symbol_metadata",
                 error_code="METADATA_NOT_FOUND",
                 error_message=f"No metadata found for {symbol_key}",
-                context={
-                    "market": market_key,
-                    "symbol": symbol_key,
-                    "yfinance_symbol": yfinance_symbol,
-                },
+                context=context,
             )
+
         return _build_success_payload(
             tool="get_symbol_metadata",
             data={
                 "market": market_key,
                 "symbol": symbol_key,
-                "yfinance_symbol": yfinance_symbol,
-                "metadata_source": metadata_source,
-                "metadata": info,
+                "provider": "alpaca",
+                "metadata_source": "latest_bar",
+                "metadata": _metadata_from_bar(latest_bar),
             },
         )
-
-    return _run_market_tool(
-        tool="get_symbol_metadata",
-        market=market,
-        symbol=symbol,
-        fetch_error_code="METADATA_FETCH_ERROR",
-        runner=_runner,
-    )
+    except Exception as exc:  # noqa: BLE001
+        code = "UPSTREAM_RATE_LIMIT" if _is_rate_limit_error(exc) else "METADATA_FETCH_ERROR"
+        return _build_error_payload(
+            tool="get_symbol_metadata",
+            error_code=code,
+            error_message=f"{type(exc).__name__}: {exc}",
+            context=context,
+        )
+    finally:
+        await client.aclose()
 
 
 def market_data_detect_missing_ranges(
@@ -1082,12 +853,22 @@ async def market_data_fetch_missing_ranges(
         )
 
     normalized_ranges = serialize_missing_ranges(deserialize_missing_ranges(missing_ranges or []))
+    normalized_provider = _normalize_sync_provider(provider)
+    estimated_wait_seconds = _estimate_sync_wait_seconds(
+        timeframe=timeframe,
+        requested_start=requested_start,
+        requested_end=requested_end,
+        missing_ranges=list(normalized_ranges),
+    )
+    recommended_poll_interval_seconds = _recommended_poll_interval_seconds(
+        estimated_wait_seconds
+    )
 
     try:
         async with await _new_db_session() as db:
             receipt = await create_market_data_sync_job(
                 db,
-                provider=provider,
+                provider=normalized_provider,
                 market=market,
                 symbol=symbol,
                 timeframe=timeframe,
@@ -1098,7 +879,9 @@ async def market_data_fetch_missing_ranges(
                 auto_commit=True,
             )
 
-            queued_task_id = await schedule_market_data_sync_job(receipt.job_id)
+            queued_task_id: str | None = None
+            if not receipt.deduplicated:
+                queued_task_id = await schedule_market_data_sync_job(receipt.job_id)
             view = await get_market_data_sync_job_view(
                 db,
                 job_id=receipt.job_id,
@@ -1108,6 +891,11 @@ async def market_data_fetch_missing_ranges(
             data = _serialize_sync_view(view)
             data["queued_task_id"] = queued_task_id
             data["run_async"] = True
+            data["provider_requested"] = provider
+            data["estimated_wait_seconds"] = estimated_wait_seconds
+            data["recommended_poll_interval_seconds"] = recommended_poll_interval_seconds
+            # Alias kept for prompt backward compatibility.
+            data["recommended_next_poll_seconds"] = recommended_poll_interval_seconds
             return _build_success_payload(
                 tool="market_data_fetch_missing_ranges",
                 data=data,
@@ -1118,7 +906,8 @@ async def market_data_fetch_missing_ranges(
             error_code="NO_MISSING_DATA",
             error_message=str(exc),
             context={
-                "provider": provider,
+                "provider": normalized_provider,
+                "provider_requested": provider,
                 "market": market,
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -1129,7 +918,10 @@ async def market_data_fetch_missing_ranges(
             tool="market_data_fetch_missing_ranges",
             error_code="PROVIDER_UNAVAILABLE",
             error_message=str(exc),
-            context={"provider": provider},
+            context={
+                "provider": normalized_provider,
+                "provider_requested": provider,
+            },
         )
     except (MarketDataSyncInputError, ValueError) as exc:
         return _build_error_payload(
@@ -1189,13 +981,13 @@ async def market_data_get_sync_job(
 
 
 
-def market_data_get_candles(
+async def market_data_get_candles(
     symbol: str,
     interval: str = "1d",
     limit: int = 30,
 ) -> str:
     """Backward compatibility alias for candles tool."""
-    return get_symbol_candles(
+    return await get_symbol_candles(
         symbol=symbol,
         market="us_stocks",
         period="1mo",

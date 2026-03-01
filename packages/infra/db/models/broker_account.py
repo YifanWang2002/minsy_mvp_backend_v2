@@ -6,7 +6,16 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,7 +32,7 @@ class BrokerAccount(Base):
 
     __tablename__ = "broker_accounts"
     __table_args__ = (
-        CheckConstraint("provider IN ('alpaca', 'ccxt')", name="ck_broker_accounts_provider"),
+        CheckConstraint("provider IN ('alpaca', 'ccxt', 'sandbox')", name="ck_broker_accounts_provider"),
         CheckConstraint("mode = 'paper'", name="ck_broker_accounts_mode_paper_only"),
         CheckConstraint(
             "status IN ('active', 'inactive', 'error')",
@@ -33,6 +42,24 @@ class BrokerAccount(Base):
             "updated_source IN ('api', 'manual', 'system')",
             name="ck_broker_accounts_updated_source",
         ),
+        # Keep one active default broker per user+mode (paper today).
+        Index(
+            "uq_broker_accounts_user_mode_default_active",
+            "user_id",
+            "mode",
+            unique=True,
+            postgresql_where=text("is_default = true AND status = 'active'"),
+        ),
+        # One active account identity per user/provider/exchange/account_uid.
+        Index(
+            "uq_broker_accounts_user_provider_exchange_account_uid_active",
+            "user_id",
+            "provider",
+            "exchange_id",
+            "account_uid",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
     )
 
     user_id: Mapped[UUID] = mapped_column(
@@ -41,6 +68,18 @@ class BrokerAccount(Base):
         index=True,
     )
     provider: Mapped[str] = mapped_column(String(20), nullable=False)
+    exchange_id: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    account_uid: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        default="",
+        server_default="",
+    )
     mode: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -67,6 +106,18 @@ class BrokerAccount(Base):
         default="active",
         server_default="active",
     )
+    is_default: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    is_sandbox: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
     last_validated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
@@ -75,7 +126,14 @@ class BrokerAccount(Base):
         String(64),
         nullable=True,
     )
+    last_validation_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    capabilities: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
     validation_metadata: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,

@@ -5,6 +5,8 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from apps.api.agents.skills.state_compact import compact_state_block
+
 _SKILLS_DIR = Path(__file__).parent
 _KYC_SKILLS_MD = _SKILLS_DIR / "kyc" / "skills.md"
 _KYC_STAGE_DIR = _SKILLS_DIR / "kyc" / "stages"
@@ -112,13 +114,14 @@ def build_kyc_dynamic_state(
     has_missing = bool(missing_fields)
     next_missing = missing_fields[0] if missing_fields else "none"
 
-    return (
-        "[SESSION STATE]\n"
-        f"- already_collected: {collected_str}\n"
-        f"- still_missing: {missing_str}\n"
-        f"- has_missing_fields: {str(has_missing).lower()}\n"
-        f"- next_missing_field: {next_missing}\n"
-        "[/SESSION STATE]\n\n"
+    return compact_state_block(
+        items=(
+            ("phase", "kyc"),
+            ("collected", collected_str),
+            ("missing", missing_str),
+            ("has_missing", has_missing),
+            ("next_missing", next_missing),
+        )
     )
 
 

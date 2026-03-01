@@ -412,10 +412,111 @@ cloudflared tunnel run dev-tunnel
   - `service: http://127.0.0.1:8110`
 
 ---
-## 11. 当前阶段说明
+## 11. 当前阶段说明（按真实代码状态，更新于 2026-02-27）
 
-当前为 Early MVP（v0.1.0）：
+当前仍是 MVP 阶段，但交易与 broker 能力已经进入可用态（paper 方向）：
 
 - 对话编排、策略管理、回测、部署监控主链路已打通。
+- broker 层已支持 `alpaca` / `ccxt` / `sandbox` 三类 provider（均为 paper 工作流）。
 - `stress_test` phase 仍保留 legacy 兼容路径，产品主路径以 `strategy` 内迭代为主。
 - 前端 `Community Strategies` 区块目前仍是 mock（不由 backend 动态供数）。
+
+### 11.1 Broker 对接完成度（Step 1-8）
+
+| Step | 主题 | 当前状态 |
+| --- | --- | --- |
+| Step 1 | BrokerAccount 数据模型正规化 | 基本完成 |
+| Step 2 | Provider/Exchange 能力注册 | 部分完成 |
+| Step 3 | CCXT 认证与下单稳健化 | 大部分完成 |
+| Step 4 | 内置 Sandbox Broker 执行器 | MVP 已完成 |
+| Step 5 | Sandbox 行情与撮合规则 | 部分完成 |
+| Step 6 | API 合约升级（多 Broker） | 大部分完成 |
+| Step 7 | Deployment 路由策略与回退 | 部分完成 |
+| Step 8 | 可观测性与 SLO | 部分完成 |
+
+### 11.2 已完成的关键能力
+
+- BrokerAccount 结构化字段与约束已落地：
+  - `exchange_id / account_uid / is_default / is_sandbox / capabilities / last_validation_error_code`
+  - 约束：同用户 active 默认账户唯一；同用户 active broker identity 唯一
+- API 已支持：
+  - broker account create/list/get/rotate/validate/deactivate/set-default
+  - `provider=sandbox` 的账户创建与验证
+- CCXT：
+  - OKX demo 兼容处理已内置（REST 域名、`x-simulated-trading`、`tdMode=cash`、`clOrdId`）
+  - passphrase（password）按交易所要求校验（OKX 必填）
+- 内置 Sandbox：
+  - 行情来源为 Alpaca REST（quote/1m bar）
+  - 支持内部模拟下单、持仓更新、realized/unrealized PnL 更新
+  - 支持 `starting_cash`、`slippage_bps`、`fee_bps`（按 broker account metadata 配置）
+  - 支持按市场大类覆盖：`slippage_bps_by_asset_class`、`fee_bps_by_asset_class`
+  - 支持 PostgreSQL `sandbox_ledger_entries` 落账（订单成交事件）
+
+### 11.3 Sandbox 当前能力边界（务必知晓）
+
+- 当前是“即时成交”模拟，不是完整撮合引擎：
+  - 暂无订单簿深度、排队、部分成交、延迟撮合模型
+- 手续费虽支持按资产大类 `fee_bps` 配置，但尚未支持 maker/taker、分交易所阶梯费率
+- 账户状态主存 Redis（按 `sandbox:account:*` key 管理）；PostgreSQL ledger 已有，但还未做到“仅靠 ledger 完整重放账户状态”
+- 每个 deployment 当前仅绑定一个 broker account，暂未支持同 deployment 自动多 broker 主备路由
+
+### 11.4 Sandbox 账户创建建议参数
+
+当使用 `provider=sandbox` 创建 broker account 时，可在 `metadata` 中设置：
+
+- `starting_cash`：初始资金，默认 `100000`
+- `slippage_bps`：全局滑点基点，默认 `0`
+- `fee_bps`：全局手续费基点，默认 `0`
+- `slippage_bps_by_asset_class`：按市场大类覆盖滑点（`us_equity/crypto/forex/futures`）
+- `fee_bps_by_asset_class`：按市场大类覆盖手续费（`us_equity/crypto/forex/futures`）
+
+示例（请求体片段）：
+
+```json
+{
+  "provider": "sandbox",
+  "mode": "paper",
+  "credentials": {},
+  "metadata": {
+    "starting_cash": "10000",
+    "slippage_bps": "2",
+    "fee_bps": "1",
+    "slippage_bps_by_asset_class": {
+      "crypto": "8",
+      "us_equity": "2"
+    },
+    "fee_bps_by_asset_class": {
+      "crypto": "15",
+      "us_equity": "1"
+    }
+  }
+}
+```
+
+### 11.5 当前回归建议（交易链路）
+
+建议优先跑以下测试集验证 broker/sandbox 主链路：
+
+```bash
+uv run pytest -q \
+  test/domain/trading_runtime/test_sandbox_trading_adapter_live.py \
+  test/domain/trading_runtime/test_broker_provider_service_live.py \
+  test/domain/trading_runtime/test_runtime_service_qty_sync_live.py \
+  test/api/broker_accounts/test_broker_accounts_lifecycle_live.py \
+  test/api/broker_accounts/test_broker_accounts_negative_live.py \
+  test/api/system/test_status_live.py \
+  test/celery/worker_io/test_worker_io_tasks_live.py
+```
+
+### 11.6 尚未完成清单（你关心的交易能力）
+
+| 主题 | 当前状态 | 说明 |
+| --- | --- | --- |
+| PostgreSQL sandbox ledger | 部分完成 | 已新增 `sandbox_ledger_entries` 并在 sandbox 成交时落账；但账户主状态仍在 Redis，尚未支持 ledger 全量重放。 |
+| 自定义起始资金（starting_cash） | 部分完成 | 已支持按单个 sandbox broker account 在 `metadata.starting_cash` 配置；但还没有批量更新接口、强校验和历史版本化。 |
+| 手续费模型（fee） | 部分完成 | 已支持 `fee_bps` 与 `fee_bps_by_asset_class`；但未支持 maker/taker、按交易所阶梯费率、最低收费规则。 |
+| 滑点模型（slippage） | 部分完成 | 已支持 `slippage_bps` 与 `slippage_bps_by_asset_class`；但没有按 symbol/时段/波动率的动态滑点模型，也没有批量配置接口。 |
+| 多 broker 自动主备路由 | 未完成 | 每个 deployment 目前只绑定一个 broker account，未支持同 deployment 的 primary/fallback 自动切换。 |
+| Provider/Exchange 细粒度能力注册表 | 部分完成 | 当前有默认 capabilities 与 CCXT catalog，但没有独立 capability registry + 协商层。 |
+| CCXT 统一约束预检 | 部分完成 | OKX 关键兼容已做；但通用最小下单量/步进/价格精度预检与自动 rounding 仍需补全。 |
+| Broker 级观测与 SLO 分解 | 部分完成 | `/status` 可看 live_trading 总体健康；缺 provider/exchange 维度成功率、延迟、错误率分解。 |

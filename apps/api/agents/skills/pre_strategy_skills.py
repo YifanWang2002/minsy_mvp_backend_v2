@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
-import re
 
+from apps.api.agents.skills.state_compact import compact_state_block
 from packages.domain.market_data.data import DataLoader
 
 _SKILLS_DIR = Path(__file__).parent
@@ -238,10 +239,18 @@ def get_tradingview_symbol_for_market_instrument(
         return symbol
 
     if market_key == "futures":
-        compact = symbol.replace("=F", "")
-        if compact.endswith("1!"):
-            return compact
-        return f"{compact}1!"
+        compact = symbol.replace("=F", "").rstrip("!")
+        # Futures are NOT supported in the TradingView embedded widget.
+        # Map to the closest ETF / spot proxy instead.
+        futures_to_proxy: dict[str, str] = {
+            "ES": "SPY",
+            "NQ": "QQQ",
+            "GC": "XAUUSD",
+            "CL": "USOIL",
+            "RTY": "IWM",
+            "YM": "DIA",
+        }
+        return futures_to_proxy.get(compact, compact)
 
     return symbol
 
@@ -363,6 +372,9 @@ def build_pre_strategy_dynamic_state(
         market=target_market,
         instrument=target_instrument,
     )
+    download_lookback_days_for_missing_symbol = 730
+    download_default_timeframe = "1m"
+    download_eta_hint_minutes = 2
 
     market_list_str = (
         ", ".join(market_catalog.keys())
@@ -376,22 +388,31 @@ def build_pre_strategy_dynamic_state(
         else "omitted - not required for current next_missing_field"
     )
 
-    return (
-        "[SESSION STATE]\n"
-        "- phase: pre_strategy\n"
-        f"- kyc_profile: {kyc_str}\n"
-        f"- already_collected: {pre_collected_str}\n"
-        f"- still_missing: {missing_str}\n"
-        f"- has_missing_fields: {str(has_missing).lower()}\n"
-        f"- next_missing_field: {next_missing}\n"
-        f"- available_markets: {available_markets_line}\n"
-        f"- target_market: {target_market or 'none'}\n"
-        f"- target_instrument: {target_instrument or 'none'}\n"
-        f"- allowed_instruments_for_target_market: {allowed_instruments_str}\n"
-        f"- mapped_market_data_symbol_for_target_instrument: {mapped_market_data_symbol}\n"
-        f"- mapped_tradingview_symbol_for_target_instrument: {mapped_tradingview_symbol}\n"
-        f"- symbol_newly_provided_this_turn_hint: {str(symbol_newly_provided_this_turn_hint).lower()}\n"
-        f"- inferred_instrument_from_user_message: "
-        f"{normalize_instrument_value(inferred_instrument_from_user_message) if inferred_instrument_from_user_message else 'none'}\n"
-        "[/SESSION STATE]\n\n"
+    inferred_instrument = (
+        normalize_instrument_value(inferred_instrument_from_user_message)
+        if inferred_instrument_from_user_message
+        else "none"
+    )
+
+    return compact_state_block(
+        items=(
+            ("phase", "pre_strategy"),
+            ("kyc_profile", kyc_str),
+            ("collected", pre_collected_str),
+            ("missing", missing_str),
+            ("has_missing", has_missing),
+            ("next_missing", next_missing),
+            ("available_markets", available_markets_line),
+            ("target_market", target_market or "none"),
+            ("target_instrument", target_instrument or "none"),
+            ("allowed_instruments", allowed_instruments_str),
+            ("mapped_market_data_symbol", mapped_market_data_symbol),
+            ("mapped_tradingview_symbol", mapped_tradingview_symbol),
+            ("download_requires_user_confirmation", True),
+            ("download_lookback_days", download_lookback_days_for_missing_symbol),
+            ("download_default_timeframe", download_default_timeframe),
+            ("download_eta_hint_minutes", download_eta_hint_minutes),
+            ("symbol_newly_provided_hint", symbol_newly_provided_this_turn_hint),
+            ("inferred_instrument", inferred_instrument),
+        )
     )

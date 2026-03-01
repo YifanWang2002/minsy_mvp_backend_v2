@@ -1,6 +1,14 @@
 """Market-data domain package exports."""
 
 from packages.domain.market_data.aggregator import AggregatedBar, BarAggregator
+from packages.domain.market_data.catalog_service import (
+    CatalogEntry,
+    get_symbol_coverage,
+    mark_accessed,
+    scan_and_sync_catalog,
+    upsert_catalog_entry,
+    upsert_catalog_entry_from_parquet,
+)
 from packages.domain.market_data.factor_cache import (
     FactorCache,
     FactorCacheStats,
@@ -33,6 +41,7 @@ from packages.domain.market_data.sync_service import (
 __all__ = [
     "AggregatedBar",
     "BarAggregator",
+    "CatalogEntry",
     "FactorCache",
     "FactorCacheStats",
     "MarketDataNoMissingDataError",
@@ -51,7 +60,11 @@ __all__ = [
     "execute_market_data_sync_job_with_fresh_session",
     "factor_signature",
     "get_market_data_sync_job_view",
+    "get_symbol_coverage",
+    "mark_accessed",
     "market_data_runtime",
+    "scan_and_sync_catalog",
     "schedule_market_data_sync_job",
+    "upsert_catalog_entry",
+    "upsert_catalog_entry_from_parquet",
 ]
-

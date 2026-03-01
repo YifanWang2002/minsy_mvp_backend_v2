@@ -39,6 +39,39 @@ If any required field is still missing in this turn, emit `<AGENT_UI_JSON>` for 
 When selected instrument is known and market snapshot is requested, you may emit an additional
 `tradingview_chart` block in the same turn before the choice block.
 
+## Market Data Download Workflow (MUST)
+- Goal: minimize MCP calls while handling symbols not in local storage.
+- Default workflow for user-provided symbol:
+  1) `check_symbol_available(symbol, market)` once.
+  2) If `available=true`, continue pre-strategy collection; only call `get_symbol_data_coverage` when date bounds are needed.
+  3) If `available=false`, do NOT auto-download. Ask user to choose:
+     - use existing mainstream local assets, or
+     - download the extra symbol.
+- New-data pull trigger (all required):
+  - user explicitly wants this symbol (not fallback mainstream symbol),
+  - user agrees to wait,
+  - and you receive explicit consent sentence before download tool call.
+- Download consent is mandatory:
+  - You must explicitly ask for consent before any `market_data_fetch_missing_ranges` call.
+  - Suggest wait-time guidance in prompt text, for example: about 1-2 minutes.
+  - Mandatory confirmation sentence pattern:
+    - zh: "请确认：是否现在下载该标的近两年1分钟数据（约1-2分钟）？"
+    - en: "Please confirm: should I download ~2 years of 1m data now (about 1-2 minutes)?"
+- If user confirms download:
+  - Optional but preferred: call `market_data_detect_missing_ranges` first to avoid unnecessary full-window sync.
+  - Call `market_data_fetch_missing_ranges(provider="alpaca", market, symbol, timeframe="1m", start_date, end_date, run_async=true)`.
+  - `provider` must be the exact literal string `"alpaca"` (never `"default"`).
+  - Use a near-two-year window by default (`end_date=now_utc`, `start_date=end_date-730 days`).
+  - Then poll with `market_data_get_sync_job(sync_job_id)` until terminal status or reasonable wait checkpoint.
+  - Use `estimated_wait_seconds` and `recommended_poll_interval_seconds` returned by fetch response to decide polling cadence.
+- If user does not confirm download:
+  - Do not call download tools.
+  - Continue with local mainstream alternatives.
+- Failure downgrade strategy:
+  - If fetch/poll returns `PROVIDER_UNAVAILABLE`, `MARKET_DATA_SYNC_ERROR`, or persistent timeout,
+    stop retry loop in this turn, explain failure briefly, and switch to local mainstream symbol options.
+  - Never block the entire pre-strategy collection because one symbol download failed.
+
 ## Market/Symbol Constraint (MUST)
 - If `next_missing_field=target_instrument`, options must be only from `allowed_instruments_for_target_market` in `[SESSION STATE]`.
 - Never mix symbols from other markets.
@@ -46,10 +79,11 @@ When selected instrument is known and market snapshot is requested, you may emit
 ## Symbol Format Rule for Chart (MUST)
 When displaying charts, use `mapped_tradingview_symbol_for_target_instrument` from `[SESSION STATE]`.
 - Conversion rules for tradingview chart:
-  - stock=`TICKER`
+  - stock=`TICKER` (no exchange prefix, e.g. `SPY` not `NYSE:SPY`)
   - crypto=`BINANCE:BASEUSDT`
   - forex=`FX:PAIR`
-  - futures=`SYMBOL1!`
+  - futures: use ETF/spot proxy (e.g. ES→`SPY`, NQ→`QQQ`, GC→`XAUUSD`, CL→`USOIL`)
+- Futures contracts (ES1!, NQ1!, etc.) are NOT supported in the embedded widget. Always use the proxy symbol provided in `mapped_tradingview_symbol_for_target_instrument`.
 
 ## Mandatory Presentation Rule
 For each selectable question:
@@ -109,6 +143,13 @@ Inference examples:
 4. If all required fields are collected, provide summary text and do not emit `AGENT_UI_JSON`.
 5. For `target_market`/`target_instrument`, use only ids provided in `[SESSION STATE]`.
 6. For the other two fields, use only the fixed enum ids listed in this file.
+
+## Consent Prompt Template (MUST)
+- When symbol is not local, your user-facing sentence should include:
+  - clear choice between local mainstream symbol vs extra download
+  - explicit wait expectation ("about 1-2 minutes")
+- Example style:
+  - "该标的目前不在本地数据中。你希望先用我们已有的主流资产回测，还是下载该标的近两年1分钟数据（大约需要1-2分钟）？"
 
 ## Conversation Style
 - Keep each turn concise.

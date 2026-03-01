@@ -1,0 +1,120 @@
+[
+  {
+    "label": "alpaca_user2",
+    "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+    "orders": [
+      {
+        "order_id": "622b8f5a-0505-41c2-99f9-34d13a9713f8",
+        "provider_order_id": "bfa70107-5149-4e05-b3e6-302d0849a7ae",
+        "status": "filled",
+        "provider_status": "filled",
+        "qty": 0.0005,
+        "side": "sell",
+        "symbol": "BTC/USD",
+        "reject_reason": null
+      },
+      {
+        "order_id": "ada382c4-e12c-42c7-9965-80ad7cbcd5ec",
+        "provider_order_id": "a216292c-a2d8-4195-b555-b0fd3b2d473a",
+        "status": "filled",
+        "provider_status": "filled",
+        "qty": 0.0005,
+        "side": "buy",
+        "symbol": "BTC/USD",
+        "reject_reason": null
+      }
+    ],
+    "positions": [
+      {
+        "position_id": "47f23265-838d-49b1-a0d0-e2fcb437c5ff",
+        "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+        "symbol": "BTC/USD",
+        "side": "flat",
+        "qty": 0.0,
+        "avg_entry_price": 0.0,
+        "mark_price": 65919.5155,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "created_at": "2026-02-27T13:32:17.441248Z",
+        "updated_at": "2026-02-27T13:32:24.780563Z"
+      }
+    ],
+    "pnl_count": 2,
+    "latest_pnl": {
+      "pnl_snapshot_id": "5b64a59c-55c8-4a42-b58a-274ed5fa2b11",
+      "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+      "source": "platform_estimate",
+      "equity": 98755.75,
+      "cash": 98755.75,
+      "margin_used": 0.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "snapshot_time": "2026-02-27T13:32:24.789628Z",
+      "created_at": "2026-02-27T13:32:24.780563Z",
+      "updated_at": "2026-02-27T13:32:24.780563Z"
+    }
+  },
+  {
+    "label": "ccxt_user2",
+    "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+    "orders": [],
+    "positions": [],
+    "pnl_count": 0,
+    "latest_pnl": null
+  },
+  {
+    "label": "alpaca_extra_user",
+    "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+    "orders": [
+      {
+        "order_id": "aacac2bd-88b3-4c11-97fc-d8ff8240883c",
+        "provider_order_id": "545324a3-ab84-4f2b-ab60-7d4109187e57",
+        "status": "filled",
+        "provider_status": "filled",
+        "qty": 0.0005,
+        "side": "sell",
+        "symbol": "BTC/USD",
+        "reject_reason": null
+      },
+      {
+        "order_id": "a4fff3d3-47a6-44bf-9d80-6a79b1e3bc75",
+        "provider_order_id": "382e2596-c83c-482c-94fb-f6b8505d5b6a",
+        "status": "filled",
+        "provider_status": "filled",
+        "qty": 0.0005,
+        "side": "buy",
+        "symbol": "BTC/USD",
+        "reject_reason": null
+      }
+    ],
+    "positions": [
+      {
+        "position_id": "5d500015-5756-4847-a4c3-3980b94e5026",
+        "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+        "symbol": "BTC/USD",
+        "side": "flat",
+        "qty": 0.0,
+        "avg_entry_price": 0.0,
+        "mark_price": 65919.5155,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "created_at": "2026-02-27T13:33:58.239808Z",
+        "updated_at": "2026-02-27T13:34:07.724446Z"
+      }
+    ],
+    "pnl_count": 2,
+    "latest_pnl": {
+      "pnl_snapshot_id": "35380ca7-6abc-44df-b255-5fdd481a962d",
+      "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+      "source": "platform_estimate",
+      "equity": 98755.61,
+      "cash": 98755.61,
+      "margin_used": 0.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "snapshot_time": "2026-02-27T13:34:07.734290Z",
+      "created_at": "2026-02-27T13:34:07.724446Z",
+      "updated_at": "2026-02-27T13:34:07.724446Z"
+    }
+  }
+]

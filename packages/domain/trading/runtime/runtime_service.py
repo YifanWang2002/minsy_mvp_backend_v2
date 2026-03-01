@@ -13,19 +13,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from packages.infra.providers.trading.adapters.alpaca_trading import AlpacaTradingAdapter
-from packages.infra.providers.trading.adapters.base import (
-    AccountState,
-    BrokerAdapter,
-    OhlcvBar,
-    OrderIntent,
-    PositionRecord,
+from packages.core.events.notification_events import (
+    EVENT_POSITION_CLOSED,
+    EVENT_POSITION_OPENED,
 )
-from packages.infra.providers.trading.credentials import CredentialCipher
-from packages.infra.redis.locks.deployment_lock import deployment_runtime_lock
-from packages.infra.redis.stores.runtime_state_store import runtime_state_store
-from packages.infra.redis.stores.signal_store import SignalRecord, signal_store
-from packages.shared_settings.schema.settings import settings
+from packages.domain.market_data.runtime import RuntimeBar, market_data_runtime
+from packages.domain.notification.services.notification_outbox_service import (
+    NotificationOutboxService,
+)
+from packages.domain.trading.pnl.service import PnlService
 from packages.domain.trading.runtime.circuit_breaker import (
     CircuitBreakerOpenError,
     execute_with_retry,
@@ -39,9 +35,13 @@ from packages.domain.trading.runtime.order_state_machine import (
 )
 from packages.domain.trading.runtime.risk_gate import RiskConfig, RiskContext, RiskGate
 from packages.domain.trading.runtime.signal_runtime import LiveSignalRuntime
-from packages.domain.market_data.runtime import RuntimeBar, market_data_runtime
-from packages.domain.trading.pnl.service import PnlService
-from packages.infra.db.models.broker_account import BrokerAccount
+from packages.domain.trading.services.broker_provider_service import (
+    BrokerProviderService,
+)
+from packages.domain.trading.services.trade_approval_service import TradeApprovalService
+from packages.domain.trading.services.trading_preference_service import (
+    TradingPreferenceService,
+)
 from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.deployment_run import DeploymentRun
 from packages.infra.db.models.fill import Fill
@@ -50,13 +50,17 @@ from packages.infra.db.models.order import Order
 from packages.infra.db.models.order_state_transition import OrderStateTransition
 from packages.infra.db.models.position import Position
 from packages.infra.db.models.signal_event import SignalEvent
-from packages.core.events.notification_events import (
-    EVENT_POSITION_CLOSED,
-    EVENT_POSITION_OPENED,
+from packages.infra.providers.trading.adapters.base import (
+    AccountState,
+    BrokerAdapter,
+    OhlcvBar,
+    OrderIntent,
+    PositionRecord,
 )
-from packages.domain.notification.services.notification_outbox_service import NotificationOutboxService
-from packages.domain.trading.services.trade_approval_service import TradeApprovalService
-from packages.domain.trading.services.trading_preference_service import TradingPreferenceService
+from packages.infra.redis.locks.deployment_lock import deployment_runtime_lock
+from packages.infra.redis.stores.runtime_state_store import runtime_state_store
+from packages.infra.redis.stores.signal_store import SignalRecord, signal_store
+from packages.shared_settings.schema.settings import settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,11 +85,7 @@ class ManualActionExecutionResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True, slots=True)
-class AlpacaCredentialBundle:
-    api_key: str
-    api_secret: str
-    trading_base_url: str
+_broker_provider_service = BrokerProviderService()
 
 
 def _latest_run(deployment: Deployment) -> DeploymentRun | None:
@@ -108,9 +108,44 @@ def _resolve_scope(deployment: Deployment) -> tuple[str, str, str]:
     return market, symbol, timeframe
 
 
+def _canonical_symbol(value: str) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .upper()
+        .replace("/", "")
+        .replace("-", "")
+        .replace("_", "")
+        .replace(" ", "")
+    )
+
+
+def _base_asset_symbol(value: str) -> str:
+    text = str(value or "").strip().upper()
+    if "/" in text:
+        return text.split("/", 1)[0].strip()
+    return ""
+
+
+def _symbols_match(left: str, right: str) -> bool:
+    if left.strip().upper() == right.strip().upper():
+        return True
+    canonical_left = _canonical_symbol(left)
+    canonical_right = _canonical_symbol(right)
+    if canonical_left and canonical_right and canonical_left == canonical_right:
+        return True
+    left_base = _base_asset_symbol(left)
+    right_base = _base_asset_symbol(right)
+    if left_base and canonical_right and _canonical_symbol(left_base) == canonical_right:
+        return True
+    if right_base and canonical_left and _canonical_symbol(right_base) == canonical_left:
+        return True
+    return False
+
+
 def _resolve_position_side(positions: list[Position], symbol: str) -> str:
     for position in positions:
-        if position.symbol.upper() != symbol.upper():
+        if not _symbols_match(position.symbol, symbol):
             continue
         qty = float(position.qty)
         if qty <= 0:
@@ -123,9 +158,21 @@ def _resolve_position_side(positions: list[Position], symbol: str) -> str:
 
 def _resolve_position_qty(positions: list[Position], symbol: str) -> float:
     for position in positions:
-        if position.symbol.upper() == symbol.upper():
+        if _symbols_match(position.symbol, symbol):
             return float(position.qty)
     return 0.0
+
+
+def _resolve_provider_position_qty(positions: list[PositionRecord], symbol: str) -> Decimal:
+    total = Decimal("0")
+    for position in positions:
+        if not _symbols_match(position.symbol, symbol):
+            continue
+        qty = Decimal(str(position.qty))
+        if qty <= 0:
+            continue
+        total += qty
+    return total
 
 
 def _merge_seed_bars(
@@ -173,7 +220,7 @@ def _resolve_mark_price(
             return mark
 
     for position in positions:
-        if position.symbol.upper() != symbol.upper():
+        if not _symbols_match(position.symbol, symbol):
             continue
         mark = Decimal(str(position.mark_price))
         if mark > 0:
@@ -191,7 +238,7 @@ async def _resolve_mark_price_with_provider_fallback(
     timeframe: str,
     payload: dict[str, Any],
     positions: list[Position],
-    adapter: AlpacaTradingAdapter | None,
+    adapter: BrokerAdapter | None,
 ) -> Decimal:
     mark = _resolve_mark_price(
         market=market,
@@ -250,6 +297,52 @@ def _to_decimal_or_none(value: object) -> Decimal | None:
         return None
 
 
+def _resolve_provider_filled_qty(order: Order) -> Decimal | None:
+    metadata = order.metadata_ if isinstance(order.metadata_, dict) else {}
+    parsed = _to_decimal_or_none(metadata.get("provider_filled_qty"))
+    if parsed is None or parsed <= 0:
+        return None
+    return parsed
+
+
+def _resolve_provider_fill_fee(order: Order) -> Decimal | None:
+    metadata = order.metadata_ if isinstance(order.metadata_, dict) else {}
+    for key in ("provider_fee", "provider_fill_fee", "fee"):
+        parsed = _to_decimal_or_none(metadata.get(key))
+        if parsed is None or parsed < 0:
+            continue
+        return parsed
+    return None
+
+
+async def _resolve_close_qty_against_broker(
+    *,
+    requested_qty: Decimal,
+    symbol: str,
+    adapter: BrokerAdapter | None,
+) -> tuple[Decimal, dict[str, Any]]:
+    if requested_qty <= 0:
+        return Decimal("0"), {"close_qty_source": "local_position"}
+    if adapter is None:
+        return requested_qty, {"close_qty_source": "local_position"}
+
+    metadata: dict[str, Any] = {
+        "close_qty_source": "broker_positions",
+        "close_qty_local": str(requested_qty),
+    }
+    try:
+        broker_positions = await adapter.fetch_positions()
+    except Exception as exc:  # noqa: BLE001
+        metadata["close_qty_sync"] = f"error:{type(exc).__name__}"
+        return requested_qty, metadata
+
+    broker_qty = _resolve_provider_position_qty(broker_positions, symbol)
+    metadata["close_qty_broker"] = str(broker_qty)
+    if broker_qty <= 0:
+        return Decimal("0"), metadata
+    return min(requested_qty, broker_qty), metadata
+
+
 def _parse_iso_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
@@ -301,6 +394,7 @@ def _set_broker_account_state(
 
 def _build_broker_account_payload(
     *,
+    provider: str,
     account_state: AccountState,
     positions: list[PositionRecord],
     fetched_at: datetime,
@@ -309,7 +403,7 @@ def _build_broker_account_payload(
     realized_total = sum((position.realized_pnl for position in positions), Decimal("0"))
     symbols = sorted({position.symbol.upper() for position in positions if position.symbol})
     return {
-        "provider": "alpaca",
+        "provider": provider,
         "source": "broker_reported",
         "sync_status": "ok",
         "fetched_at": fetched_at.isoformat(),
@@ -327,6 +421,7 @@ def _build_broker_account_payload(
 def _mark_broker_account_sync_error(
     *,
     run: DeploymentRun,
+    provider: str,
     error: str,
 ) -> None:
     state = run.runtime_state if isinstance(run.runtime_state, dict) else {}
@@ -334,7 +429,7 @@ def _mark_broker_account_sync_error(
     payload = dict(existing)
     payload.update(
         {
-            "provider": "alpaca",
+            "provider": provider,
             "source": "broker_reported",
             "sync_status": "error",
             "error": error[:500],
@@ -347,6 +442,7 @@ def _mark_broker_account_sync_error(
 async def _sync_broker_account_snapshot(
     *,
     run: DeploymentRun,
+    provider: str,
     adapter: BrokerAdapter,
 ) -> dict[str, Any]:
     fetched_at = datetime.now(UTC)
@@ -356,6 +452,7 @@ async def _sync_broker_account_snapshot(
     except Exception:  # noqa: BLE001
         positions = []
     payload = _build_broker_account_payload(
+        provider=provider,
         account_state=account_state,
         positions=positions,
         fetched_at=fetched_at,
@@ -383,69 +480,13 @@ def _build_risk_config(risk_limits: dict[str, Any]) -> RiskConfig:
     )
 
 
-def _extract_credential_value(credentials: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        raw = credentials.get(key)
-        if isinstance(raw, str):
-            normalized = raw.strip()
-            if normalized:
-                return normalized
-    return ""
-
-
-async def _resolve_alpaca_credentials_for_run(
+async def _build_market_data_adapter_for_run(
     *,
     db: AsyncSession,
     run: DeploymentRun,
-) -> AlpacaCredentialBundle | None:
-    account = await db.scalar(select(BrokerAccount).where(BrokerAccount.id == run.broker_account_id))
-    if account is None or account.provider != "alpaca":
-        return None
-    try:
-        credentials = CredentialCipher().decrypt(account.encrypted_credentials)
-    except Exception:  # noqa: BLE001
-        return None
-    api_key = _extract_credential_value(
-        credentials,
-        "APCA-API-KEY-ID",
-        "api_key",
-        "key",
-    )
-    api_secret = _extract_credential_value(
-        credentials,
-        "APCA-API-SECRET-KEY",
-        "api_secret",
-        "secret",
-    )
-    if not api_key or not api_secret:
-        return None
-    trading_base_url = _extract_credential_value(
-        credentials,
-        "trading_base_url",
-        "base_url",
-    )
-    if not trading_base_url:
-        trading_base_url = settings.alpaca_trading_base_url
-    return AlpacaCredentialBundle(
-        api_key=api_key,
-        api_secret=api_secret,
-        trading_base_url=trading_base_url,
-    )
-
-
-async def _build_alpaca_adapter_for_market_data(
-    *,
-    db: AsyncSession,
-    run: DeploymentRun,
-) -> AlpacaTradingAdapter | None:
-    bundle = await _resolve_alpaca_credentials_for_run(db=db, run=run)
-    if bundle is None:
-        return None
-    return AlpacaTradingAdapter(
-        api_key=bundle.api_key,
-        api_secret=bundle.api_secret,
-        trading_base_url=bundle.trading_base_url,
-    )
+) -> tuple[BrokerAdapter | None, str]:
+    binding = await _broker_provider_service.build_adapter_binding_for_run(db=db, run=run)
+    return binding.adapter, binding.provider
 
 
 async def _build_adapter_if_enabled(
@@ -455,14 +496,37 @@ async def _build_adapter_if_enabled(
 ) -> BrokerAdapter | None:
     if not settings.paper_trading_execute_orders:
         return None
-    bundle = await _resolve_alpaca_credentials_for_run(db=db, run=run)
-    if bundle is None:
-        return None
-    return AlpacaTradingAdapter(
-        api_key=bundle.api_key,
-        api_secret=bundle.api_secret,
-        trading_base_url=bundle.trading_base_url,
-    )
+    adapter, _ = await _build_market_data_adapter_for_run(db=db, run=run)
+    return adapter
+
+
+async def _resolve_close_qty_with_optional_adapter(
+    *,
+    db: AsyncSession,
+    run: DeploymentRun | None,
+    market_data_adapter: BrokerAdapter | None,
+    symbol: str,
+    requested_qty: Decimal,
+) -> tuple[Decimal, dict[str, Any]]:
+    if not settings.paper_trading_execute_orders:
+        return requested_qty, {"close_qty_source": "local_position"}
+
+    adapter = market_data_adapter
+    close_after_probe = False
+    if adapter is None and run is not None:
+        adapter = await _build_adapter_if_enabled(db=db, run=run)
+        close_after_probe = adapter is not None and adapter is not market_data_adapter
+
+    try:
+        return await _resolve_close_qty_against_broker(
+            requested_qty=requested_qty,
+            symbol=symbol,
+            adapter=adapter,
+        )
+    finally:
+        if close_after_probe and adapter is not None:
+            with suppress(Exception):
+                await adapter.aclose()
 
 
 async def _submit_order_with_resilience(
@@ -499,7 +563,7 @@ async def _seed_runtime_market_data_from_provider(
     symbol: str,
     timeframe: str,
     limit: int,
-) -> tuple[list[RuntimeBar], dict[str, Any], AlpacaTradingAdapter | None]:
+) -> tuple[list[RuntimeBar], dict[str, Any], BrokerAdapter | None]:
     metadata: dict[str, Any] = {
         "market_data_fallback": "not_attempted",
         "market_data_source": (
@@ -508,13 +572,14 @@ async def _seed_runtime_market_data_from_provider(
             else "runtime_cache"
         ),
     }
-    adapter = await _build_alpaca_adapter_for_market_data(db=db, run=run)
+    adapter, provider = await _build_market_data_adapter_for_run(db=db, run=run)
+    metadata["broker_provider"] = provider
     if adapter is None:
         metadata["market_data_fallback"] = "adapter_unavailable"
         return [], metadata, None
 
     metadata["market_data_fallback"] = "attempted"
-    metadata["market_data_source"] = "alpaca_rest_fallback"
+    metadata["market_data_source"] = f"{provider}_rest_fallback"
 
     bars_1m: list[OhlcvBar] = []
     try:
@@ -599,7 +664,7 @@ async def _refresh_symbol_mark_price_and_unrealized(
     has_open_position = False
     price_changed = False
     for position in positions:
-        if position.symbol.strip().upper() != target_symbol:
+        if not _symbols_match(position.symbol, target_symbol):
             continue
         qty = Decimal(str(position.qty))
         if qty <= 0:
@@ -667,12 +732,17 @@ def _sync_order_provider_state(
     *,
     provider_status: str,
     reject_reason: str | None = None,
+    filled_qty: Decimal | None = None,
     at: datetime | None = None,
 ) -> None:
     synced_at = at or datetime.now(UTC)
     metadata = dict(order.metadata_) if isinstance(order.metadata_, dict) else {}
     metadata["provider_status"] = provider_status
     metadata["provider_status_updated_at"] = synced_at.isoformat()
+    if filled_qty is not None:
+        parsed_qty = _to_decimal_or_none(filled_qty)
+        if parsed_qty is not None and parsed_qty >= 0:
+            metadata["provider_filled_qty"] = str(parsed_qty)
     order.metadata_ = metadata
     order.last_sync_at = synced_at
     order.provider_updated_at = synced_at
@@ -829,6 +899,7 @@ async def sync_order_status_from_adapter(
         order,
         provider_status=provider_status,
         reject_reason=state.reject_reason,
+        filled_qty=state.filled_qty,
         at=state.provider_updated_at or now,
     )
     if state.avg_fill_price is not None:
@@ -914,7 +985,7 @@ async def process_deployment_signal_cycle(
         if run is None:
             raise ValueError("Deployment run not found.")
         market, symbol, timeframe = _resolve_scope(deployment)
-        market_data_adapter: AlpacaTradingAdapter | None = None
+        market_data_adapter: BrokerAdapter | None = None
         market_data_metadata: dict[str, Any] = {}
         broker_sync_metadata: dict[str, Any] = {}
 
@@ -1007,20 +1078,30 @@ async def process_deployment_signal_cycle(
             close_broker_sync_adapter = False
             try:
                 # Account sync should not depend on order-execution toggle.
-                broker_sync_adapter = await _build_alpaca_adapter_for_market_data(db=db, run=run)
+                broker_sync_adapter, broker_provider = await _build_market_data_adapter_for_run(
+                    db=db,
+                    run=run,
+                )
                 if broker_sync_adapter is not None:
                     close_broker_sync_adapter = True
                     broker_snapshot = await _sync_broker_account_snapshot(
                         run=run,
+                        provider=broker_provider,
                         adapter=broker_sync_adapter,
                     )
                     broker_sync_metadata["broker_account_sync"] = "ok"
                     broker_sync_metadata["broker_account_fetched_at"] = broker_snapshot.get("fetched_at")
+                    broker_sync_metadata["broker_provider"] = broker_provider
                 else:
                     broker_sync_metadata["broker_account_sync"] = "skipped_adapter_unavailable"
+                    broker_sync_metadata["broker_provider"] = broker_provider
             except Exception as exc:  # noqa: BLE001
+                provider_for_error = broker_sync_metadata.get("broker_provider")
+                if not isinstance(provider_for_error, str) or not provider_for_error.strip():
+                    provider_for_error = "unknown"
                 _mark_broker_account_sync_error(
                     run=run,
+                    provider=provider_for_error,
                     error=f"broker_account_sync_failed:{type(exc).__name__}",
                 )
                 broker_sync_metadata["broker_account_sync"] = f"error:{type(exc).__name__}"
@@ -1174,7 +1255,33 @@ async def process_deployment_signal_cycle(
                     reason="no_open_position_to_close",
                     bar_time=bar_time,
                 )
-            order_qty = current_symbol_qty
+            local_close_qty = Decimal(str(current_symbol_qty))
+            order_qty_decimal, close_qty_metadata = await _resolve_close_qty_with_optional_adapter(
+                db=db,
+                run=run,
+                market_data_adapter=market_data_adapter,
+                symbol=symbol,
+                requested_qty=local_close_qty,
+            )
+            decision_metadata.update(close_qty_metadata)
+            if order_qty_decimal <= 0:
+                await db.commit()
+                await _persist_runtime_state(
+                    deployment_id=deployment.id,
+                    run=run,
+                    status="running",
+                    reason="no_open_position_to_close",
+                    signal="NOOP",
+                    bar_time=bar_time,
+                    metadata=decision_metadata or None,
+                )
+                return await _build_cycle_result(
+                    signal="NOOP",
+                    reason="no_open_position_to_close",
+                    bar_time=bar_time,
+                    metadata=decision_metadata or None,
+                )
+            order_qty = float(order_qty_decimal)
 
         if decision.signal in {"OPEN_LONG", "OPEN_SHORT"}:
             risk_gate = RiskGate()
@@ -1276,7 +1383,12 @@ async def process_deployment_signal_cycle(
             side=side,
             qty=Decimal(str(order_qty)),
             order_type="market",
-            metadata={"signal": decision.signal, "reason": decision.reason, "timeframe": timeframe},
+            metadata={
+                "signal": decision.signal,
+                "reason": decision.reason,
+                "timeframe": timeframe,
+                "market": market,
+            },
         )
 
         adapter: BrokerAdapter | None
@@ -1302,7 +1414,9 @@ async def process_deployment_signal_cycle(
                     )
                 except Exception:  # noqa: BLE001
                     # Keep local submit snapshot when immediate provider sync fails.
-                    await db.rollback()
+                    # Rolling back here expires submit_result.order and can trigger
+                    # MissingGreenlet on later attribute reads in this cycle.
+                    pass
         except CircuitBreakerOpenError:
             await db.commit()
             broker_circuit_metadata = _combine_cycle_metadata()
@@ -1433,16 +1547,19 @@ async def process_deployment_signal_cycle(
         if submit_result.order.price is not None and Decimal(str(submit_result.order.price)) > 0:
             fill_price = Decimal(str(submit_result.order.price))
         submit_result.order.price = fill_price
+        resolved_fill_qty = _resolve_provider_filled_qty(submit_result.order) or Decimal(str(order_qty))
+        resolved_fill_fee = _resolve_provider_fill_fee(submit_result.order) or Decimal("0")
         _sync_order_provider_state(
             submit_result.order,
             provider_status="filled",
+            filled_qty=resolved_fill_qty,
         )
         await _append_order_state_transition(
             db,
             order=submit_result.order,
             target_status="filled",
             reason="runtime_fill_simulated",
-            extra_metadata={"fill_price": str(fill_price), "fill_qty": str(order_qty)},
+            extra_metadata={"fill_price": str(fill_price), "fill_qty": str(resolved_fill_qty)},
         )
         fill_row = Fill(
             order_id=submit_result.order.id,
@@ -1452,8 +1569,8 @@ async def process_deployment_signal_cycle(
                 else f"sim-{submit_result.order.id.hex[:16]}-{bar_epoch}"
             ),
             fill_price=fill_price,
-            fill_qty=Decimal(str(order_qty)),
-            fee=Decimal("0"),
+            fill_qty=resolved_fill_qty,
+            fee=resolved_fill_fee,
             filled_at=bar_time or bars[-1].timestamp,
         )
         db.add(fill_row)
@@ -1462,10 +1579,10 @@ async def process_deployment_signal_cycle(
             deployment_id=deployment.id,
             symbol=symbol,
             signal=decision.signal,
-            fill_qty=Decimal(str(order_qty)),
+            fill_qty=resolved_fill_qty,
             fill_price=fill_price,
             current_position_side=position_side,
-            fill_fee=Decimal("0"),
+            fill_fee=resolved_fill_fee,
         )
         updated_position = await db.scalar(
             select(Position).where(
@@ -1488,7 +1605,7 @@ async def process_deployment_signal_cycle(
             deployment=deployment,
             order=submit_result.order,
             signal=decision.signal,
-            qty=Decimal(str(order_qty)),
+            qty=resolved_fill_qty,
             fill_price=fill_price,
             reason=decision.reason,
             occurred_at=bar_time or bars[-1].timestamp,
@@ -1500,7 +1617,11 @@ async def process_deployment_signal_cycle(
         snapshot = await pnl_service.build_snapshot(db, deployment_id=deployment.id)
         await pnl_service.persist_snapshot(db, snapshot=snapshot)
         success_metadata = _combine_cycle_metadata(
-            {"order_id": str(submit_result.order.id), "idempotent_hit": submit_result.idempotent_hit}
+            {
+                "order_id": str(submit_result.order.id),
+                "idempotent_hit": submit_result.idempotent_hit,
+                "fill_fee": str(resolved_fill_fee),
+            }
         )
         await _persist_runtime_state(
             deployment_id=deployment.id,
@@ -1621,7 +1742,7 @@ async def execute_manual_trade_action(
     action: ManualTradeAction,
 ) -> ManualActionExecutionResult:
     lease = await deployment_runtime_lock.acquire(deployment_id)
-    market_data_adapter: AlpacaTradingAdapter | None = None
+    market_data_adapter: BrokerAdapter | None = None
     if lease is None:
         payload = action.payload if isinstance(action.payload, dict) else {}
         action.status = "rejected"
@@ -1684,7 +1805,7 @@ async def execute_manual_trade_action(
 
         run = _latest_run(deployment)
         if run is not None:
-            market_data_adapter = await _build_alpaca_adapter_for_market_data(db=db, run=run)
+            market_data_adapter, _ = await _build_market_data_adapter_for_run(db=db, run=run)
         if action.action == "stop":
             deployment.status = "stopped"
             deployment.stopped_at = datetime.now(UTC)
@@ -1748,8 +1869,20 @@ async def execute_manual_trade_action(
                 return await _reject("qty_required_for_reduce")
             qty = requested_qty or current_symbol_qty
             qty = min(qty, current_symbol_qty)
+            qty, close_qty_metadata = await _resolve_close_qty_with_optional_adapter(
+                db=db,
+                run=run,
+                market_data_adapter=market_data_adapter,
+                symbol=symbol,
+                requested_qty=qty,
+            )
+            if isinstance(close_qty_metadata, dict) and close_qty_metadata:
+                payload = {
+                    **payload,
+                    "_close_qty": close_qty_metadata,
+                }
             if qty <= 0:
-                return await _reject("invalid_qty")
+                return await _reject("no_open_position_to_close")
         else:
             return await _reject("unsupported_action")
 
@@ -1795,6 +1928,7 @@ async def execute_manual_trade_action(
                 "signal": signal,
                 "manual_action_id": str(action.id),
                 "action": action.action,
+                "market": market,
             },
         )
 
@@ -1832,12 +1966,17 @@ async def execute_manual_trade_action(
 
         order_id = submit_result.order.id
         if not submit_result.idempotent_hit:
-            fill_fee = _to_decimal_or_none(payload.get("fee")) or Decimal("0")
+            fill_fee = (
+                _to_decimal_or_none(payload.get("fee"))
+                or _resolve_provider_fill_fee(submit_result.order)
+                or Decimal("0")
+            )
+            resolved_fill_qty = _resolve_provider_filled_qty(submit_result.order) or qty
             fill_row = Fill(
                 order_id=order_id,
                 provider_fill_id=f"sim-manual-{order_id.hex[:16]}",
                 fill_price=mark_price,
-                fill_qty=qty,
+                fill_qty=resolved_fill_qty,
                 fee=fill_fee,
                 filled_at=datetime.now(UTC),
             )
@@ -1846,20 +1985,21 @@ async def execute_manual_trade_action(
             _sync_order_provider_state(
                 submit_result.order,
                 provider_status="filled",
+                filled_qty=resolved_fill_qty,
             )
             await _append_order_state_transition(
                 db,
                 order=submit_result.order,
                 target_status="filled",
                 reason="manual_action_fill_simulated",
-                extra_metadata={"fill_price": str(mark_price), "fill_qty": str(qty)},
+                extra_metadata={"fill_price": str(mark_price), "fill_qty": str(resolved_fill_qty)},
             )
             await _apply_position_after_fill(
                 db=db,
                 deployment_id=deployment.id,
                 symbol=symbol,
                 signal=signal,
-                fill_qty=qty,
+                fill_qty=resolved_fill_qty,
                 fill_price=mark_price,
                 current_position_side=current_position_side,
                 fill_fee=fill_fee,
@@ -1885,7 +2025,7 @@ async def execute_manual_trade_action(
                 deployment=deployment,
                 order=submit_result.order,
                 signal=signal,
-                qty=qty,
+                qty=resolved_fill_qty,
                 fill_price=mark_price,
                 reason="manual_action",
                 occurred_at=datetime.now(UTC),

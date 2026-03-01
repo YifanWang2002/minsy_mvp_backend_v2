@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func, select
 
 # Ensure service-scoped env layering resolves before settings import.
 os.environ.setdefault("MINSY_SERVICE", "api")
@@ -14,6 +15,8 @@ os.environ.setdefault("MINSY_SERVICE", "api")
 from apps.api.middleware.sentry_http_status import SentryHTTPStatusMiddleware
 from apps.api.router import api_router
 from apps.api.services.telegram_webhook_sync import sync_telegram_webhook_on_startup
+from packages.domain.market_data.catalog_service import scan_and_sync_catalog
+from packages.domain.market_data.data import DataLoader
 from packages.infra.db.session import close_postgres, init_postgres
 from packages.infra.observability.logger import (
     banner,
@@ -63,6 +66,7 @@ async def lifespan(_: FastAPI):
         )
     await init_postgres()
     await init_redis()
+    await _sync_market_data_catalog_on_startup()
     await sync_telegram_webhook_on_startup()
     log_success("Infrastructure initialized.")
     try:
@@ -113,3 +117,37 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+async def _sync_market_data_catalog_on_startup() -> None:
+    from packages.infra.db import session as db_session_module
+    from packages.infra.db.models.market_data_catalog import MarketDataCatalog
+
+    if db_session_module.AsyncSessionLocal is None:
+        return
+
+    loader = DataLoader()
+    try:
+        async with db_session_module.AsyncSessionLocal() as db:
+            existing_count = await db.scalar(
+                select(func.count()).select_from(MarketDataCatalog)
+            )
+            if int(existing_count or 0) > 0:
+                logger.info(
+                    "Market-data catalog already initialized. skip startup scan. rows=%s",
+                    int(existing_count or 0),
+                )
+                return
+            synced = await scan_and_sync_catalog(db, loader.data_dir)
+            await db.commit()
+        logger.info(
+            "Market-data catalog synchronized on startup. entries=%s data_dir=%s",
+            synced,
+            loader.data_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Market-data catalog startup sync failed: %s: %s",
+            type(exc).__name__,
+            exc,
+        )

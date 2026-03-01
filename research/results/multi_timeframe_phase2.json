@@ -1,0 +1,341 @@
+{
+  "timestamp": "2026-02-28T03:24:53.758965",
+  "phase": "Phase 2: Multi-Timeframe Validation",
+  "timeframes": [
+    "5m",
+    "15m",
+    "1h"
+  ],
+  "results": {
+    "Baseline_5m_IS": {
+      "total_trades": 1144,
+      "winning_trades": 345,
+      "losing_trades": 799,
+      "win_rate": 30.157342657342657,
+      "total_pnl": -3833.5628746655666,
+      "total_return": -38.335628746655665,
+      "final_equity": 6166.437125334433,
+      "max_drawdown_pct": 42.870596079110456,
+      "expectancy": -3.351016498833537
+    },
+    "TrendStrength_5m_IS": {
+      "total_trades": 206,
+      "winning_trades": 56,
+      "losing_trades": 150,
+      "win_rate": 27.184466019417474,
+      "total_pnl": -1000.9926842765043,
+      "total_return": -10.009926842765044,
+      "final_equity": 8999.007315723498,
+      "max_drawdown_pct": 11.47184635857471,
+      "expectancy": -4.859187787750021
+    },
+    "TrendStructure_5m_IS": {
+      "total_trades": 479,
+      "winning_trades": 149,
+      "losing_trades": 330,
+      "win_rate": 31.106471816283925,
+      "total_pnl": -1917.0380125860188,
+      "total_return": -19.170380125860188,
+      "final_equity": 8082.961987413995,
+      "max_drawdown_pct": 21.51740439936718,
+      "expectancy": -4.002167040889392
+    },
+    "RangeATR_5m_IS": {
+      "total_trades": 405,
+      "winning_trades": 122,
+      "losing_trades": 283,
+      "win_rate": 30.12345679012346,
+      "total_pnl": -1797.7546469260465,
+      "total_return": -17.977546469260464,
+      "final_equity": 8202.245353073953,
+      "max_drawdown_pct": 20.968719173877204,
+      "expectancy": -4.438900362780362
+    },
+    "MTFAlignment_5m_IS": {
+      "total_trades": 1144,
+      "winning_trades": 345,
+      "losing_trades": 799,
+      "win_rate": 30.157342657342657,
+      "total_pnl": -3833.5628746655707,
+      "total_return": -38.33562874665571,
+      "final_equity": 6166.437125334433,
+      "max_drawdown_pct": 42.20405318053033,
+      "expectancy": -3.3510164988335407
+    },
+    "Baseline_15m_IS": {
+      "total_trades": 359,
+      "winning_trades": 119,
+      "losing_trades": 240,
+      "win_rate": 33.147632311977716,
+      "total_pnl": 940.7272760107226,
+      "total_return": 9.407272760107226,
+      "final_equity": 10940.727276010723,
+      "max_drawdown_pct": 6.833945087890446,
+      "expectancy": 2.6204102395841855
+    },
+    "TrendStrength_15m_IS": {
+      "total_trades": 56,
+      "winning_trades": 22,
+      "losing_trades": 34,
+      "win_rate": 39.285714285714285,
+      "total_pnl": 428.83932010638495,
+      "total_return": 4.288393201063849,
+      "final_equity": 10428.839320106386,
+      "max_drawdown_pct": 4.159197068932137,
+      "expectancy": 7.657845001899731
+    },
+    "TrendStructure_15m_IS": {
+      "total_trades": 141,
+      "winning_trades": 57,
+      "losing_trades": 84,
+      "win_rate": 40.42553191489361,
+      "total_pnl": 1613.1618179534598,
+      "total_return": 16.1316181795346,
+      "final_equity": 11613.16181795347,
+      "max_drawdown_pct": 6.1421081993769,
+      "expectancy": 11.440863957116736
+    },
+    "RangeATR_15m_IS": {
+      "total_trades": 135,
+      "winning_trades": 42,
+      "losing_trades": 93,
+      "win_rate": 31.11111111111111,
+      "total_pnl": 6.177223917291462,
+      "total_return": 0.06177223917291462,
+      "final_equity": 10006.177223917293,
+      "max_drawdown_pct": 5.4307264704117255,
+      "expectancy": 0.04575721420215898
+    },
+    "MTFAlignment_15m_IS": {
+      "total_trades": 359,
+      "winning_trades": 119,
+      "losing_trades": 240,
+      "win_rate": 33.147632311977716,
+      "total_pnl": 940.7272760107113,
+      "total_return": 9.407272760107114,
+      "final_equity": 10940.727276010723,
+      "max_drawdown_pct": 6.344971135539418,
+      "expectancy": 2.620410239584154
+    },
+    "Baseline_1h_IS": {
+      "total_trades": 84,
+      "winning_trades": 21,
+      "losing_trades": 63,
+      "win_rate": 25.0,
+      "total_pnl": -2180.531250809405,
+      "total_return": -21.805312508094048,
+      "final_equity": 7819.468749190595,
+      "max_drawdown_pct": 26.430754729110067,
+      "expectancy": -25.958705366778627
+    },
+    "TrendStrength_1h_IS": {
+      "total_trades": 17,
+      "winning_trades": 4,
+      "losing_trades": 13,
+      "win_rate": 23.52941176470588,
+      "total_pnl": -920.4640740514485,
+      "total_return": -9.204640740514485,
+      "final_equity": 9079.53592594855,
+      "max_drawdown_pct": 9.204640740514497,
+      "expectancy": -54.14494553243815
+    },
+    "TrendStructure_1h_IS": {
+      "total_trades": 29,
+      "winning_trades": 5,
+      "losing_trades": 24,
+      "win_rate": 17.24137931034483,
+      "total_pnl": -1566.642720739842,
+      "total_return": -15.66642720739842,
+      "final_equity": 8433.357279260159,
+      "max_drawdown_pct": 15.666427207398408,
+      "expectancy": -54.02216278413248
+    },
+    "RangeATR_1h_IS": {
+      "total_trades": 39,
+      "winning_trades": 10,
+      "losing_trades": 29,
+      "win_rate": 25.64102564102564,
+      "total_pnl": -767.6875227342939,
+      "total_return": -7.676875227342938,
+      "final_equity": 9232.312477265708,
+      "max_drawdown_pct": 8.143187189771767,
+      "expectancy": -19.684295454725486
+    },
+    "MTFAlignment_1h_IS": {
+      "total_trades": 84,
+      "winning_trades": 21,
+      "losing_trades": 63,
+      "win_rate": 25.0,
+      "total_pnl": -2180.5312508094034,
+      "total_return": -21.805312508094037,
+      "final_equity": 7819.468749190595,
+      "max_drawdown_pct": 25.77800588306521,
+      "expectancy": -25.958705366778613
+    },
+    "Baseline_5m_OOS": {
+      "total_trades": 1115,
+      "winning_trades": 355,
+      "losing_trades": 760,
+      "win_rate": 31.838565022421523,
+      "total_pnl": -2305.6260043058646,
+      "total_return": -23.056260043058646,
+      "final_equity": 7694.373995694135,
+      "max_drawdown_pct": 31.35515868698536,
+      "expectancy": -2.067826012830372
+    },
+    "TrendStrength_5m_OOS": {
+      "total_trades": 212,
+      "winning_trades": 79,
+      "losing_trades": 133,
+      "win_rate": 37.264150943396224,
+      "total_pnl": 774.4293909340327,
+      "total_return": 7.744293909340326,
+      "final_equity": 10774.429390934027,
+      "max_drawdown_pct": 4.038273988338421,
+      "expectancy": 3.6529688251605315
+    },
+    "TrendStructure_5m_OOS": {
+      "total_trades": 483,
+      "winning_trades": 172,
+      "losing_trades": 311,
+      "win_rate": 35.61076604554865,
+      "total_pnl": 295.26689564441915,
+      "total_return": 2.9526689564441915,
+      "final_equity": 10295.266895644423,
+      "max_drawdown_pct": 9.511954132364586,
+      "expectancy": 0.611318624522607
+    },
+    "RangeATR_5m_OOS": {
+      "total_trades": 338,
+      "winning_trades": 116,
+      "losing_trades": 222,
+      "win_rate": 34.319526627218934,
+      "total_pnl": -112.71809551508728,
+      "total_return": -1.127180955150873,
+      "final_equity": 9887.281904484898,
+      "max_drawdown_pct": 6.1044170021783435,
+      "expectancy": -0.33348548968960734
+    },
+    "MTFAlignment_5m_OOS": {
+      "total_trades": 1115,
+      "winning_trades": 355,
+      "losing_trades": 760,
+      "win_rate": 31.838565022421523,
+      "total_pnl": -2305.6260043058915,
+      "total_return": -23.056260043058916,
+      "final_equity": 7694.373995694135,
+      "max_drawdown_pct": 31.26869752585718,
+      "expectancy": -2.067826012830396
+    },
+    "Baseline_15m_OOS": {
+      "total_trades": 336,
+      "winning_trades": 105,
+      "losing_trades": 231,
+      "win_rate": 31.25,
+      "total_pnl": -2160.699278408444,
+      "total_return": -21.60699278408444,
+      "final_equity": 7839.300721591556,
+      "max_drawdown_pct": 22.7311475183106,
+      "expectancy": -6.430652614310846
+    },
+    "TrendStrength_15m_OOS": {
+      "total_trades": 59,
+      "winning_trades": 19,
+      "losing_trades": 40,
+      "win_rate": 32.20338983050847,
+      "total_pnl": -590.3370959776771,
+      "total_return": -5.903370959776772,
+      "final_equity": 9409.662904022322,
+      "max_drawdown_pct": 7.428047582384825,
+      "expectancy": -10.00571349114707
+    },
+    "TrendStructure_15m_OOS": {
+      "total_trades": 157,
+      "winning_trades": 46,
+      "losing_trades": 111,
+      "win_rate": 29.29936305732484,
+      "total_pnl": -1831.8632679569032,
+      "total_return": -18.31863267956903,
+      "final_equity": 8168.136732043093,
+      "max_drawdown_pct": 21.203736379331787,
+      "expectancy": -11.667918904184097
+    },
+    "RangeATR_15m_OOS": {
+      "total_trades": 110,
+      "winning_trades": 34,
+      "losing_trades": 76,
+      "win_rate": 30.909090909090907,
+      "total_pnl": -644.9007557936562,
+      "total_return": -6.449007557936562,
+      "final_equity": 9355.099244206336,
+      "max_drawdown_pct": 10.898274868880724,
+      "expectancy": -5.862734143578693
+    },
+    "MTFAlignment_15m_OOS": {
+      "total_trades": 336,
+      "winning_trades": 105,
+      "losing_trades": 231,
+      "win_rate": 31.25,
+      "total_pnl": -2160.6992784084346,
+      "total_return": -21.606992784084344,
+      "final_equity": 7839.300721591556,
+      "max_drawdown_pct": 22.160308758815148,
+      "expectancy": -6.430652614310818
+    },
+    "Baseline_1h_OOS": {
+      "total_trades": 77,
+      "winning_trades": 24,
+      "losing_trades": 53,
+      "win_rate": 31.16883116883117,
+      "total_pnl": -945.6136955407019,
+      "total_return": -9.456136955407018,
+      "final_equity": 9054.386304459298,
+      "max_drawdown_pct": 17.826649247894668,
+      "expectancy": -12.28069734468444
+    },
+    "TrendStrength_1h_OOS": {
+      "total_trades": 15,
+      "winning_trades": 4,
+      "losing_trades": 11,
+      "win_rate": 26.666666666666668,
+      "total_pnl": -686.6699992079111,
+      "total_return": -6.866699992079112,
+      "final_equity": 9313.33000079209,
+      "max_drawdown_pct": 7.670952305355604,
+      "expectancy": -45.777999947194076
+    },
+    "TrendStructure_1h_OOS": {
+      "total_trades": 30,
+      "winning_trades": 8,
+      "losing_trades": 22,
+      "win_rate": 26.666666666666668,
+      "total_pnl": -1044.901213052659,
+      "total_return": -10.449012130526588,
+      "final_equity": 8955.098786947343,
+      "max_drawdown_pct": 16.23701049166708,
+      "expectancy": -34.830040435088634
+    },
+    "RangeATR_1h_OOS": {
+      "total_trades": 29,
+      "winning_trades": 10,
+      "losing_trades": 19,
+      "win_rate": 34.48275862068966,
+      "total_pnl": 82.6379462395397,
+      "total_return": 0.826379462395397,
+      "final_equity": 10082.63794623954,
+      "max_drawdown_pct": 7.6794698264874866,
+      "expectancy": 2.8495843530875757
+    },
+    "MTFAlignment_1h_OOS": {
+      "total_trades": 75,
+      "winning_trades": 24,
+      "losing_trades": 51,
+      "win_rate": 32.0,
+      "total_pnl": -653.319071612535,
+      "total_return": -6.53319071612535,
+      "final_equity": 9346.680928387466,
+      "max_drawdown_pct": 17.24938199925487,
+      "expectancy": -8.710920954833801
+    }
+  }
+}

@@ -94,19 +94,26 @@ def _compose_service_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]
 
 
 def ensure_compose_stack_up(*, timeout_seconds: int = 420) -> list[dict[str, Any]]:
-    run_command(
-        [
-            "docker",
-            "compose",
-            "-f",
-            str(COMPOSE_FILE),
-            "up",
-            "-d",
-            "--build",
-        ],
-        cwd=BACKEND_DIR,
-        timeout=1200,
-    )
+    up_command = [
+        "docker",
+        "compose",
+        "-f",
+        str(COMPOSE_FILE),
+        "up",
+        "-d",
+        "--build",
+    ]
+    for attempt in range(3):
+        try:
+            run_command(up_command, cwd=BACKEND_DIR, timeout=1200)
+            break
+        except AssertionError as exc:
+            error_text = str(exc)
+            transient = "No such container" in error_text
+            if transient and attempt < 2:
+                time.sleep(3)
+                continue
+            raise
 
     deadline = time.monotonic() + float(timeout_seconds)
     last_rows: list[dict[str, Any]] = []

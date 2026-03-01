@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 from typing import Any
@@ -48,9 +49,34 @@ def api_test_client(compose_stack: list[dict[str, Any]]) -> TestClient:
             "env/.env.common",
             "env/.env.dev",
             "env/.env.dev.api",
+            "env/.env.dev.localtest",
         ]
     )
     os.environ["MINSY_SERVICE"] = "api"
+    # Clear settings cache to ensure every test function uses a fresh view.
+    from packages.shared_settings.loader import service_loader
+    from packages.shared_settings.schema import settings as settings_module
+
+    settings_module.get_settings.cache_clear()
+    service_loader._load_legacy_settings.cache_clear()
+    service_loader.get_common_settings.cache_clear()
+    service_loader.get_api_settings.cache_clear()
+    service_loader.get_mcp_settings.cache_clear()
+    service_loader.get_worker_cpu_settings.cache_clear()
+    service_loader.get_worker_io_settings.cache_clear()
+    service_loader.get_beat_settings.cache_clear()
+    settings_module.settings = settings_module.get_settings(service="api")
+    # Reload modules that hold a direct `settings` reference at import time.
+    for module_name in (
+        "packages.infra.db.session",
+        "packages.infra.redis.client",
+        "packages.infra.queue.celery_app",
+        "packages.infra.queue.publishers",
+        "apps.api.main",
+    ):
+        module = sys.modules.get(module_name)
+        if module is not None:
+            importlib.reload(module)
     # Stabilize local integration tests by removing shell-level proxy variables.
     # Some SDK clients (for example OpenAI httpx transport) auto-read these vars.
     for key in (

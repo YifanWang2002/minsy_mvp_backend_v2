@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from apps.api.agents.phases import Phase, can_transition
+from apps.api.dependencies import get_db
 from apps.api.middleware.auth import get_current_user
 from apps.api.schemas.events import (
     DeploymentActionResponse,
@@ -26,16 +27,19 @@ from apps.api.schemas.events import (
     SignalResponse,
 )
 from apps.api.schemas.requests import DeploymentCreateRequest, ManualTradeActionRequest
-from packages.shared_settings.schema.settings import settings
-from apps.api.dependencies import get_db
-from packages.infra.providers.trading.adapters.alpaca_trading import AlpacaTradingAdapter
-from packages.infra.providers.trading.credentials import CredentialCipher
+from apps.api.services.trading_queue_service import enqueue_paper_trading_runtime
+from packages.core.events.notification_events import EVENT_DEPLOYMENT_STARTED
+from packages.domain.notification.services.notification_outbox_service import (
+    NotificationOutboxService,
+)
 from packages.domain.trading.runtime.runtime_service import (
     execute_manual_trade_action,
     process_deployment_signal_cycle,
 )
-from packages.infra.redis.stores.runtime_state_store import runtime_state_store
 from packages.domain.trading.runtime.timeframe_scheduler import timeframe_to_seconds
+from packages.domain.trading.services.broker_provider_service import (
+    BrokerProviderService,
+)
 from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.deployment_run import DeploymentRun
@@ -48,14 +52,14 @@ from packages.infra.db.models.session import Session
 from packages.infra.db.models.signal_event import SignalEvent
 from packages.infra.db.models.strategy import Strategy
 from packages.infra.db.models.user import User
-from packages.core.events.notification_events import EVENT_DEPLOYMENT_STARTED
-from packages.domain.notification.services.notification_outbox_service import NotificationOutboxService
-from apps.api.services.trading_queue_service import enqueue_paper_trading_runtime
 from packages.infra.observability.logger import logger
+from packages.infra.redis.stores.runtime_state_store import runtime_state_store
+from packages.shared_settings.schema.settings import settings
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
 _DEPLOYABLE_STRATEGY_STATUSES = {"validated", "backtested", "deployed"}
+_broker_provider_service = BrokerProviderService()
 
 
 def _decimal_to_float(value: Decimal | None) -> float | None:
@@ -91,16 +95,6 @@ def _as_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _extract_credential_value(credentials: dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        raw = credentials.get(key)
-        if isinstance(raw, str):
-            normalized = raw.strip()
-            if normalized:
-                return normalized
-    return ""
-
-
 def _positive_decimal_or_none(value: Any) -> Decimal | None:
     try:
         parsed = Decimal(str(value))
@@ -132,39 +126,18 @@ async def _resolve_deployment_capital_allocated(
     if from_probe is not None:
         return from_probe
 
-    # Only attempt live account pull for already-validated Alpaca paper accounts.
-    if account.provider != "alpaca" or account.last_validated_status != "paper_probe_ok":
+    binding = _broker_provider_service.build_adapter_binding_from_account(account)
+    adapter = binding.adapter
+    if adapter is None:
         return Decimal("10000.00")
 
-    try:
-        credentials = CredentialCipher().decrypt(account.encrypted_credentials)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "[deployments] failed to decrypt broker credentials for auto-capital broker_account_id=%s error=%s",
-            account.id,
-            type(exc).__name__,
-        )
-        return Decimal("10000.00")
-
-    api_key = _extract_credential_value(credentials, "APCA-API-KEY-ID", "api_key", "key")
-    api_secret = _extract_credential_value(credentials, "APCA-API-SECRET-KEY", "api_secret", "secret")
-    trading_base_url = _extract_credential_value(credentials, "trading_base_url", "base_url")
-    if not trading_base_url:
-        trading_base_url = settings.alpaca_paper_trading_base_url
-    if not api_key or not api_secret:
-        return Decimal("10000.00")
-
-    adapter = AlpacaTradingAdapter(
-        api_key=api_key,
-        api_secret=api_secret,
-        trading_base_url=trading_base_url,
-    )
     try:
         state = await adapter.fetch_account_state()
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "[deployments] failed to fetch account state for auto-capital broker_account_id=%s error=%s",
+            "[deployments] failed to fetch account state broker_account_id=%s provider=%s error=%s",
             account.id,
+            binding.provider,
             type(exc).__name__,
         )
         return Decimal("10000.00")
@@ -176,6 +149,14 @@ async def _resolve_deployment_capital_allocated(
         if capital is not None:
             return capital
     return Decimal("10000.00")
+
+
+async def _resolve_broker_provider_for_run(db: AsyncSession, *, run: DeploymentRun) -> str:
+    account = await db.scalar(select(BrokerAccount).where(BrokerAccount.id == run.broker_account_id))
+    if account is None:
+        return "unknown"
+    provider = str(account.provider).strip().lower()
+    return provider or "unknown"
 
 
 def _serialize_run(run: DeploymentRun | None) -> DeploymentRunResponse | None:
@@ -639,10 +620,12 @@ async def _apply_status_transition(
                 "updated_at": now.isoformat(),
             }
         )
+        broker_provider = await _resolve_broker_provider_for_run(db, run=run)
         execution.update(
             {
                 "order_execution_mode": "broker" if settings.paper_trading_execute_orders else "simulated",
-                "market_data_source": "alpaca_rest",
+                "market_data_source": f"{broker_provider}_rest",
+                "broker_provider": broker_provider,
                 "updated_at": now.isoformat(),
             }
         )

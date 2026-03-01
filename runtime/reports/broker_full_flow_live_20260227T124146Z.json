@@ -1,0 +1,2202 @@
+{
+  "started_at_utc": "2026-02-27T12:37:53.228414+00:00",
+  "ended_at_utc": "2026-02-27T12:41:46.608724+00:00",
+  "monitor_seconds": 210,
+  "interval_seconds": 15,
+  "email": "2@test.com",
+  "broker_account_id": "17250e13-a013-4275-a474-fc82a87fad30",
+  "strategy_id": "d169caba-830b-4f80-9adb-35c014118d34",
+  "strategy_name": "Codex Broker Flow 190394a0",
+  "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+  "queued_task_id_on_start": "9dc8f89e-780e-4e7c-acc1-8d69a170aa32",
+  "forced_task_ids": [
+    "5a475ef3-d1de-4a98-bfd4-176d122294cf",
+    "e865f92c-a37a-4b4c-b161-6f7d52eceb7d"
+  ],
+  "celery_runtime_count_before": {
+    "worker-io@e7e4a8b64841": 472,
+    "worker-cpu@e5734247ed9c": 0
+  },
+  "celery_runtime_count_after": {
+    "worker-io@e7e4a8b64841": 1029,
+    "worker-cpu@e5734247ed9c": 0
+  },
+  "beat_scheduler_tick_lines_since_start": 234,
+  "worker_log_lines_for_deployment": [
+    "[2026-02-27 12:39:03,529: INFO/ForkPoolWorker-1] Task paper_trading.run_deployment_runtime[9dc8f89e-780e-4e7c-acc1-8d69a170aa32] succeeded in 3.48725608503446s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'OPEN_LONG', 'reason': 'long_entry_condition', 'fallback_task_id': '67631034-90a7-4a52-8d44-da475fce4b42'}",
+    "[2026-02-27 12:39:06,467: INFO/ForkPoolWorker-1] Task paper_trading.run_deployment_runtime[5a475ef3-d1de-4a98-bfd4-176d122294cf] succeeded in 1.9897116260253824s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}', 'fallback_task_id': '7b3b8dc1-7ed5-4b63-950a-a5f36c737c63'}",
+    "[2026-02-27 12:39:13,310: INFO/ForkPoolWorker-2] Task paper_trading.run_deployment_runtime[e865f92c-a37a-4b4c-b161-6f7d52eceb7d] succeeded in 0.06781341700116172s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'broker_circuit_open', 'fallback_task_id': 'a8feb31f-eb62-4530-9ddc-01de21bced30'}",
+    "[2026-02-27 12:40:21,913: INFO/ForkPoolWorker-3] Task paper_trading.run_deployment_runtime[7b3b8dc1-7ed5-4b63-950a-a5f36c737c63] succeeded in 1.0357549180043861s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'deployment_locked', 'fallback_task_id': '64636ba7-d85d-4351-9d8e-c1034e3ae675'}",
+    "[2026-02-27 12:40:21,922: INFO/ForkPoolWorker-2] Task paper_trading.run_deployment_runtime[67631034-90a7-4a52-8d44-da475fce4b42] succeeded in 3.788080668018665s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'broker_circuit_open', 'fallback_task_id': '58d73496-0c96-4cfc-8188-513bcddda45e'}",
+    "[2026-02-27 12:40:30,323: INFO/ForkPoolWorker-3] Task paper_trading.run_deployment_runtime[a8feb31f-eb62-4530-9ddc-01de21bced30] succeeded in 3.8709921260015108s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}', 'fallback_task_id': 'de570a66-511e-4e3b-921b-b772d5b21dcf'}",
+    "[2026-02-27 12:41:35,757: INFO/ForkPoolWorker-3] Task paper_trading.run_deployment_runtime[58d73496-0c96-4cfc-8188-513bcddda45e] succeeded in 3.1401354600093327s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'deployment_locked', 'fallback_task_id': '70bb83e0-cad5-45df-8b4b-63f50e3c85e8'}",
+    "[2026-02-27 12:41:35,765: INFO/ForkPoolWorker-1] Task paper_trading.run_deployment_runtime[64636ba7-d85d-4351-9d8e-c1034e3ae675] succeeded in 4.368903711030725s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'broker_circuit_open', 'fallback_task_id': 'f1c3197c-7eb9-451c-b42b-aa8862e458a8'}",
+    "[2026-02-27 12:41:39,697: INFO/ForkPoolWorker-3] Task paper_trading.run_deployment_runtime[de570a66-511e-4e3b-921b-b772d5b21dcf] succeeded in 0.07264879200374708s: {'deployment_id': '0ae84d99-28e2-4dc6-b26a-806382261b08', 'status': 'running', 'signal': 'NOOP', 'reason': 'broker_circuit_open', 'fallback_task_id': '09593d4e-ac58-480e-a371-481f40c91556'}"
+  ],
+  "samples_count": 15,
+  "orders_count_final": 1,
+  "fills_count_final": 1,
+  "positions_count_final": 1,
+  "pnl_count_final": 2,
+  "final_deployment_status": "stopped",
+  "stop_action_status": "completed",
+  "samples": [
+    {
+      "sampled_at": "2026-02-27T12:38:09.531687+00:00",
+      "elapsed_seconds": 0.0,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "order_execution_mode": "broker",
+      "last_bar_time": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "orders_count": 0,
+      "orders_top": [],
+      "fills_count": 0,
+      "fills_top": [],
+      "positions_count": 0,
+      "positions_top": [],
+      "pnl_count": 0,
+      "pnl_top": [],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 10000.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": null
+      },
+      "signals_count": 0,
+      "signals_top": []
+    },
+    {
+      "sampled_at": "2026-02-27T12:38:24.572632+00:00",
+      "elapsed_seconds": 15.1,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "order_execution_mode": "broker",
+      "last_bar_time": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "orders_count": 0,
+      "orders_top": [],
+      "fills_count": 0,
+      "fills_top": [],
+      "positions_count": 0,
+      "positions_top": [],
+      "pnl_count": 1,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 10000.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": null
+      },
+      "signals_count": 0,
+      "signals_top": []
+    },
+    {
+      "sampled_at": "2026-02-27T12:38:39.642796+00:00",
+      "elapsed_seconds": 30.1,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "order_execution_mode": "broker",
+      "last_bar_time": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "orders_count": 0,
+      "orders_top": [],
+      "fills_count": 0,
+      "fills_top": [],
+      "positions_count": 0,
+      "positions_top": [],
+      "pnl_count": 1,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 10000.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": null
+      },
+      "signals_count": 0,
+      "signals_top": []
+    },
+    {
+      "sampled_at": "2026-02-27T12:38:54.687141+00:00",
+      "elapsed_seconds": 45.2,
+      "deployment_status": "active",
+      "run_status": "starting",
+      "order_execution_mode": "broker",
+      "last_bar_time": null,
+      "last_enqueued_at": null,
+      "runtime_last_signal": null,
+      "runtime_last_signal_reason": null,
+      "orders_count": 0,
+      "orders_top": [],
+      "fills_count": 0,
+      "fills_top": [],
+      "positions_count": 0,
+      "positions_top": [],
+      "pnl_count": 1,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 10000.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": null
+      },
+      "signals_count": 0,
+      "signals_top": []
+    },
+    {
+      "sampled_at": "2026-02-27T12:39:09.731552+00:00",
+      "elapsed_seconds": 60.2,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:26:00Z",
+      "last_enqueued_at": "2026-02-27T12:39:06.463317Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65926.54,
+          "unrealized_pnl": -0.048808,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:04.513848Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:39:00.099568Z",
+          "equity": 98755.8,
+          "cash": 98755.8,
+          "buying_power": 197511.6,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "positions_count": 0,
+          "symbols": [],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 2,
+      "signals_top": [
+        {
+          "signal_event_id": "467e3922-e103-4e32-98c0-843890738fa4",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "8b92d5b1-23ca-4aad-8971-f8c4157f3db2",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "OPEN_LONG",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "long_entry_condition",
+          "metadata": {
+            "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+            "idempotent_hit": false,
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:39:00.099568+00:00"
+          }
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:39:24.776839+00:00",
+      "elapsed_seconds": 75.3,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:26:00Z",
+      "last_enqueued_at": "2026-02-27T12:39:13.306410Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65926.54,
+          "unrealized_pnl": -0.048808,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:04.513848Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:39:00.099568Z",
+          "equity": 98755.8,
+          "cash": 98755.8,
+          "buying_power": 197511.6,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "positions_count": 0,
+          "symbols": [],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 3,
+      "signals_top": [
+        {
+          "signal_event_id": "7d1fea5c-03b6-421d-a0fd-b59d8bad2fb3",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "467e3922-e103-4e32-98c0-843890738fa4",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "8b92d5b1-23ca-4aad-8971-f8c4157f3db2",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "OPEN_LONG",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "long_entry_condition",
+          "metadata": {
+            "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+            "idempotent_hit": false,
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:39:00.099568+00:00"
+          }
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:39:39.831540+00:00",
+      "elapsed_seconds": 90.3,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:26:00Z",
+      "last_enqueued_at": "2026-02-27T12:39:13.306410Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65926.54,
+          "unrealized_pnl": -0.048808,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:04.513848Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:39:00.099568Z",
+          "equity": 98755.8,
+          "cash": 98755.8,
+          "buying_power": 197511.6,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "positions_count": 0,
+          "symbols": [],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 3,
+      "signals_top": [
+        {
+          "signal_event_id": "7d1fea5c-03b6-421d-a0fd-b59d8bad2fb3",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "467e3922-e103-4e32-98c0-843890738fa4",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "8b92d5b1-23ca-4aad-8971-f8c4157f3db2",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "OPEN_LONG",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "long_entry_condition",
+          "metadata": {
+            "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+            "idempotent_hit": false,
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:39:00.099568+00:00"
+          }
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:39:54.890150+00:00",
+      "elapsed_seconds": 105.4,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:26:00Z",
+      "last_enqueued_at": "2026-02-27T12:39:13.306410Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65926.54,
+          "unrealized_pnl": -0.048808,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:04.513848Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:39:00.099568Z",
+          "equity": 98755.8,
+          "cash": 98755.8,
+          "buying_power": 197511.6,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "positions_count": 0,
+          "symbols": [],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 3,
+      "signals_top": [
+        {
+          "signal_event_id": "7d1fea5c-03b6-421d-a0fd-b59d8bad2fb3",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "467e3922-e103-4e32-98c0-843890738fa4",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "8b92d5b1-23ca-4aad-8971-f8c4157f3db2",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "OPEN_LONG",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "long_entry_condition",
+          "metadata": {
+            "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+            "idempotent_hit": false,
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:39:00.099568+00:00"
+          }
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:40:09.960252+00:00",
+      "elapsed_seconds": 120.4,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:26:00Z",
+      "last_enqueued_at": "2026-02-27T12:39:13.306410Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65926.54,
+          "unrealized_pnl": -0.048808,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:04.513848Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:39:00.099568Z",
+          "equity": 98755.8,
+          "cash": 98755.8,
+          "buying_power": 197511.6,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "positions_count": 0,
+          "symbols": [],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 3,
+      "signals_top": [
+        {
+          "signal_event_id": "7d1fea5c-03b6-421d-a0fd-b59d8bad2fb3",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "467e3922-e103-4e32-98c0-843890738fa4",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "8b92d5b1-23ca-4aad-8971-f8c4157f3db2",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "OPEN_LONG",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "long_entry_condition",
+          "metadata": {
+            "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+            "idempotent_hit": false,
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:39:00.099568+00:00"
+          }
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:40:25.027683+00:00",
+      "elapsed_seconds": 135.5,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:38:00Z",
+      "last_enqueued_at": "2026-02-27T12:40:21.916802Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65961.588,
+          "unrealized_pnl": -0.01376,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:40:18.166341Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:40:18.189656Z",
+          "equity": 98755.67,
+          "cash": 98689.82,
+          "buying_power": 197379.64,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.021585,
+          "realized_pnl": 0.0,
+          "positions_count": 1,
+          "symbols": [
+            "BTCUSD"
+          ],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 5,
+      "signals_top": [
+        {
+          "signal_event_id": "a657d322-0a29-4d91-8e59-12a1587477ea",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:40:18.189656+00:00"
+          }
+        },
+        {
+          "signal_event_id": "5fa67c4f-d494-4bf2-8885-a6ef13dc079d",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:40:20.920676Z",
+          "reason": "deployment_locked",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "7d1fea5c-03b6-421d-a0fd-b59d8bad2fb3",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:26:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:40:40.072534+00:00",
+      "elapsed_seconds": 150.6,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:38:00Z",
+      "last_enqueued_at": "2026-02-27T12:40:30.318329Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65961.588,
+          "unrealized_pnl": -0.01376,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:40:18.166341Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:40:18.189656Z",
+          "equity": 98755.67,
+          "cash": 98689.82,
+          "buying_power": 197379.64,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.021585,
+          "realized_pnl": 0.0,
+          "positions_count": 1,
+          "symbols": [
+            "BTCUSD"
+          ],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 6,
+      "signals_top": [
+        {
+          "signal_event_id": "e01ec3ea-06f1-4e3e-be1d-e4752f525ed5",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "a657d322-0a29-4d91-8e59-12a1587477ea",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:40:18.189656+00:00"
+          }
+        },
+        {
+          "signal_event_id": "5fa67c4f-d494-4bf2-8885-a6ef13dc079d",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:40:20.920676Z",
+          "reason": "deployment_locked",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:40:55.132271+00:00",
+      "elapsed_seconds": 165.6,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:38:00Z",
+      "last_enqueued_at": "2026-02-27T12:40:30.318329Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65961.588,
+          "unrealized_pnl": -0.01376,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:40:18.166341Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:40:18.189656Z",
+          "equity": 98755.67,
+          "cash": 98689.82,
+          "buying_power": 197379.64,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.021585,
+          "realized_pnl": 0.0,
+          "positions_count": 1,
+          "symbols": [
+            "BTCUSD"
+          ],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 6,
+      "signals_top": [
+        {
+          "signal_event_id": "e01ec3ea-06f1-4e3e-be1d-e4752f525ed5",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "a657d322-0a29-4d91-8e59-12a1587477ea",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:40:18.189656+00:00"
+          }
+        },
+        {
+          "signal_event_id": "5fa67c4f-d494-4bf2-8885-a6ef13dc079d",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:40:20.920676Z",
+          "reason": "deployment_locked",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:41:10.174122+00:00",
+      "elapsed_seconds": 180.7,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:38:00Z",
+      "last_enqueued_at": "2026-02-27T12:40:30.318329Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65961.588,
+          "unrealized_pnl": -0.01376,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:40:18.166341Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:40:18.189656Z",
+          "equity": 98755.67,
+          "cash": 98689.82,
+          "buying_power": 197379.64,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.021585,
+          "realized_pnl": 0.0,
+          "positions_count": 1,
+          "symbols": [
+            "BTCUSD"
+          ],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 6,
+      "signals_top": [
+        {
+          "signal_event_id": "e01ec3ea-06f1-4e3e-be1d-e4752f525ed5",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "a657d322-0a29-4d91-8e59-12a1587477ea",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:40:18.189656+00:00"
+          }
+        },
+        {
+          "signal_event_id": "5fa67c4f-d494-4bf2-8885-a6ef13dc079d",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:40:20.920676Z",
+          "reason": "deployment_locked",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:41:25.248202+00:00",
+      "elapsed_seconds": 195.7,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:38:00Z",
+      "last_enqueued_at": "2026-02-27T12:40:30.318329Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65961.588,
+          "unrealized_pnl": -0.01376,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:40:18.166341Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:40:18.189656Z",
+          "equity": 98755.67,
+          "cash": 98689.82,
+          "buying_power": 197379.64,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.021585,
+          "realized_pnl": 0.0,
+          "positions_count": 1,
+          "symbols": [
+            "BTCUSD"
+          ],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 6,
+      "signals_top": [
+        {
+          "signal_event_id": "e01ec3ea-06f1-4e3e-be1d-e4752f525ed5",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "order_submit_failed:AdapterError:Alpaca request failed [403] POST /v2/orders. response={\"available\":\"0.0009978\",\"balance\":\"0.0009978\",\"code\":40310000,\"message\":\"insufficient balance for BTC (requested: 0.001, available: 0.0009978)\",\"symbol\":\"USD\"}",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "a657d322-0a29-4d91-8e59-12a1587477ea",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:38:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:40:18.189656+00:00"
+          }
+        },
+        {
+          "signal_event_id": "5fa67c4f-d494-4bf2-8885-a6ef13dc079d",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:40:20.920676Z",
+          "reason": "deployment_locked",
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "sampled_at": "2026-02-27T12:41:40.326994+00:00",
+      "elapsed_seconds": 210.8,
+      "deployment_status": "active",
+      "run_status": "running",
+      "order_execution_mode": "broker",
+      "last_bar_time": "2026-02-27T12:40:00Z",
+      "last_enqueued_at": "2026-02-27T12:41:39.693694Z",
+      "runtime_last_signal": "CLOSE",
+      "runtime_last_signal_reason": "long_exit",
+      "orders_count": 1,
+      "orders_top": [
+        {
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "provider_order_id": "7ef3a28b-6773-42cb-afac-83a29f0ee934",
+          "client_order_id": "0ae84d99-1772195160-open_long",
+          "symbol": "BTC/USD",
+          "side": "buy",
+          "type": "market",
+          "qty": 0.001,
+          "price": 65975.348,
+          "status": "filled",
+          "provider_status": "filled",
+          "reject_reason": null,
+          "last_sync_at": "2026-02-27T12:39:03.506983Z",
+          "submitted_at": "2026-02-27T12:39:03.026148Z",
+          "metadata": {
+            "reason": "long_entry_condition",
+            "signal": "OPEN_LONG",
+            "fill_qty": "0.001",
+            "timeframe": "1m",
+            "fill_price": "65975.34800000",
+            "provider_status": "filled",
+            "last_state_reason": "runtime_fill_simulated",
+            "state_transitions": [
+              {
+                "to": "pending_new",
+                "ts": "2026-02-27T12:39:03.237887+00:00",
+                "from": "new",
+                "reason": "provider_submit_response"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.503514+00:00",
+                "from": "pending_new",
+                "reason": "provider_order_sync"
+              },
+              {
+                "to": "filled",
+                "ts": "2026-02-27T12:39:03.506993+00:00",
+                "from": "filled",
+                "reason": "runtime_fill_simulated"
+              }
+            ],
+            "last_state_updated_at": "2026-02-27T12:39:03.506995+00:00",
+            "provider_status_updated_at": "2026-02-27T12:39:03.506983+00:00"
+          },
+          "created_at": "2026-02-27T12:39:00.075609Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "fills_count": 1,
+      "fills_top": [
+        {
+          "fill_id": "5b550470-05ce-44e7-93c4-af6ffc3e8212",
+          "order_id": "dc4607c6-e9e2-4402-b9a6-c13596e20348",
+          "provider_fill_id": "sync-7ef3a28b-6773-42cb-afac-83a29f0ee934-1772195160",
+          "fill_price": 65975.348,
+          "fill_qty": 0.001,
+          "fee": 0.0,
+          "filled_at": "2026-02-27T12:26:00Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        }
+      ],
+      "positions_count": 1,
+      "positions_top": [
+        {
+          "position_id": "7f8616b0-a4cd-4e73-aabb-8254e5402970",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "symbol": "BTC/USD",
+          "side": "long",
+          "qty": 0.001,
+          "avg_entry_price": 65975.348,
+          "mark_price": 65941.5165,
+          "unrealized_pnl": -0.0338315,
+          "realized_pnl": 0.0,
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:41:31.428122Z"
+        }
+      ],
+      "pnl_count": 2,
+      "pnl_top": [
+        {
+          "pnl_snapshot_id": "cf6c8716-a42b-4dbc-8429-11707fd17cda",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 9934.024652,
+          "margin_used": 65.975348,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:39:03.517394Z",
+          "created_at": "2026-02-27T12:39:03.506571Z",
+          "updated_at": "2026-02-27T12:39:03.506571Z"
+        },
+        {
+          "pnl_snapshot_id": "c93cfeb5-96cd-47bc-9f97-41c5dbf59a6a",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "source": "platform_estimate",
+          "equity": 10000.0,
+          "cash": 10000.0,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.0,
+          "realized_pnl": 0.0,
+          "snapshot_time": "2026-02-27T12:38:09.516755Z",
+          "created_at": "2026-02-27T12:38:09.513716Z",
+          "updated_at": "2026-02-27T12:38:09.513716Z"
+        }
+      ],
+      "portfolio": {
+        "equity": 10000.0,
+        "cash": 9934.024652,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "broker_account": {
+          "provider": "alpaca",
+          "source": "broker_reported",
+          "sync_status": "ok",
+          "fetched_at": "2026-02-27T12:41:31.451968Z",
+          "equity": 98755.67,
+          "cash": 98689.82,
+          "buying_power": 197379.64,
+          "margin_used": 0.0,
+          "unrealized_pnl": 0.021585,
+          "realized_pnl": 0.0,
+          "positions_count": 1,
+          "symbols": [
+            "BTCUSD"
+          ],
+          "error": null,
+          "updated_at": null
+        }
+      },
+      "signals_count": 9,
+      "signals_top": [
+        {
+          "signal_event_id": "2d707ede-f2c6-4863-ba7d-d8d4ced44380",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:40:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {}
+        },
+        {
+          "signal_event_id": "06fbec97-7c76-4b45-9da3-aef680528aa5",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:40:00Z",
+          "reason": "broker_circuit_open",
+          "metadata": {
+            "broker_provider": "alpaca",
+            "broker_account_sync": "ok",
+            "broker_account_fetched_at": "2026-02-27T12:41:31.451968+00:00"
+          }
+        },
+        {
+          "signal_event_id": "2bbcfc3d-12d9-4f87-8301-41254401f8c4",
+          "deployment_id": "0ae84d99-28e2-4dc6-b26a-806382261b08",
+          "signal": "NOOP",
+          "symbol": "BTC/USD",
+          "timeframe": "1m",
+          "bar_time": "2026-02-27T12:41:32.664533Z",
+          "reason": "deployment_locked",
+          "metadata": {}
+        }
+      ]
+    }
+  ]
+}

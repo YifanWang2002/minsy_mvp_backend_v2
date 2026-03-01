@@ -1,0 +1,170 @@
+{
+  "generated_at": "2026-02-28T12:24:57.267729+00:00",
+  "summary": {
+    "servers": [
+      "strategy",
+      "backtest",
+      "market_data",
+      "stress",
+      "trading"
+    ],
+    "reachable_rows": 24,
+    "all_rows": 40
+  },
+  "servers": {
+    "strategy": {
+      "implemented": [
+        "get_indicator_catalog",
+        "get_indicator_detail",
+        "strategy_diff_versions",
+        "strategy_get_dsl",
+        "strategy_get_version_dsl",
+        "strategy_list_tunable_params",
+        "strategy_list_versions",
+        "strategy_patch_dsl",
+        "strategy_rollback_dsl",
+        "strategy_upsert_dsl",
+        "strategy_validate_dsl"
+      ],
+      "exposed_reachable": [
+        "get_indicator_catalog",
+        "get_indicator_detail",
+        "strategy_diff_versions",
+        "strategy_get_dsl",
+        "strategy_get_version_dsl",
+        "strategy_list_tunable_params",
+        "strategy_list_versions",
+        "strategy_patch_dsl",
+        "strategy_rollback_dsl",
+        "strategy_upsert_dsl",
+        "strategy_validate_dsl"
+      ],
+      "implemented_not_exposed_reachable": [],
+      "exposed_reachable_not_implemented": [],
+      "implemented_count": 11,
+      "exposed_reachable_count": 11
+    },
+    "backtest": {
+      "implemented": [
+        "backtest_create_job",
+        "backtest_entry_hour_pnl_heatmap",
+        "backtest_entry_weekday_pnl",
+        "backtest_exit_reason_breakdown",
+        "backtest_get_job",
+        "backtest_holding_period_pnl_bins",
+        "backtest_long_short_breakdown",
+        "backtest_monthly_return_table",
+        "backtest_rolling_metrics",
+        "backtest_underwater_curve"
+      ],
+      "exposed_reachable": [
+        "backtest_create_job",
+        "backtest_entry_hour_pnl_heatmap",
+        "backtest_entry_weekday_pnl",
+        "backtest_exit_reason_breakdown",
+        "backtest_get_job",
+        "backtest_holding_period_pnl_bins",
+        "backtest_long_short_breakdown",
+        "backtest_monthly_return_table",
+        "backtest_rolling_metrics",
+        "backtest_underwater_curve"
+      ],
+      "implemented_not_exposed_reachable": [],
+      "exposed_reachable_not_implemented": [],
+      "implemented_count": 10,
+      "exposed_reachable_count": 10
+    },
+    "market_data": {
+      "implemented": [
+        "check_symbol_available",
+        "get_available_symbols",
+        "get_symbol_candles",
+        "get_symbol_data_coverage",
+        "get_symbol_metadata",
+        "market_data_detect_missing_ranges",
+        "market_data_fetch_missing_ranges",
+        "market_data_get_candles",
+        "market_data_get_sync_job"
+      ],
+      "exposed_reachable": [
+        "check_symbol_available",
+        "get_available_symbols",
+        "get_symbol_candles",
+        "get_symbol_data_coverage",
+        "get_symbol_metadata",
+        "market_data_detect_missing_ranges",
+        "market_data_fetch_missing_ranges",
+        "market_data_get_sync_job"
+      ],
+      "implemented_not_exposed_reachable": [
+        "market_data_get_candles"
+      ],
+      "exposed_reachable_not_implemented": [],
+      "implemented_count": 9,
+      "exposed_reachable_count": 8
+    },
+    "stress": {
+      "implemented": [
+        "stress_black_swan_create_job",
+        "stress_black_swan_get_job",
+        "stress_black_swan_list_windows",
+        "stress_capabilities",
+        "stress_monte_carlo_create_job",
+        "stress_monte_carlo_get_job",
+        "stress_optimize_create_job",
+        "stress_optimize_get_job",
+        "stress_optimize_get_pareto",
+        "stress_param_sensitivity_create_job",
+        "stress_param_sensitivity_get_job",
+        "stress_ping"
+      ],
+      "exposed_reachable": [],
+      "implemented_not_exposed_reachable": [
+        "stress_black_swan_create_job",
+        "stress_black_swan_get_job",
+        "stress_black_swan_list_windows",
+        "stress_capabilities",
+        "stress_monte_carlo_create_job",
+        "stress_monte_carlo_get_job",
+        "stress_optimize_create_job",
+        "stress_optimize_get_job",
+        "stress_optimize_get_pareto",
+        "stress_param_sensitivity_create_job",
+        "stress_param_sensitivity_get_job",
+        "stress_ping"
+      ],
+      "exposed_reachable_not_implemented": [],
+      "implemented_count": 12,
+      "exposed_reachable_count": 0
+    },
+    "trading": {
+      "implemented": [
+        "trading_capabilities",
+        "trading_create_paper_deployment",
+        "trading_get_orders",
+        "trading_get_positions",
+        "trading_list_deployments",
+        "trading_pause_deployment",
+        "trading_ping",
+        "trading_start_deployment",
+        "trading_stop_deployment"
+      ],
+      "exposed_reachable": [
+        "trading_capabilities",
+        "trading_create_paper_deployment",
+        "trading_get_orders",
+        "trading_get_positions",
+        "trading_list_deployments",
+        "trading_pause_deployment",
+        "trading_start_deployment",
+        "trading_stop_deployment"
+      ],
+      "implemented_not_exposed_reachable": [
+        "trading_ping"
+      ],
+      "exposed_reachable_not_implemented": [],
+      "implemented_count": 9,
+      "exposed_reachable_count": 8
+    }
+  }
+}

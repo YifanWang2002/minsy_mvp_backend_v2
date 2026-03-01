@@ -1,0 +1,809 @@
+{
+  "started_at_utc": "2026-02-27T13:30:58.196582+00:00",
+  "timestamp_tag": "20260227T133058Z",
+  "user2": {
+    "email": "2@test.com"
+  },
+  "extra_user": {
+    "email": "codex_multi_20260227t133058z@test.com"
+  },
+  "alpaca_user2": {
+    "owner": "user2",
+    "broker_account_id": "3f30a120-10af-4e53-9756-e8a4f1c7aab9",
+    "strategy_id": "ba98caeb-a13a-4773-97b3-fc8f9852509c",
+    "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+    "deployment_run": {
+      "deployment_run_id": "5db492fc-aaa2-4673-a483-3190fffea537",
+      "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+      "strategy_id": "ba98caeb-a13a-4773-97b3-fc8f9852509c",
+      "broker_account_id": "3f30a120-10af-4e53-9756-e8a4f1c7aab9",
+      "status": "stopped",
+      "last_bar_time": null,
+      "timeframe_seconds": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_state": {
+        "source": "codex-live-user2"
+      },
+      "created_at": "2026-02-27T13:31:04.684431Z",
+      "updated_at": "2026-02-27T13:31:04.684431Z"
+    },
+    "start": {
+      "deployment": {
+        "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+        "strategy_id": "ba98caeb-a13a-4773-97b3-fc8f9852509c",
+        "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+        "mode": "paper",
+        "status": "active",
+        "market": "crypto",
+        "symbols": [
+          "BTC/USD"
+        ],
+        "timeframe": "1m",
+        "capital_allocated": 98755.75,
+        "risk_limits": {
+          "order_qty": 0.0005
+        },
+        "deployed_at": "2026-02-27T13:31:04.711980Z",
+        "stopped_at": null,
+        "created_at": "2026-02-27T13:31:04.684431Z",
+        "updated_at": "2026-02-27T13:31:04.708602Z",
+        "run": {
+          "deployment_run_id": "5db492fc-aaa2-4673-a483-3190fffea537",
+          "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+          "strategy_id": "ba98caeb-a13a-4773-97b3-fc8f9852509c",
+          "broker_account_id": "3f30a120-10af-4e53-9756-e8a4f1c7aab9",
+          "status": "starting",
+          "last_bar_time": null,
+          "timeframe_seconds": 60,
+          "last_trigger_bucket": null,
+          "last_enqueued_at": null,
+          "runtime_state": {
+            "source": "codex-live-user2",
+            "scheduler": {
+              "timeframe_seconds": 60,
+              "last_trigger_bucket": null,
+              "last_enqueued_at": null,
+              "fallback_last_enqueued_at": null,
+              "updated_at": "2026-02-27T13:31:04.711980+00:00"
+            },
+            "execution": {
+              "order_execution_mode": "broker",
+              "market_data_source": "alpaca_rest",
+              "broker_provider": "alpaca",
+              "updated_at": "2026-02-27T13:31:04.711980+00:00"
+            }
+          },
+          "created_at": "2026-02-27T13:31:04.684431Z",
+          "updated_at": "2026-02-27T13:31:04.708602Z"
+        }
+      },
+      "queued_task_id": "7756a202-84c0-4470-afbf-c70b4719e7fe"
+    },
+    "scheduler_probe": {
+      "triggered": false,
+      "elapsed_seconds": 70.27,
+      "final_count": 0,
+      "snapshots": [
+        {
+          "t": "2026-02-27T13:31:04.808785+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:31:14.846171+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:31:24.891012+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:31:34.915938+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:31:44.946857+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:31:54.985820+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:32:05.051421+00:00",
+          "count": 0
+        }
+      ]
+    },
+    "manual_open": {
+      "status_code": 200,
+      "response": {
+        "manual_trade_action_id": "a02e18d4-76cf-49bd-af27-46ae6a6168ec",
+        "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+        "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+        "action": "open",
+        "payload": {
+          "qty": 0.0005,
+          "side": "long",
+          "reason": "codex_live_open",
+          "symbol": "BTC/USD",
+          "_execution": {
+            "qty": "0.0005",
+            "reason": "ok",
+            "signal": "OPEN_LONG",
+            "status": "completed",
+            "symbol": "BTC/USD",
+            "order_id": "ada382c4-e12c-42c7-9965-80ad7cbcd5ec",
+            "idempotent_hit": false
+          }
+        },
+        "status": "completed",
+        "created_at": "2026-02-27T13:32:15.066883Z",
+        "updated_at": "2026-02-27T13:32:17.454457Z"
+      }
+    },
+    "manual_close": {
+      "status_code": 200,
+      "response": {
+        "manual_trade_action_id": "170b12fd-830e-43a1-abc7-d4e225026e50",
+        "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+        "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+        "action": "close",
+        "payload": {
+          "qty": 0.0005,
+          "reason": "codex_live_close",
+          "symbol": "BTC/USD",
+          "_close_qty": {
+            "close_qty_local": "0.0005",
+            "close_qty_broker": "0.0014967",
+            "close_qty_source": "broker_positions"
+          },
+          "_execution": {
+            "qty": "0.0005",
+            "reason": "ok",
+            "signal": "CLOSE",
+            "status": "completed",
+            "symbol": "BTC/USD",
+            "order_id": "622b8f5a-0505-41c2-99f9-34d13a9713f8",
+            "idempotent_hit": false
+          }
+        },
+        "status": "completed",
+        "created_at": "2026-02-27T13:32:22.471090Z",
+        "updated_at": "2026-02-27T13:32:24.792036Z"
+      }
+    },
+    "final_counts": {
+      "orders": 2,
+      "positions": 1,
+      "pnl": 2,
+      "signals": 0
+    },
+    "latest_order": {
+      "order_id": "622b8f5a-0505-41c2-99f9-34d13a9713f8",
+      "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+      "provider_order_id": "bfa70107-5149-4e05-b3e6-302d0849a7ae",
+      "client_order_id": "manual-170b12fd830e43a1abc7d4e225026e50",
+      "symbol": "BTC/USD",
+      "side": "sell",
+      "type": "market",
+      "qty": 0.0005,
+      "price": 65919.5155,
+      "status": "filled",
+      "provider_status": "filled",
+      "reject_reason": null,
+      "last_sync_at": "2026-02-27T13:32:24.781508Z",
+      "submitted_at": "2026-02-27T13:32:24.204396Z",
+      "metadata": {
+        "action": "close",
+        "signal": "CLOSE",
+        "fill_qty": "0.0005",
+        "fill_price": "65919.5155",
+        "provider_status": "filled",
+        "manual_action_id": "170b12fd-830e-43a1-abc7-d4e225026e50",
+        "last_state_reason": "manual_action_fill_simulated",
+        "state_transitions": [
+          {
+            "to": "pending_new",
+            "ts": "2026-02-27T13:32:24.772159+00:00",
+            "from": "new",
+            "reason": "provider_submit_response"
+          },
+          {
+            "to": "filled",
+            "ts": "2026-02-27T13:32:24.781540+00:00",
+            "from": "pending_new",
+            "reason": "manual_action_fill_simulated"
+          }
+        ],
+        "provider_filled_qty": "0.0005",
+        "last_state_updated_at": "2026-02-27T13:32:24.781544+00:00",
+        "provider_status_updated_at": "2026-02-27T13:32:24.781508+00:00"
+      },
+      "created_at": "2026-02-27T13:32:22.475327Z",
+      "updated_at": "2026-02-27T13:32:24.780563Z"
+    },
+    "latest_position": {
+      "position_id": "47f23265-838d-49b1-a0d0-e2fcb437c5ff",
+      "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+      "symbol": "BTC/USD",
+      "side": "flat",
+      "qty": 0.0,
+      "avg_entry_price": 0.0,
+      "mark_price": 65919.5155,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "created_at": "2026-02-27T13:32:17.441248Z",
+      "updated_at": "2026-02-27T13:32:24.780563Z"
+    },
+    "latest_pnl": {
+      "pnl_snapshot_id": "5b64a59c-55c8-4a42-b58a-274ed5fa2b11",
+      "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+      "source": "platform_estimate",
+      "equity": 98755.75,
+      "cash": 98755.75,
+      "margin_used": 0.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "snapshot_time": "2026-02-27T13:32:24.789628Z",
+      "created_at": "2026-02-27T13:32:24.780563Z",
+      "updated_at": "2026-02-27T13:32:24.780563Z"
+    },
+    "insufficient_balance_signal_hits": [],
+    "stop": {
+      "status_code": 200,
+      "response": {
+        "deployment": {
+          "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+          "strategy_id": "ba98caeb-a13a-4773-97b3-fc8f9852509c",
+          "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+          "mode": "paper",
+          "status": "stopped",
+          "market": "crypto",
+          "symbols": [
+            "BTC/USD"
+          ],
+          "timeframe": "1m",
+          "capital_allocated": 98755.75,
+          "risk_limits": {
+            "order_qty": 0.0005
+          },
+          "deployed_at": "2026-02-27T13:31:04.711980Z",
+          "stopped_at": "2026-02-27T13:32:29.865637Z",
+          "created_at": "2026-02-27T13:31:04.684431Z",
+          "updated_at": "2026-02-27T13:32:29.862897Z",
+          "run": {
+            "deployment_run_id": "5db492fc-aaa2-4673-a483-3190fffea537",
+            "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+            "strategy_id": "ba98caeb-a13a-4773-97b3-fc8f9852509c",
+            "broker_account_id": "3f30a120-10af-4e53-9756-e8a4f1c7aab9",
+            "status": "stopped",
+            "last_bar_time": null,
+            "timeframe_seconds": 60,
+            "last_trigger_bucket": null,
+            "last_enqueued_at": null,
+            "runtime_state": {
+              "source": "codex-live-user2",
+              "execution": {
+                "updated_at": "2026-02-27T13:32:29.865637+00:00",
+                "broker_provider": "alpaca",
+                "market_data_source": "alpaca_rest",
+                "order_execution_mode": "broker"
+              },
+              "scheduler": {
+                "updated_at": "2026-02-27T13:32:29.865637+00:00",
+                "last_enqueued_at": null,
+                "timeframe_seconds": 60,
+                "last_trigger_bucket": null,
+                "fallback_last_enqueued_at": null
+              }
+            },
+            "created_at": "2026-02-27T13:31:04.684431Z",
+            "updated_at": "2026-02-27T13:32:29.862897Z"
+          }
+        },
+        "queued_task_id": null
+      }
+    }
+  },
+  "ccxt_user2": {
+    "owner": "user2",
+    "broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+    "strategy_id": "07a9067d-7699-4116-8657-5ffe668bb13d",
+    "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+    "deployment_run": {
+      "deployment_run_id": "1c9ae15a-beca-4d2f-80ad-6aca070c365f",
+      "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+      "strategy_id": "07a9067d-7699-4116-8657-5ffe668bb13d",
+      "broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+      "status": "stopped",
+      "last_bar_time": null,
+      "timeframe_seconds": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_state": {
+        "source": "codex-live-ccxt-user2"
+      },
+      "created_at": "2026-02-27T13:32:35.040461Z",
+      "updated_at": "2026-02-27T13:32:35.040461Z"
+    },
+    "rotate_credentials": {
+      "status_code": 200,
+      "response": {
+        "broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+        "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+        "provider": "ccxt",
+        "mode": "paper",
+        "status": "active",
+        "key_fingerprint": "3e8bbbf43bae8a6647d846389a5350f8fb1f80ec0319ae1610665e1efa9ffe35",
+        "encryption_version": "fernet_v1",
+        "updated_source": "api",
+        "last_validated_at": null,
+        "last_validated_status": "validation_skipped",
+        "validation_metadata": {
+          "validate_requested": false
+        },
+        "metadata": {
+          "source": "codex-okx-paper-bootstrap",
+          "sandbox": true,
+          "exchange_id": "okx"
+        },
+        "created_at": "2026-02-27T12:02:24.900759Z",
+        "updated_at": "2026-02-27T13:32:29.885717Z"
+      }
+    },
+    "validate_result": {
+      "status_code": 422,
+      "response": {
+        "detail": {
+          "code": "BROKER_ACCOUNT_VALIDATION_FAILED",
+          "message": "CCXT validation failed: ExchangeError: okx {\"msg\":\"API key doesn't exist\",\"code\":\"50119\"}",
+          "metadata": {
+            "provider": "ccxt",
+            "exchange_id": "okx",
+            "sandbox": true,
+            "error_type": "ExchangeError",
+            "error_detail": "okx {\"msg\":\"API key doesn't exist\",\"code\":\"50119\"}"
+          }
+        }
+      }
+    },
+    "start": {
+      "deployment": {
+        "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+        "strategy_id": "07a9067d-7699-4116-8657-5ffe668bb13d",
+        "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+        "mode": "paper",
+        "status": "active",
+        "market": "crypto",
+        "symbols": [
+          "BTC/USDT"
+        ],
+        "timeframe": "1m",
+        "capital_allocated": 10000.0,
+        "risk_limits": {
+          "order_qty": 0.001
+        },
+        "deployed_at": "2026-02-27T13:32:36.473959Z",
+        "stopped_at": null,
+        "created_at": "2026-02-27T13:32:35.040461Z",
+        "updated_at": "2026-02-27T13:32:36.471700Z",
+        "run": {
+          "deployment_run_id": "1c9ae15a-beca-4d2f-80ad-6aca070c365f",
+          "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+          "strategy_id": "07a9067d-7699-4116-8657-5ffe668bb13d",
+          "broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+          "status": "starting",
+          "last_bar_time": null,
+          "timeframe_seconds": 60,
+          "last_trigger_bucket": null,
+          "last_enqueued_at": null,
+          "runtime_state": {
+            "source": "codex-live-ccxt-user2",
+            "scheduler": {
+              "timeframe_seconds": 60,
+              "last_trigger_bucket": null,
+              "last_enqueued_at": null,
+              "fallback_last_enqueued_at": null,
+              "updated_at": "2026-02-27T13:32:36.473959+00:00"
+            },
+            "execution": {
+              "order_execution_mode": "broker",
+              "market_data_source": "ccxt_rest",
+              "broker_provider": "ccxt",
+              "updated_at": "2026-02-27T13:32:36.473959+00:00"
+            }
+          },
+          "created_at": "2026-02-27T13:32:35.040461Z",
+          "updated_at": "2026-02-27T13:32:36.471700Z"
+        }
+      },
+      "queued_task_id": "323cd43e-957c-467c-aa5e-2b1fae9bbf50"
+    },
+    "manual_open": {
+      "status_code": 200,
+      "response": {
+        "manual_trade_action_id": "b3f6d274-cb9f-491e-8c0e-96983798855a",
+        "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+        "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+        "action": "open",
+        "payload": {
+          "qty": 0.001,
+          "side": "long",
+          "reason": "codex_ccxt_open",
+          "symbol": "BTC/USDT",
+          "_execution": {
+            "reason": "order_submit_failed:ExchangeError:okx {\"msg\":\"API key doesn't exist\",\"code\":\"50119\"}",
+            "status": "rejected"
+          }
+        },
+        "status": "rejected",
+        "created_at": "2026-02-27T13:32:38.487009Z",
+        "updated_at": "2026-02-27T13:32:38.491227Z"
+      }
+    },
+    "final_counts": {
+      "orders": 0,
+      "positions": 0,
+      "pnl": 0,
+      "signals": 0
+    },
+    "latest_order": null,
+    "latest_signal": null,
+    "stop": {
+      "status_code": 200,
+      "response": {
+        "deployment": {
+          "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+          "strategy_id": "07a9067d-7699-4116-8657-5ffe668bb13d",
+          "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+          "mode": "paper",
+          "status": "stopped",
+          "market": "crypto",
+          "symbols": [
+            "BTC/USDT"
+          ],
+          "timeframe": "1m",
+          "capital_allocated": 10000.0,
+          "risk_limits": {
+            "order_qty": 0.001
+          },
+          "deployed_at": "2026-02-27T13:32:36.473959Z",
+          "stopped_at": "2026-02-27T13:32:44.748706Z",
+          "created_at": "2026-02-27T13:32:35.040461Z",
+          "updated_at": "2026-02-27T13:32:44.746815Z",
+          "run": {
+            "deployment_run_id": "1c9ae15a-beca-4d2f-80ad-6aca070c365f",
+            "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+            "strategy_id": "07a9067d-7699-4116-8657-5ffe668bb13d",
+            "broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+            "status": "stopped",
+            "last_bar_time": null,
+            "timeframe_seconds": 60,
+            "last_trigger_bucket": null,
+            "last_enqueued_at": null,
+            "runtime_state": {
+              "source": "codex-live-ccxt-user2",
+              "execution": {
+                "updated_at": "2026-02-27T13:32:44.748706+00:00",
+                "broker_provider": "ccxt",
+                "market_data_source": "ccxt_rest",
+                "order_execution_mode": "broker"
+              },
+              "scheduler": {
+                "updated_at": "2026-02-27T13:32:44.748706+00:00",
+                "last_enqueued_at": null,
+                "timeframe_seconds": 60,
+                "last_trigger_bucket": null,
+                "fallback_last_enqueued_at": null
+              }
+            },
+            "created_at": "2026-02-27T13:32:35.040461Z",
+            "updated_at": "2026-02-27T13:32:44.746815Z"
+          }
+        },
+        "queued_task_id": null
+      }
+    }
+  },
+  "alpaca_extra_user": {
+    "owner": "extra_user",
+    "broker_account_id": "0e870c1a-51a8-42a9-96d6-9825ae1d9209",
+    "strategy_id": "0aea3e02-0f09-47e5-9b19-08b5ea68248b",
+    "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+    "deployment_run": {
+      "deployment_run_id": "d55e8f15-b9ec-4e89-8f33-dd79f025a146",
+      "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+      "strategy_id": "0aea3e02-0f09-47e5-9b19-08b5ea68248b",
+      "broker_account_id": "0e870c1a-51a8-42a9-96d6-9825ae1d9209",
+      "status": "stopped",
+      "last_bar_time": null,
+      "timeframe_seconds": null,
+      "last_trigger_bucket": null,
+      "last_enqueued_at": null,
+      "runtime_state": {
+        "source": "codex-live-extra_user"
+      },
+      "created_at": "2026-02-27T13:32:46.330044Z",
+      "updated_at": "2026-02-27T13:32:46.330044Z"
+    },
+    "start": {
+      "deployment": {
+        "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+        "strategy_id": "0aea3e02-0f09-47e5-9b19-08b5ea68248b",
+        "user_id": "1134a9f6-7cb4-47ee-812b-92a389d4f6cc",
+        "mode": "paper",
+        "status": "active",
+        "market": "crypto",
+        "symbols": [
+          "BTC/USD"
+        ],
+        "timeframe": "1m",
+        "capital_allocated": 98755.61,
+        "risk_limits": {
+          "order_qty": 0.0005
+        },
+        "deployed_at": "2026-02-27T13:32:46.343860Z",
+        "stopped_at": null,
+        "created_at": "2026-02-27T13:32:46.330044Z",
+        "updated_at": "2026-02-27T13:32:46.340543Z",
+        "run": {
+          "deployment_run_id": "d55e8f15-b9ec-4e89-8f33-dd79f025a146",
+          "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+          "strategy_id": "0aea3e02-0f09-47e5-9b19-08b5ea68248b",
+          "broker_account_id": "0e870c1a-51a8-42a9-96d6-9825ae1d9209",
+          "status": "starting",
+          "last_bar_time": null,
+          "timeframe_seconds": 60,
+          "last_trigger_bucket": null,
+          "last_enqueued_at": null,
+          "runtime_state": {
+            "source": "codex-live-extra_user",
+            "scheduler": {
+              "timeframe_seconds": 60,
+              "last_trigger_bucket": null,
+              "last_enqueued_at": null,
+              "fallback_last_enqueued_at": null,
+              "updated_at": "2026-02-27T13:32:46.343860+00:00"
+            },
+            "execution": {
+              "order_execution_mode": "broker",
+              "market_data_source": "alpaca_rest",
+              "broker_provider": "alpaca",
+              "updated_at": "2026-02-27T13:32:46.343860+00:00"
+            }
+          },
+          "created_at": "2026-02-27T13:32:46.330044Z",
+          "updated_at": "2026-02-27T13:32:46.340543Z"
+        }
+      },
+      "queued_task_id": "a2e44767-0356-4e29-875a-6fbac297aebc"
+    },
+    "scheduler_probe": {
+      "triggered": false,
+      "elapsed_seconds": 70.26,
+      "final_count": 0,
+      "snapshots": [
+        {
+          "t": "2026-02-27T13:32:46.416043+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:32:56.450811+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:33:06.486728+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:33:16.518250+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:33:26.559438+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:33:36.605988+00:00",
+          "count": 0
+        },
+        {
+          "t": "2026-02-27T13:33:46.642969+00:00",
+          "count": 0
+        }
+      ]
+    },
+    "manual_open": {
+      "status_code": 200,
+      "response": {
+        "manual_trade_action_id": "deeae37a-df4d-4eed-bde3-06d9abba3385",
+        "user_id": "1134a9f6-7cb4-47ee-812b-92a389d4f6cc",
+        "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+        "action": "open",
+        "payload": {
+          "qty": 0.0005,
+          "side": "long",
+          "reason": "codex_live_open",
+          "symbol": "BTC/USD",
+          "_execution": {
+            "qty": "0.0005",
+            "reason": "ok",
+            "signal": "OPEN_LONG",
+            "status": "completed",
+            "symbol": "BTC/USD",
+            "order_id": "a4fff3d3-47a6-44bf-9d80-6a79b1e3bc75",
+            "idempotent_hit": false
+          }
+        },
+        "status": "completed",
+        "created_at": "2026-02-27T13:33:56.651192Z",
+        "updated_at": "2026-02-27T13:33:58.255309Z"
+      }
+    },
+    "manual_close": {
+      "status_code": 200,
+      "response": {
+        "manual_trade_action_id": "e263e9b0-ba84-4439-864d-39ff5355656f",
+        "user_id": "1134a9f6-7cb4-47ee-812b-92a389d4f6cc",
+        "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+        "action": "close",
+        "payload": {
+          "qty": 0.0005,
+          "reason": "codex_live_close",
+          "symbol": "BTC/USD",
+          "_close_qty": {
+            "close_qty_local": "0.0005",
+            "close_qty_broker": "0.0014956",
+            "close_qty_source": "broker_positions"
+          },
+          "_execution": {
+            "qty": "0.0005",
+            "reason": "ok",
+            "signal": "CLOSE",
+            "status": "completed",
+            "symbol": "BTC/USD",
+            "order_id": "aacac2bd-88b3-4c11-97fc-d8ff8240883c",
+            "idempotent_hit": false
+          }
+        },
+        "status": "completed",
+        "created_at": "2026-02-27T13:34:03.275313Z",
+        "updated_at": "2026-02-27T13:34:07.736704Z"
+      }
+    },
+    "final_counts": {
+      "orders": 2,
+      "positions": 1,
+      "pnl": 2,
+      "signals": 0
+    },
+    "latest_order": {
+      "order_id": "aacac2bd-88b3-4c11-97fc-d8ff8240883c",
+      "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+      "provider_order_id": "545324a3-ab84-4f2b-ab60-7d4109187e57",
+      "client_order_id": "manual-e263e9b0ba844439864d39ff5355656f",
+      "symbol": "BTC/USD",
+      "side": "sell",
+      "type": "market",
+      "qty": 0.0005,
+      "price": 65919.5155,
+      "status": "filled",
+      "provider_status": "filled",
+      "reject_reason": null,
+      "last_sync_at": "2026-02-27T13:34:07.725358Z",
+      "submitted_at": "2026-02-27T13:34:07.633615Z",
+      "metadata": {
+        "action": "close",
+        "signal": "CLOSE",
+        "fill_qty": "0.0005",
+        "fill_price": "65919.5155",
+        "provider_status": "filled",
+        "manual_action_id": "e263e9b0-ba84-4439-864d-39ff5355656f",
+        "last_state_reason": "manual_action_fill_simulated",
+        "state_transitions": [
+          {
+            "to": "pending_new",
+            "ts": "2026-02-27T13:34:07.715739+00:00",
+            "from": "new",
+            "reason": "provider_submit_response"
+          },
+          {
+            "to": "filled",
+            "ts": "2026-02-27T13:34:07.725386+00:00",
+            "from": "pending_new",
+            "reason": "manual_action_fill_simulated"
+          }
+        ],
+        "provider_filled_qty": "0.0005",
+        "last_state_updated_at": "2026-02-27T13:34:07.725391+00:00",
+        "provider_status_updated_at": "2026-02-27T13:34:07.725358+00:00"
+      },
+      "created_at": "2026-02-27T13:34:03.282376Z",
+      "updated_at": "2026-02-27T13:34:07.724446Z"
+    },
+    "latest_position": {
+      "position_id": "5d500015-5756-4847-a4c3-3980b94e5026",
+      "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+      "symbol": "BTC/USD",
+      "side": "flat",
+      "qty": 0.0,
+      "avg_entry_price": 0.0,
+      "mark_price": 65919.5155,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "created_at": "2026-02-27T13:33:58.239808Z",
+      "updated_at": "2026-02-27T13:34:07.724446Z"
+    },
+    "latest_pnl": {
+      "pnl_snapshot_id": "35380ca7-6abc-44df-b255-5fdd481a962d",
+      "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+      "source": "platform_estimate",
+      "equity": 98755.61,
+      "cash": 98755.61,
+      "margin_used": 0.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "snapshot_time": "2026-02-27T13:34:07.734290Z",
+      "created_at": "2026-02-27T13:34:07.724446Z",
+      "updated_at": "2026-02-27T13:34:07.724446Z"
+    },
+    "insufficient_balance_signal_hits": [],
+    "stop": {
+      "status_code": 200,
+      "response": {
+        "deployment": {
+          "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+          "strategy_id": "0aea3e02-0f09-47e5-9b19-08b5ea68248b",
+          "user_id": "1134a9f6-7cb4-47ee-812b-92a389d4f6cc",
+          "mode": "paper",
+          "status": "stopped",
+          "market": "crypto",
+          "symbols": [
+            "BTC/USD"
+          ],
+          "timeframe": "1m",
+          "capital_allocated": 98755.61,
+          "risk_limits": {
+            "order_qty": 0.0005
+          },
+          "deployed_at": "2026-02-27T13:32:46.343860Z",
+          "stopped_at": "2026-02-27T13:34:12.778906Z",
+          "created_at": "2026-02-27T13:32:46.330044Z",
+          "updated_at": "2026-02-27T13:34:12.777061Z",
+          "run": {
+            "deployment_run_id": "d55e8f15-b9ec-4e89-8f33-dd79f025a146",
+            "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+            "strategy_id": "0aea3e02-0f09-47e5-9b19-08b5ea68248b",
+            "broker_account_id": "0e870c1a-51a8-42a9-96d6-9825ae1d9209",
+            "status": "stopped",
+            "last_bar_time": null,
+            "timeframe_seconds": 60,
+            "last_trigger_bucket": null,
+            "last_enqueued_at": null,
+            "runtime_state": {
+              "source": "codex-live-extra_user",
+              "execution": {
+                "updated_at": "2026-02-27T13:34:12.778906+00:00",
+                "broker_provider": "alpaca",
+                "market_data_source": "alpaca_rest",
+                "order_execution_mode": "broker"
+              },
+              "scheduler": {
+                "updated_at": "2026-02-27T13:34:12.778906+00:00",
+                "last_enqueued_at": null,
+                "timeframe_seconds": 60,
+                "last_trigger_bucket": null,
+                "fallback_last_enqueued_at": null
+              }
+            },
+            "created_at": "2026-02-27T13:32:46.330044Z",
+            "updated_at": "2026-02-27T13:34:12.777061Z"
+          }
+        },
+        "queued_task_id": null
+      }
+    }
+  },
+  "ended_at_utc": "2026-02-27T13:34:12.785657+00:00"
+}

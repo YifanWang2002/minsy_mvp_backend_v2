@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -12,7 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from packages.shared_settings.schema.settings import settings
+from packages.domain.market_data.catalog_service import (
+    upsert_catalog_entry_from_parquet,
+)
 from packages.domain.market_data.data import DataLoader
 from packages.domain.market_data.data.local_coverage import (
     LocalCoverageInputError,
@@ -22,14 +25,16 @@ from packages.domain.market_data.data.local_coverage import (
     serialize_missing_ranges,
 )
 from packages.domain.market_data.data.parquet_writer import append_ohlcv_rows
-from packages.infra.providers.trading.adapters.base import OhlcvBar
-from packages.infra.providers.market_data.alpaca_client import AlpacaMarketDataClient
-from packages.infra.providers.market_data.ccxt_rest import CcxtRestProvider
 from packages.domain.ports.queue_ports import get_job_queue_ports
 from packages.infra.db import session as db_module
 from packages.infra.db.models.market_data_sync_chunk import MarketDataSyncChunk
 from packages.infra.db.models.market_data_sync_job import MarketDataSyncJob
 from packages.infra.observability.logger import logger
+from packages.infra.providers.market_data.alpaca_client import AlpacaMarketDataClient
+from packages.infra.providers.market_data.ccxt_rest import CcxtRestProvider
+from packages.infra.providers.trading.adapters.base import OhlcvBar
+from packages.infra.redis.client import get_redis_client, init_redis
+from packages.shared_settings.schema.settings import settings
 
 _INTERNAL_TO_EXTERNAL_STATUS: dict[str, str] = {
     "queued": "pending",
@@ -49,6 +54,7 @@ class MarketDataSyncJobReceipt:
     job_id: UUID
     status: str
     progress: int
+    deduplicated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +123,25 @@ async def create_market_data_sync_job(
     if end_utc < start_utc:
         raise MarketDataSyncInputError("requested_end must be greater than requested_start")
 
+    existing_job = await db.scalar(
+        select(MarketDataSyncJob)
+        .where(
+            MarketDataSyncJob.provider == provider_key,
+            MarketDataSyncJob.market == market_key,
+            MarketDataSyncJob.symbol == symbol_key,
+            MarketDataSyncJob.timeframe == timeframe_key,
+            MarketDataSyncJob.status.in_(("queued", "running")),
+        )
+        .order_by(MarketDataSyncJob.submitted_at.desc())
+    )
+    if existing_job is not None:
+        return MarketDataSyncJobReceipt(
+            job_id=existing_job.id,
+            status=_to_external_status(existing_job.status),
+            progress=int(existing_job.progress),
+            deduplicated=True,
+        )
+
     ranges = _resolve_missing_ranges(
         loader=loader,
         market=market_key,
@@ -161,6 +186,7 @@ async def create_market_data_sync_job(
         job_id=job.id,
         status=_to_external_status(job.status),
         progress=int(job.progress),
+        deduplicated=False,
     )
 
 
@@ -202,31 +228,63 @@ async def execute_market_data_sync_job(
     if job.status == "completed":
         return _to_view(job)
 
-    job.status = "running"
-    job.progress = 5
-    job.current_step = "fetching"
-    job.error_message = None
-    await _commit_if_requested(db, auto_commit=auto_commit)
-
-    provider_name = _normalize_provider(job.provider)
-    timeframe_key = _normalize_timeframe(job.timeframe)
-    ranges = deserialize_missing_ranges(list(job.missing_ranges or []))
-    if not ranges:
+    lock_key = _market_data_sync_lock_key(job)
+    lock_value = str(job.id)
+    lock_ttl = int(settings.market_data_sync_lock_ttl_seconds)
+    lock_acquired = False
+    redis_client = None
+    try:
+        await init_redis()
+        redis_client = get_redis_client()
+        lock_acquired = bool(
+            await redis_client.set(lock_key, lock_value, nx=True, ex=max(lock_ttl, 1))
+        )
+    except Exception as exc:  # noqa: BLE001
         job.status = "failed"
         job.progress = 100
         job.current_step = "failed"
-        job.error_message = "No missing ranges to process"
+        job.error_message = f"Redis lock unavailable: {type(exc).__name__}: {exc}"
         job.completed_at = datetime.now(UTC)
         await _commit_if_requested(db, auto_commit=auto_commit)
         return _to_view(job)
 
-    rows_written_total = int(job.rows_written or 0)
-    errors: list[str] = []
+    if not lock_acquired:
+        job.status = "cancelled"
+        job.progress = 100
+        job.current_step = "cancelled_duplicate"
+        job.error_message = "Another worker is syncing this market/symbol/timeframe"
+        job.completed_at = datetime.now(UTC)
+        await _commit_if_requested(db, auto_commit=auto_commit)
+        return _to_view(job)
 
-    provider_client, close_provider = await _build_provider_client(provider_name)
-    loader = DataLoader()
-
+    provider_client = None
+    close_provider = None
     try:
+        job.status = "running"
+        job.progress = 5
+        job.current_step = "fetching"
+        job.error_message = None
+        await _commit_if_requested(db, auto_commit=auto_commit)
+
+        provider_name = _normalize_provider(job.provider)
+        timeframe_key = _normalize_timeframe(job.timeframe)
+        ranges = deserialize_missing_ranges(list(job.missing_ranges or []))
+        if not ranges:
+            job.status = "failed"
+            job.progress = 100
+            job.current_step = "failed"
+            job.error_message = "No missing ranges to process"
+            job.completed_at = datetime.now(UTC)
+            await _commit_if_requested(db, auto_commit=auto_commit)
+            return _to_view(job)
+
+        rows_written_total = int(job.rows_written or 0)
+        errors: list[str] = []
+        catalog_years_touched: set[int] = set()
+
+        provider_client, close_provider = await _build_provider_client(provider_name)
+        loader = DataLoader()
+
         total = len(ranges)
         for index, target_range in enumerate(ranges):
             chunk = MarketDataSyncChunk(
@@ -262,6 +320,7 @@ async def execute_market_data_sync_job(
                     rows=frame,
                 )
                 rows_written_total += write_result.rows_written
+                catalog_years_touched.update(_extract_frame_years(frame))
 
                 chunk.fetched_rows = len(frame)
                 chunk.written_rows = write_result.rows_written
@@ -282,6 +341,19 @@ async def execute_market_data_sync_job(
             job.current_step = f"processing_range_{completed}_of_{total}"
             await _commit_if_requested(db, auto_commit=auto_commit)
 
+        if rows_written_total > 0 and catalog_years_touched:
+            try:
+                await _sync_catalog_for_job_years(
+                    db=db,
+                    loader=loader,
+                    market=job.market,
+                    symbol=job.symbol,
+                    timeframe=timeframe_key,
+                    years=sorted(catalog_years_touched),
+                )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"CatalogSyncError: {type(exc).__name__}: {exc}")
+
         if errors and rows_written_total == 0:
             job.status = "failed"
             job.error_message = errors[0]
@@ -300,7 +372,15 @@ async def execute_market_data_sync_job(
         )
         return _to_view(refreshed or job)
     finally:
-        await close_provider()
+        if close_provider is not None:
+            with suppress(Exception):
+                await close_provider()
+        if redis_client is not None and lock_acquired:
+            await _release_market_data_sync_lock(
+                redis_client=redis_client,
+                key=lock_key,
+                lock_value=lock_value,
+            )
 
 
 async def get_market_data_sync_job_view(
@@ -368,6 +448,8 @@ def _to_view(job: MarketDataSyncJob) -> MarketDataSyncJobView:
         for item in chunks
         if item.status == "failed" and item.error_message
     )
+    if not errors and isinstance(job.error_message, str) and job.error_message.strip():
+        errors = ({"chunk_index": -1, "message": job.error_message.strip()},)
     if completed_ranges == 0 and job.status == "completed" and total_ranges > 0:
         completed_ranges = max(0, total_ranges - len(errors))
     return MarketDataSyncJobView(
@@ -555,6 +637,71 @@ def _ensure_utc(value: datetime) -> datetime:
 
 def _to_external_status(status: str) -> str:
     return _INTERNAL_TO_EXTERNAL_STATUS.get(status, status)
+
+
+def _extract_frame_years(frame: pd.DataFrame) -> set[int]:
+    if frame.empty or "timestamp" not in frame.columns:
+        return set()
+    timestamps = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce").dropna()
+    if timestamps.empty:
+        return set()
+    return {int(item.year) for item in timestamps}
+
+
+async def _sync_catalog_for_job_years(
+    *,
+    db: AsyncSession,
+    loader: DataLoader,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    years: list[int],
+) -> None:
+    file_timeframe = loader.FILE_TIMEFRAME_MAP[timeframe]
+    session = loader.MARKET_SESSION_MAP.get(market, "eth")
+    market_dir = loader.data_dir / market
+    for year in years:
+        file_path = market_dir / f"{symbol}_{file_timeframe}_{session}_{int(year)}.parquet"
+        if not file_path.exists():
+            continue
+        await upsert_catalog_entry_from_parquet(
+            db,
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe,
+            session=session,
+            year=int(year),
+            file_path=file_path,
+        )
+
+
+def _market_data_sync_lock_key(job: MarketDataSyncJob) -> str:
+    return (
+        "market_data_sync:"
+        f"{job.provider.strip().lower()}:"
+        f"{job.market.strip().lower()}:"
+        f"{job.symbol.strip().upper()}:"
+        f"{job.timeframe.strip().lower()}"
+    )
+
+
+async def _release_market_data_sync_lock(
+    *,
+    redis_client: Any,
+    key: str,
+    lock_value: str,
+) -> None:
+    script = (
+        "if redis.call('get', KEYS[1]) == ARGV[1] "
+        "then return redis.call('del', KEYS[1]) "
+        "else return 0 end"
+    )
+    try:
+        await redis_client.eval(script, 1, key, lock_value)
+    except Exception:  # noqa: BLE001
+        logger.warning("[market-data-sync] lock release fallback key=%s", key)
+        with suppress(Exception):
+            await redis_client.delete(key)
 
 
 async def _commit_if_requested(db: AsyncSession, *, auto_commit: bool) -> None:

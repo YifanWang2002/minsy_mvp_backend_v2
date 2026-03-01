@@ -319,7 +319,7 @@ uv run pytest -q tests/test_agents
 
 | 优先级 | 方向 | 现状判断 | 用户收益 | 工程复杂度 | 建议落地 |
 |---|---|---|---|---|---|
-| P0 | SSE 完成态可恢复（刷新后恢复完整回答与“thinking 摘要”） | 当前有流式 SSE 和 session 消息落库，但前端刷新后的“本回合状态恢复”仍可增强 | 高（直接改善聊天稳定感和信任） | 中 | 增加 turn_id + finalized 事件，补 `/sessions/{id}` 的“最后一轮完成态”聚合字段 |
+| 已完成（2026-02） | SSE 完成态可恢复（刷新后恢复完整回答与“thinking 摘要”） | 已落地：`stream_start/done` 带 `turn_id`；`/sessions/{id}` 返回 `stream_recovery`（含 state/user_message_id/assistant_message_id/started_at/updated_at）；客户端断连后后端继续消费并落库完成态 | 高（直接改善聊天稳定感和信任） | 已完成 | 后续增量聚焦 `Chat 回放与调试快照 API`，不再重复建设基础恢复链路 |
 | P0 | 免注册 paper 体验（Guest Sandbox） | 当前流程默认注册用户；门槛偏高 | 高（显著提升首日转化） | 中高 | 引入短期游客 token + 资源配额 + 自动回收策略 |
 | P0 | 免费/付费分层与 usage 降级 | 已有 token usage/cost 记录基础 | 高（商业化和成本控制） | 中 | 在 API 层加 plan policy（模型档位、并发、回测额度） |
 | P0 | API 安全基线升级（Scoped Token + 审计导出） | 当前以登录态为主，细粒度 token 权限仍可加强 | 高（安全与企业可用性） | 中高 | 增加可撤销 token、权限范围、审计日志导出接口 |

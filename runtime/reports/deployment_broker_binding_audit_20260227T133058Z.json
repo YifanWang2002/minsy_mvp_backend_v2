@@ -1,0 +1,306 @@
+{
+  "our_deployments": [
+    {
+      "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+      "found": true,
+      "status": "stopped",
+      "user_email": "2@test.com",
+      "run_broker_account_id": "3f30a120-10af-4e53-9756-e8a4f1c7aab9",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "dd895ffb39db39d62a588d450d8fab88dbc6f7f4633f56cfb6a10771cb1b908a",
+      "broker_credentials_shape": {
+        "api_key": "len=26",
+        "api_secret": "len=44"
+      },
+      "orders_count": 2,
+      "filled_orders_count": 2,
+      "order_summaries": [
+        {
+          "order_id": "622b8f5a-0505-41c2-99f9-34d13a9713f8",
+          "provider_order_id": "bfa70107-5149-4e05-b3e6-302d0849a7ae",
+          "status": "filled",
+          "side": "sell",
+          "qty": "0.00050000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "ada382c4-e12c-42c7-9965-80ad7cbcd5ec",
+          "provider_order_id": "a216292c-a2d8-4195-b555-b0fd3b2d473a",
+          "status": "filled",
+          "side": "buy",
+          "qty": "0.00050000",
+          "reject_reason": null
+        }
+      ]
+    },
+    {
+      "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+      "found": true,
+      "status": "stopped",
+      "user_email": "2@test.com",
+      "run_broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+      "broker_provider": "ccxt",
+      "broker_status": "error",
+      "broker_last_error": "CCXT validation failed: ExchangeError: okx {\"msg\":\"API key doesn't exist\",\"code\":\"50119\"}",
+      "broker_key_fingerprint": "3e8bbbf43bae8a6647d846389a5350f8fb1f80ec0319ae1610665e1efa9ffe35",
+      "broker_credentials_shape": {
+        "exchange_id": "len=3",
+        "api_key": "len=36",
+        "api_secret": "len=32",
+        "passphrase": "len=11",
+        "sandbox": true
+      },
+      "orders_count": 0,
+      "filled_orders_count": 0,
+      "order_summaries": []
+    },
+    {
+      "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+      "found": true,
+      "status": "stopped",
+      "user_email": "codex_multi_20260227t133058z@test.com",
+      "run_broker_account_id": "0e870c1a-51a8-42a9-96d6-9825ae1d9209",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "dd895ffb39db39d62a588d450d8fab88dbc6f7f4633f56cfb6a10771cb1b908a",
+      "broker_credentials_shape": {
+        "api_key": "len=26",
+        "api_secret": "len=44"
+      },
+      "orders_count": 2,
+      "filled_orders_count": 2,
+      "order_summaries": [
+        {
+          "order_id": "aacac2bd-88b3-4c11-97fc-d8ff8240883c",
+          "provider_order_id": "545324a3-ab84-4f2b-ab60-7d4109187e57",
+          "status": "filled",
+          "side": "sell",
+          "qty": "0.00050000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "a4fff3d3-47a6-44bf-9d80-6a79b1e3bc75",
+          "provider_order_id": "382e2596-c83c-482c-94fb-f6b8505d5b6a",
+          "status": "filled",
+          "side": "buy",
+          "qty": "0.00050000",
+          "reject_reason": null
+        }
+      ]
+    }
+  ],
+  "log_snippet_deployments": [
+    {
+      "deployment_id": "adbb3c96-684a-4727-a806-0dd24153960c",
+      "found": true,
+      "status": "active",
+      "user_email": "manual_owner_2bf8feef862c4c0d8437c777737ad10a@test.com",
+      "run_broker_account_id": "ad1a1e14-5e34-4765-9233-1b624d1e42f2",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "5dec8916be1c0eb8238658984822fca3c816a5d414546f16c3bb0612b2129516",
+      "broker_credentials_shape": {
+        "api_key": "len=4",
+        "api_secret": "len=4"
+      },
+      "orders_count": 1,
+      "filled_orders_count": 1,
+      "order_summaries": [
+        {
+          "order_id": "88583925-24ff-4ebd-b151-e3eef9a66266",
+          "provider_order_id": "paper-adbb3c96-1767607260-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "1.00000000",
+          "reject_reason": null
+        }
+      ]
+    },
+    {
+      "deployment_id": "6c2a0db1-fb9c-49dc-b72b-79adf940d4d6",
+      "found": true,
+      "status": "active",
+      "user_email": "full_pipeline_29fb353a11a34d4b8846819acc82ceed@test.com",
+      "run_broker_account_id": "049f4535-b225-44a5-a03c-f6bdf32e3b40",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "5dec8916be1c0eb8238658984822fca3c816a5d414546f16c3bb0612b2129516",
+      "broker_credentials_shape": {
+        "api_key": "len=4",
+        "api_secret": "len=4"
+      },
+      "orders_count": 383,
+      "filled_orders_count": 383,
+      "order_summaries": [
+        {
+          "order_id": "f8b1c268-73d8-4c21-858f-ca2ea931002b",
+          "provider_order_id": "paper-6c2a0db1-1772194920-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "0.20000000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "a3bc7429-0371-4dcd-bc50-984ffdd5c706",
+          "provider_order_id": "paper-6c2a0db1-1772194200-close",
+          "status": "filled",
+          "side": "sell",
+          "qty": "0.20000000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "943ce0a6-a1b6-4c6b-b83f-79afe7a8b758",
+          "provider_order_id": "paper-6c2a0db1-1772194140-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "0.20000000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "5788fc36-f4ea-4a2d-b62b-7847b32260ba",
+          "provider_order_id": "paper-6c2a0db1-1772189820-close",
+          "status": "filled",
+          "side": "sell",
+          "qty": "0.20000000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "5941bb78-df21-4d66-89f7-5a4a38630a49",
+          "provider_order_id": "paper-6c2a0db1-1772189760-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "0.20000000",
+          "reject_reason": null
+        }
+      ]
+    },
+    {
+      "deployment_id": "edbb3511-3f76-4981-b2a1-3edcccbebb83",
+      "found": true,
+      "status": "active",
+      "user_email": "portfolio_endpoints_13db19e713634f10a1b88749591954ac@test.com",
+      "run_broker_account_id": "7bedd146-bcdf-4b75-800a-1f1a0304cb28",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "5dec8916be1c0eb8238658984822fca3c816a5d414546f16c3bb0612b2129516",
+      "broker_credentials_shape": {
+        "api_key": "len=4",
+        "api_secret": "len=4"
+      },
+      "orders_count": 0,
+      "filled_orders_count": 0,
+      "order_summaries": []
+    },
+    {
+      "deployment_id": "b8a68384-ed5a-4b64-9d65-356475564137",
+      "found": true,
+      "status": "active",
+      "user_email": "signal_order_flow_f817300a194648ff8ba225f496486745@test.com",
+      "run_broker_account_id": "07e4f441-2a0a-4c07-9e59-4248dc854422",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "5dec8916be1c0eb8238658984822fca3c816a5d414546f16c3bb0612b2129516",
+      "broker_credentials_shape": {
+        "api_key": "len=4",
+        "api_secret": "len=4"
+      },
+      "orders_count": 1,
+      "filled_orders_count": 1,
+      "order_summaries": [
+        {
+          "order_id": "539dec5e-21ab-4290-ae02-4397a0e1c973",
+          "provider_order_id": "paper-b8a68384-1767607260-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "1.00000000",
+          "reject_reason": null
+        }
+      ]
+    },
+    {
+      "deployment_id": "a8b4b9d3-af4d-453a-9efe-cad024ef9757",
+      "found": true,
+      "status": "active",
+      "user_email": "signal_order_flow_d3f49e717a494b9d93477b329f1def6b@test.com",
+      "run_broker_account_id": "84d5afb3-e3ef-460c-a2c2-bccbea38e6cc",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "5dec8916be1c0eb8238658984822fca3c816a5d414546f16c3bb0612b2129516",
+      "broker_credentials_shape": {
+        "api_key": "len=4",
+        "api_secret": "len=4"
+      },
+      "orders_count": 1,
+      "filled_orders_count": 1,
+      "order_summaries": [
+        {
+          "order_id": "fee15a46-6333-4b00-8077-5c79d71f202b",
+          "provider_order_id": "paper-a8b4b9d3-1767691920-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "1.00000000",
+          "reject_reason": null
+        }
+      ]
+    },
+    {
+      "deployment_id": "518f589f-42c3-4531-9248-b8dadf66568b",
+      "found": true,
+      "status": "active",
+      "user_email": "manual_actions_f20ff3651b3c42838e840943da5fb8ae@test.com",
+      "run_broker_account_id": "40414bad-a491-4257-9973-7db3772ac813",
+      "broker_provider": "alpaca",
+      "broker_status": "active",
+      "broker_last_error": null,
+      "broker_key_fingerprint": "5dec8916be1c0eb8238658984822fca3c816a5d414546f16c3bb0612b2129516",
+      "broker_credentials_shape": {
+        "api_key": "len=4",
+        "api_secret": "len=4"
+      },
+      "orders_count": 4,
+      "filled_orders_count": 4,
+      "order_summaries": [
+        {
+          "order_id": "7beed0a1-8e20-4727-ac4f-21b6d6939d6f",
+          "provider_order_id": "paper-518f589f-1772053140-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "1.00000000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "53c6caa6-f99d-40a9-b0b1-06e1d8f2c12c",
+          "provider_order_id": "paper-manual-a45a16d4f67e448a87be61abe5cb8708",
+          "status": "filled",
+          "side": "sell",
+          "qty": "0.60000000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "1c3799bd-21e4-4dbf-9ac7-836236724378",
+          "provider_order_id": "paper-manual-c0792f2da7db459aa150c5f9ee35c033",
+          "status": "filled",
+          "side": "sell",
+          "qty": "0.40000000",
+          "reject_reason": null
+        },
+        {
+          "order_id": "df763138-e2f0-493d-ae17-021b9e6a0028",
+          "provider_order_id": "paper-518f589f-1767607260-open_long",
+          "status": "filled",
+          "side": "buy",
+          "qty": "1.00000000",
+          "reject_reason": null
+        }
+      ]
+    }
+  ]
+}

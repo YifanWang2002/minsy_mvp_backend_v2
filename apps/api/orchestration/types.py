@@ -28,6 +28,7 @@ class _TurnPreparation:
 class _TurnStreamState:
     full_text: str = ""
     text_delta_emitted: bool = False
+    instructions_sent: bool = False
     request_model: str | None = None
     completed_model: str | None = None
     completed_usage: dict[str, Any] = field(default_factory=dict)

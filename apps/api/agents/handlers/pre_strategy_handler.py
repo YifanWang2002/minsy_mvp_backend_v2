@@ -88,6 +88,15 @@ _FALLBACK_SUBTITLE_BY_FIELD: dict[str, str] = {
     "opportunity_frequency_bucket": "This controls signal cadence and strategy style.",
     "holding_period_bucket": "This controls entry and exit horizon.",
 }
+# Runtime tool policy is authored in orchestration.constants phase matrix.
+# Keep this as a minimal fallback for non-orchestrated prompt construction only.
+_PRE_STRATEGY_FALLBACK_MARKET_DATA_TOOLS: tuple[str, ...] = (
+    "check_symbol_available",
+    "get_symbol_data_coverage",
+    "market_data_detect_missing_ranges",
+    "market_data_fetch_missing_ranges",
+    "market_data_get_sync_job",
+)
 
 
 class PreStrategyHandler:
@@ -139,7 +148,7 @@ class PreStrategyHandler:
         return PromptPieces(
             instructions=instructions,
             enriched_input=state_block + user_message,
-            tools=None,
+            tools=_build_pre_strategy_tools(),
             model=settings.openai_response_model,
             reasoning={"effort": "none"},
         )
@@ -532,6 +541,18 @@ def _infer_instrument_from_message(
             return instrument
 
     return None
+
+
+def _build_pre_strategy_tools() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "mcp",
+            "server_label": "market_data",
+            "server_url": settings.market_data_mcp_server_url,
+            "allowed_tools": list(_PRE_STRATEGY_FALLBACK_MARKET_DATA_TOOLS),
+            "require_approval": "never",
+        }
+    ]
 
 
 def _instrument_aliases(*, market: str, instrument: str) -> tuple[str, ...]:

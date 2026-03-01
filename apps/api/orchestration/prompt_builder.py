@@ -54,6 +54,11 @@ class PromptBuilderMixin:
             runtime_policy=runtime_policy,
         )
         prompt = handler.build_prompt(ctx, prompt_user_message)
+        if getattr(prompt, "max_output_tokens", None) is None:
+            prompt.max_output_tokens = resolve_phase_max_output_tokens(
+                phase=phase_before,
+                stage=runtime_policy.phase_stage,
+            )
         tools = self._merge_tools(
             base_tools=prompt.tools,
             runtime_policy=runtime_policy,
@@ -100,6 +105,8 @@ class PromptBuilderMixin:
         phase: str,
         artifacts: dict[str, Any],
     ) -> HandlerRuntimePolicy:
+        if phase == Phase.PRE_STRATEGY.value:
+            return self._build_pre_strategy_runtime_policy()
         if phase == Phase.STRATEGY.value:
             return self._build_strategy_runtime_policy(artifacts=artifacts)
         if phase == Phase.STRESS_TEST.value:
@@ -107,6 +114,17 @@ class PromptBuilderMixin:
         if phase == Phase.DEPLOYMENT.value:
             return self._build_deployment_runtime_policy(artifacts=artifacts)
         return HandlerRuntimePolicy()
+
+    def _build_pre_strategy_runtime_policy(self) -> HandlerRuntimePolicy:
+        stage = _PRE_STRATEGY_STAGE_INTENT_COLLECTION
+        return HandlerRuntimePolicy(
+            phase_stage=stage,
+            tool_mode="replace",
+            allowed_tools=self._build_allowed_tools_from_matrix(
+                phase=Phase.PRE_STRATEGY.value,
+                stage=stage,
+            ),
+        )
 
     def _build_strategy_runtime_policy(
         self,
@@ -124,21 +142,18 @@ class PromptBuilderMixin:
             )
             strategy_id = self._coerce_uuid_text(stress_profile.get("strategy_id"))
 
-        if strategy_id is not None:
-            return HandlerRuntimePolicy(
-                phase_stage="artifact_ops",
-                tool_mode="replace",
-                allowed_tools=self._build_strategy_artifact_ops_allowed_tools(),
-            )
-
+        stage = (
+            _STRATEGY_STAGE_ARTIFACT_OPS
+            if strategy_id is not None
+            else _STRATEGY_STAGE_SCHEMA_ONLY
+        )
         return HandlerRuntimePolicy(
-            phase_stage="schema_only",
+            phase_stage=stage,
             tool_mode="replace",
-            allowed_tools=[
-                self._build_strategy_tool_def(
-                    allowed_tools=list(_STRATEGY_SCHEMA_ONLY_TOOL_NAMES),
-                )
-            ],
+            allowed_tools=self._build_allowed_tools_from_matrix(
+                phase=Phase.STRATEGY.value,
+                stage=stage,
+            ),
         )
 
     def _build_stress_test_runtime_policy(
@@ -152,51 +167,29 @@ class PromptBuilderMixin:
         raw_status = profile.get("backtest_status")
         status = raw_status.strip().lower() if isinstance(raw_status, str) else ""
 
-        if status == "done":
-            return HandlerRuntimePolicy(
-                phase_stage="feedback",
-                tool_mode="replace",
-                allowed_tools=self._build_stress_feedback_allowed_tools(),
-            )
-
+        stage = _STRESS_STAGE_FEEDBACK if status == "done" else _STRESS_STAGE_BOOTSTRAP
         return HandlerRuntimePolicy(
-            phase_stage="bootstrap",
+            phase_stage=stage,
             tool_mode="replace",
-            allowed_tools=[
-                self._build_market_data_tool_def(
-                    allowed_tools=list(_MARKET_DATA_MINIMAL_TOOL_NAMES),
-                ),
-                self._build_backtest_tool_def(
-                    allowed_tools=list(_BACKTEST_BOOTSTRAP_TOOL_NAMES),
-                ),
-            ],
+            allowed_tools=self._build_allowed_tools_from_matrix(
+                phase=Phase.STRESS_TEST.value,
+                stage=stage,
+                include_unreachable=True,
+            ),
         )
 
     def _build_strategy_artifact_ops_allowed_tools(self) -> list[dict[str, Any]]:
-        return [
-            self._build_strategy_tool_def(
-                allowed_tools=list(_STRATEGY_ARTIFACT_OPS_TOOL_NAMES),
-            ),
-            self._build_market_data_tool_def(
-                allowed_tools=list(_MARKET_DATA_MINIMAL_TOOL_NAMES),
-            ),
-            self._build_backtest_tool_def(
-                allowed_tools=list(_BACKTEST_FEEDBACK_TOOL_NAMES),
-            ),
-        ]
+        return self._build_allowed_tools_from_matrix(
+            phase=Phase.STRATEGY.value,
+            stage=_STRATEGY_STAGE_ARTIFACT_OPS,
+        )
 
     def _build_stress_feedback_allowed_tools(self) -> list[dict[str, Any]]:
-        return [
-            self._build_market_data_tool_def(
-                allowed_tools=list(_MARKET_DATA_MINIMAL_TOOL_NAMES),
-            ),
-            self._build_backtest_tool_def(
-                allowed_tools=list(_BACKTEST_FEEDBACK_TOOL_NAMES),
-            ),
-            self._build_strategy_tool_def(
-                allowed_tools=list(_STRATEGY_ARTIFACT_OPS_TOOL_NAMES),
-            ),
-        ]
+        return self._build_allowed_tools_from_matrix(
+            phase=Phase.STRESS_TEST.value,
+            stage=_STRESS_STAGE_FEEDBACK,
+            include_unreachable=True,
+        )
 
     def _build_deployment_runtime_policy(
         self,
@@ -211,14 +204,19 @@ class PromptBuilderMixin:
         status = raw_status.strip().lower() if isinstance(raw_status, str) else "ready"
         if status not in {"ready", "deployed", "blocked"}:
             status = "ready"
+        stage_map = {
+            "ready": _DEPLOYMENT_STAGE_READY,
+            "deployed": _DEPLOYMENT_STAGE_DEPLOYED,
+            "blocked": _DEPLOYMENT_STAGE_BLOCKED,
+        }
+        stage = stage_map[status]
         return HandlerRuntimePolicy(
-            phase_stage=f"deployment_{status}",
+            phase_stage=stage,
             tool_mode="replace",
-            allowed_tools=[
-                self._build_trading_tool_def(
-                    allowed_tools=list(_TRADING_DEPLOYMENT_TOOL_NAMES),
-                )
-            ],
+            allowed_tools=self._build_allowed_tools_from_matrix(
+                phase=Phase.DEPLOYMENT.value,
+                stage=stage,
+            ),
         )
 
     @staticmethod
@@ -233,45 +231,68 @@ class PromptBuilderMixin:
             return {}
         return dict(profile)
 
-    @staticmethod
-    def _build_strategy_tool_def(*, allowed_tools: list[str]) -> dict[str, Any]:
-        return {
-            "type": "mcp",
-            "server_label": "strategy",
-            "server_url": settings.strategy_mcp_server_url,
-            "allowed_tools": allowed_tools,
-            "require_approval": "never",
-        }
+    def _build_allowed_tools_from_matrix(
+        self,
+        *,
+        phase: str,
+        stage: str,
+        include_unreachable: bool = False,
+    ) -> list[dict[str, Any]]:
+        rows = get_phase_tool_matrix_rows(
+            phase=phase,
+            stage=stage,
+            reachable_only=not include_unreachable,
+        )
+        if not rows and not include_unreachable:
+            rows = get_phase_tool_matrix_rows(
+                phase=phase,
+                stage=stage,
+                reachable_only=False,
+            )
+
+        grouped: dict[str, list[str]] = {}
+        server_order: list[str] = []
+        for mutability in _TOOL_MUTABILITY_ORDER:
+            for row in rows:
+                if row.mutability != mutability:
+                    continue
+                if not row.allowed_tools:
+                    continue
+                server_label = row.server_label
+                if server_label not in grouped:
+                    grouped[server_label] = []
+                    server_order.append(server_label)
+                for tool_name in row.allowed_tools:
+                    if tool_name in grouped[server_label]:
+                        continue
+                    grouped[server_label].append(tool_name)
+
+        output: list[dict[str, Any]] = []
+        for server_label in server_order:
+            server_url = self._resolve_mcp_server_url(server_label=server_label)
+            if not isinstance(server_url, str) or not server_url.strip():
+                continue
+            output.append(
+                {
+                    "type": "mcp",
+                    "server_label": server_label,
+                    "server_url": server_url,
+                    "allowed_tools": list(grouped[server_label]),
+                    "require_approval": "never",
+                }
+            )
+        return output
 
     @staticmethod
-    def _build_backtest_tool_def(*, allowed_tools: list[str]) -> dict[str, Any]:
-        return {
-            "type": "mcp",
-            "server_label": "backtest",
-            "server_url": settings.backtest_mcp_server_url,
-            "allowed_tools": allowed_tools,
-            "require_approval": "never",
+    def _resolve_mcp_server_url(*, server_label: str) -> str | None:
+        server_url_by_label: dict[str, str] = {
+            "strategy": settings.strategy_mcp_server_url,
+            "backtest": settings.backtest_mcp_server_url,
+            "market_data": settings.market_data_mcp_server_url,
+            "stress": settings.stress_mcp_server_url,
+            "trading": settings.trading_mcp_server_url,
         }
-
-    @staticmethod
-    def _build_market_data_tool_def(*, allowed_tools: list[str]) -> dict[str, Any]:
-        return {
-            "type": "mcp",
-            "server_label": "market_data",
-            "server_url": settings.market_data_mcp_server_url,
-            "allowed_tools": allowed_tools,
-            "require_approval": "never",
-        }
-
-    @staticmethod
-    def _build_trading_tool_def(*, allowed_tools: list[str]) -> dict[str, Any]:
-        return {
-            "type": "mcp",
-            "server_label": "trading",
-            "server_url": settings.trading_mcp_server_url,
-            "allowed_tools": allowed_tools,
-            "require_approval": "never",
-        }
+        return server_url_by_label.get(server_label)
 
     def _merge_tools(
         self,

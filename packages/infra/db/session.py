@@ -13,9 +13,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from packages.shared_settings.schema.settings import settings
 from packages.infra.db.models.base import Base
 from packages.infra.observability.logger import logger
+from packages.shared_settings.schema.settings import settings
 
 engine: AsyncEngine | None = None
 AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
@@ -47,6 +47,7 @@ def _import_all_models() -> None:
     import packages.infra.db.models.deployment_run  # noqa: F401
     import packages.infra.db.models.fill  # noqa: F401
     import packages.infra.db.models.manual_trade_action  # noqa: F401
+    import packages.infra.db.models.market_data_catalog  # noqa: F401
     import packages.infra.db.models.market_data_error_event  # noqa: F401
     import packages.infra.db.models.market_data_sync_chunk  # noqa: F401
     import packages.infra.db.models.market_data_sync_job  # noqa: F401
@@ -58,6 +59,7 @@ def _import_all_models() -> None:
     import packages.infra.db.models.phase_transition  # noqa: F401
     import packages.infra.db.models.pnl_snapshot  # noqa: F401
     import packages.infra.db.models.position  # noqa: F401
+    import packages.infra.db.models.sandbox_ledger_entry  # noqa: F401
     import packages.infra.db.models.session  # noqa: F401
     import packages.infra.db.models.signal_event  # noqa: F401
     import packages.infra.db.models.social_connector  # noqa: F401
@@ -66,8 +68,8 @@ def _import_all_models() -> None:
     import packages.infra.db.models.stress_job  # noqa: F401
     import packages.infra.db.models.stress_job_item  # noqa: F401
     import packages.infra.db.models.trade_approval_request  # noqa: F401
-    import packages.infra.db.models.trading_preference  # noqa: F401
     import packages.infra.db.models.trading_event_outbox  # noqa: F401
+    import packages.infra.db.models.trading_preference  # noqa: F401
     import packages.infra.db.models.user  # noqa: F401
     import packages.infra.db.models.user_notification_preference  # noqa: F401
     import packages.infra.db.models.user_settings  # noqa: F401
@@ -166,6 +168,251 @@ async def _ensure_trading_event_outbox_constraint() -> None:
         )
 
 
+async def _ensure_broker_account_schema() -> None:
+    """Normalize broker_accounts columns/constraints for multi-broker runtime."""
+    assert engine is not None
+    provider_constraint_sql = "provider IN ('alpaca', 'ccxt', 'sandbox')"
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS exchange_id VARCHAR(64)"),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS account_uid VARCHAR(128)"),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS is_default BOOLEAN"),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN"),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts "
+                "ADD COLUMN IF NOT EXISTS last_validation_error_code VARCHAR(64)",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts "
+                "ADD COLUMN IF NOT EXISTS capabilities JSONB DEFAULT '{}'::jsonb",
+            ),
+        )
+
+        # Backfill normalized defaults.
+        await connection.execute(
+            text("UPDATE broker_accounts SET exchange_id = COALESCE(exchange_id, '')"),
+        )
+        await connection.execute(
+            text("UPDATE broker_accounts SET account_uid = COALESCE(account_uid, '')"),
+        )
+        await connection.execute(
+            text("UPDATE broker_accounts SET is_default = COALESCE(is_default, false)"),
+        )
+        await connection.execute(
+            text("UPDATE broker_accounts SET is_sandbox = COALESCE(is_sandbox, false)"),
+        )
+        await connection.execute(
+            text("UPDATE broker_accounts SET capabilities = COALESCE(capabilities, '{}'::jsonb)"),
+        )
+
+        # Provider-specific structured field backfills.
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET exchange_id = 'alpaca' "
+                "WHERE provider = 'alpaca' AND exchange_id = ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET exchange_id = 'sandbox' "
+                "WHERE provider = 'sandbox' AND exchange_id = ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET exchange_id = lower(COALESCE(NULLIF(metadata->>'exchange_id',''), NULLIF(validation_metadata->>'exchange_id',''), exchange_id, '')) "
+                "WHERE provider = 'ccxt' "
+                "AND exchange_id = ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET account_uid = COALESCE(NULLIF(validation_metadata->>'paper_account_id',''), NULLIF(key_fingerprint,''), id::text) "
+                "WHERE provider = 'alpaca' "
+                "AND account_uid = ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET account_uid = COALESCE(NULLIF(metadata->>'account_uid',''), NULLIF(key_fingerprint,''), id::text) "
+                "WHERE provider = 'ccxt' "
+                "AND account_uid = ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET account_uid = COALESCE(NULLIF(metadata->>'account_uid',''), id::text) "
+                "WHERE provider = 'sandbox' "
+                "AND account_uid = ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET is_sandbox = true "
+                "WHERE provider = 'sandbox'",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE broker_accounts "
+                "SET is_sandbox = true "
+                "WHERE provider = 'ccxt' "
+                "AND lower(COALESCE(exchange_id, '')) = 'okx' "
+                "AND COALESCE(metadata->>'sandbox', validation_metadata->>'sandbox', 'true') IN ('1', 'true', 'yes', 'on')",
+            ),
+        )
+
+        # Keep only one active account per normalized identity tuple.
+        await connection.execute(
+            text(
+                "WITH ranked AS ( "
+                "    SELECT id, "
+                "           row_number() OVER ( "
+                "               PARTITION BY user_id, provider, exchange_id, account_uid "
+                "               ORDER BY last_validated_at DESC NULLS LAST, created_at DESC, id DESC "
+                "           ) AS rn "
+                "    FROM broker_accounts "
+                "    WHERE status = 'active' "
+                ") "
+                "UPDATE broker_accounts AS b "
+                "SET status = 'inactive', "
+                "    is_default = false, "
+                "    updated_source = 'system', "
+                "    last_error = COALESCE(NULLIF(b.last_error, ''), 'auto_inactivated_duplicate_identity') "
+                "FROM ranked "
+                "WHERE b.id = ranked.id AND ranked.rn > 1",
+            ),
+        )
+
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts ALTER COLUMN exchange_id SET DEFAULT ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts ALTER COLUMN account_uid SET DEFAULT ''",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts ALTER COLUMN is_default SET DEFAULT false",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts ALTER COLUMN is_sandbox SET DEFAULT false",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts ALTER COLUMN capabilities SET DEFAULT '{}'::jsonb",
+            ),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ALTER COLUMN exchange_id SET NOT NULL"),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ALTER COLUMN account_uid SET NOT NULL"),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ALTER COLUMN is_default SET NOT NULL"),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ALTER COLUMN is_sandbox SET NOT NULL"),
+        )
+        await connection.execute(
+            text("ALTER TABLE broker_accounts ALTER COLUMN capabilities SET NOT NULL"),
+        )
+
+        # Keep a single active default per user/mode.
+        await connection.execute(
+            text(
+                "WITH ranked AS ( "
+                "    SELECT id, "
+                "           row_number() OVER ( "
+                "               PARTITION BY user_id, mode "
+                "               ORDER BY is_default DESC, last_validated_at DESC NULLS LAST, created_at DESC, id DESC "
+                "           ) AS rn "
+                "    FROM broker_accounts "
+                "    WHERE status = 'active' "
+                ") "
+                "UPDATE broker_accounts AS b "
+                "SET is_default = (ranked.rn = 1) "
+                "FROM ranked "
+                "WHERE b.id = ranked.id",
+            ),
+        )
+        await connection.execute(
+            text("UPDATE broker_accounts SET is_default = false WHERE status <> 'active'"),
+        )
+
+        # Sync provider check-constraint with model.
+        await connection.execute(
+            text("ALTER TABLE broker_accounts DROP CONSTRAINT IF EXISTS ck_broker_accounts_provider"),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_accounts "
+                f"ADD CONSTRAINT ck_broker_accounts_provider CHECK ({provider_constraint_sql})",
+            ),
+        )
+
+        # Multi-broker identity and default constraints.
+        await connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_broker_accounts_user_provider_exchange_account_uid_active "
+                "ON broker_accounts (user_id, provider, exchange_id, account_uid) "
+                "WHERE status = 'active'",
+            ),
+        )
+        await connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_broker_accounts_user_mode_default_active "
+                "ON broker_accounts (user_id, mode) "
+                "WHERE is_default = true AND status = 'active'",
+            ),
+        )
+
+
+async def _ensure_broker_account_audit_log_constraint() -> None:
+    """Ensure audit action constraint covers default-selection events."""
+    assert engine is not None
+    action_constraint_sql = "action IN ('create', 'update', 'validate', 'deactivate', 'set_default')"
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_account_audit_logs "
+                "DROP CONSTRAINT IF EXISTS ck_broker_account_audit_logs_action",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE broker_account_audit_logs "
+                f"ADD CONSTRAINT ck_broker_account_audit_logs_action CHECK ({action_constraint_sql})",
+            ),
+        )
+
+
 def _ensure_engine() -> None:
     global engine, AsyncSessionLocal, session_factory
     if engine is None:
@@ -226,6 +473,8 @@ async def init_postgres(*, ensure_schema: bool = True) -> None:
         async with engine.begin() as connection:
             await connection.execute(text("SELECT 1"))
             await connection.run_sync(Base.metadata.create_all)
+        await _ensure_broker_account_schema()
+        await _ensure_broker_account_audit_log_constraint()
         await _ensure_sessions_phase_constraint()
         await _ensure_sessions_archival_columns()
         await _ensure_trading_runtime_columns()
@@ -260,6 +509,8 @@ async def init_db(drop_existing: bool = False) -> None:
         if drop_existing:
             await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
+    await _ensure_broker_account_schema()
+    await _ensure_broker_account_audit_log_constraint()
     await _ensure_sessions_phase_constraint()
     await _ensure_sessions_archival_columns()
     await _ensure_trading_runtime_columns()

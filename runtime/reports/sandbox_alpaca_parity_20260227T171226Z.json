@@ -1,0 +1,968 @@
+{
+  "started_at_utc": "2026-02-27T17:12:26.535974+00:00",
+  "ended_at_utc": "2026-02-27T17:16:05.806655+00:00",
+  "duration_seconds": 219.270681,
+  "config": {
+    "api_base_url": "http://localhost:8000",
+    "email": "2@test.com",
+    "symbol": "BTC/USD",
+    "cycles": 4,
+    "order_qty": 0.0002,
+    "minute_cushion_seconds": 2.0
+  },
+  "user": {
+    "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+    "email": "2@test.com",
+    "name": "2",
+    "kyc_status": "complete",
+    "created_at": "2026-02-22T15:31:46.962399Z"
+  },
+  "pre_cleanup": {
+    "stopped_deployments": []
+  },
+  "trading_preferences": {
+    "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+    "execution_mode": "auto_execute",
+    "approval_channel": "telegram",
+    "approval_timeout_seconds": 120,
+    "approval_scope": "open_only"
+  },
+  "broker_accounts": {
+    "alpaca": {
+      "broker_account_id": "6eceac8f-7220-4103-873b-437e0d99f8ae",
+      "source": "reused_active_validated"
+    },
+    "sandbox": {
+      "broker_account_id": "35a1bbd4-e53b-422b-a2cf-04923b69dbc4",
+      "source": "reused_active"
+    }
+  },
+  "strategy_id": "86fe6906-2b98-41c0-8591-351eb724eee4",
+  "deployments": {
+    "alpaca": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+    "sandbox": "e29901e3-cddb-4448-b4fd-27147f0ad3b0"
+  },
+  "cycle_results": [
+    {
+      "cycle_index": 1,
+      "requested_at_utc": "2026-02-27T17:13:05.701596+00:00",
+      "slept_seconds": 33.78660297393799,
+      "alpaca": {
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "execution_event_id": "7c9c342f-5e62-4bf8-b551-7e56ceaf8fec",
+        "signal": "CLOSE",
+        "reason": "long_exit",
+        "order_id": "28abc436-d33d-4973-809e-2b871679418a",
+        "idempotent_hit": false,
+        "bar_time": "2026-02-27T17:11:00Z",
+        "metadata": {
+          "idempotent_hit": false,
+          "order_id": "28abc436-d33d-4973-809e-2b871679418a",
+          "execution_event_id": "7c9c342f-5e62-4bf8-b551-7e56ceaf8fec"
+        },
+        "lock_retry_attempts": 4
+      },
+      "sandbox": {
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "execution_event_id": "90ba0c60-c8c7-412b-99e6-0c36463fd18b",
+        "signal": "CLOSE",
+        "reason": "long_exit",
+        "order_id": "8b08d482-1eb7-4b7f-aaa7-f94bebdcdc49",
+        "idempotent_hit": false,
+        "bar_time": "2026-02-27T17:12:00Z",
+        "metadata": {
+          "idempotent_hit": false,
+          "order_id": "8b08d482-1eb7-4b7f-aaa7-f94bebdcdc49",
+          "execution_event_id": "90ba0c60-c8c7-412b-99e6-0c36463fd18b"
+        },
+        "lock_retry_attempts": 1
+      }
+    },
+    {
+      "cycle_index": 2,
+      "requested_at_utc": "2026-02-27T17:14:05.811006+00:00",
+      "slept_seconds": 56.29838490486145,
+      "alpaca": {
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "execution_event_id": "3af4c70d-4c9c-42e4-86f8-bd7d03301f14",
+        "signal": "CLOSE",
+        "reason": "long_exit",
+        "order_id": "30687f7a-a39a-4361-a8b7-257c475a91b5",
+        "idempotent_hit": false,
+        "bar_time": "2026-02-27T17:13:00Z",
+        "metadata": {
+          "idempotent_hit": false,
+          "order_id": "30687f7a-a39a-4361-a8b7-257c475a91b5",
+          "execution_event_id": "3af4c70d-4c9c-42e4-86f8-bd7d03301f14"
+        },
+        "lock_retry_attempts": 4
+      },
+      "sandbox": {
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "execution_event_id": "50d8cb2c-b19c-42de-87bb-8af18fbfca9d",
+        "signal": "CLOSE",
+        "reason": "long_exit",
+        "order_id": "441a6854-2eca-416f-a3b6-b7de3cd2ceca",
+        "idempotent_hit": false,
+        "bar_time": "2026-02-27T17:13:00Z",
+        "metadata": {
+          "idempotent_hit": false,
+          "order_id": "441a6854-2eca-416f-a3b6-b7de3cd2ceca",
+          "execution_event_id": "50d8cb2c-b19c-42de-87bb-8af18fbfca9d"
+        },
+        "lock_retry_attempts": 1
+      }
+    },
+    {
+      "cycle_index": 3,
+      "requested_at_utc": "2026-02-27T17:15:08.806436+00:00",
+      "slept_seconds": 56.18897795677185,
+      "alpaca": {
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "execution_event_id": "28944c54-9553-4ee6-8f8e-18ee94c70589",
+        "signal": "NOOP",
+        "reason": "order_submit_failed:AdapterError:Alpaca request failed:",
+        "order_id": null,
+        "idempotent_hit": false,
+        "bar_time": "2026-02-27T17:13:00Z",
+        "metadata": {
+          "broker_account_sync": "error:AdapterError",
+          "execution_event_id": "28944c54-9553-4ee6-8f8e-18ee94c70589"
+        },
+        "lock_retry_attempts": 2
+      },
+      "sandbox": {
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "execution_event_id": "7e3ad40b-5af9-4777-946b-40217e264e5a",
+        "signal": "CLOSE",
+        "reason": "long_exit",
+        "order_id": "441a6854-2eca-416f-a3b6-b7de3cd2ceca",
+        "idempotent_hit": true,
+        "bar_time": "2026-02-27T17:13:00Z",
+        "metadata": {
+          "broker_account_sync": "ok",
+          "broker_account_fetched_at": "2026-02-27T17:15:07.202985+00:00",
+          "broker_provider": "sandbox",
+          "idempotent_hit": true,
+          "order_id": "441a6854-2eca-416f-a3b6-b7de3cd2ceca",
+          "execution_event_id": "7e3ad40b-5af9-4777-946b-40217e264e5a"
+        },
+        "lock_retry_attempts": 15
+      }
+    },
+    {
+      "cycle_index": 4,
+      "requested_at_utc": "2026-02-27T17:16:05.741266+00:00",
+      "slept_seconds": 53.19353795051575,
+      "alpaca": {
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "execution_event_id": "02416a91-26db-485f-818a-bbe0af7c857f",
+        "signal": "CLOSE",
+        "reason": "long_exit",
+        "order_id": "8fb275de-ee16-4b65-9ee8-34c45520916a",
+        "idempotent_hit": false,
+        "bar_time": "2026-02-27T17:15:00Z",
+        "metadata": {
+          "idempotent_hit": false,
+          "order_id": "8fb275de-ee16-4b65-9ee8-34c45520916a",
+          "execution_event_id": "02416a91-26db-485f-818a-bbe0af7c857f"
+        },
+        "lock_retry_attempts": 4
+      },
+      "sandbox": {
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "execution_event_id": "5543c1c6-d2e8-410e-9e48-e599f096b980",
+        "signal": "CLOSE",
+        "reason": "long_exit",
+        "order_id": "f4149212-d510-4d1c-b89f-a068036a3056",
+        "idempotent_hit": false,
+        "bar_time": "2026-02-27T17:15:00Z",
+        "metadata": {
+          "idempotent_hit": false,
+          "order_id": "f4149212-d510-4d1c-b89f-a068036a3056",
+          "execution_event_id": "5543c1c6-d2e8-410e-9e48-e599f096b980"
+        },
+        "lock_retry_attempts": 1
+      }
+    }
+  ],
+  "signals": {
+    "alpaca": [
+      {
+        "signal_event_id": "3cca1bfa-9ea5-4983-8794-1a2818eb3e40",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:10:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "7c19f10d-cba7-4fc3-ae00-bde84633f5a6",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:10:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "7c9c342f-5e62-4bf8-b551-7e56ceaf8fec",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:11:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "d8371cfa-a7e3-4100-948b-d66ddd58d41b",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:11:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "9471b407-2758-48d8-8faa-5fdfeb80e716",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:12:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "fc98e3fa-5522-45fc-be3d-04b10638bdc4",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:12:31.150114Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "ad510a92-0060-4414-bd2c-41ccdd847c2e",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "28944c54-9553-4ee6-8f8e-18ee94c70589",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "order_submit_failed:AdapterError:Alpaca request failed:"
+      },
+      {
+        "signal_event_id": "b9a2f1e4-d908-4ce9-9c8a-97457c1ab755",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "order_submit_failed:AdapterError:Alpaca request failed:"
+      },
+      {
+        "signal_event_id": "3af4c70d-4c9c-42e4-86f8-bd7d03301f14",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "0d7afce8-f3a7-4d3e-ac9c-905291e31cc9",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:13:02.015616Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "ade17313-1706-4f26-a848-3ec44f209dba",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:13:02.298617Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "01b83f0a-ea8e-41dc-b80e-6ca93b51440c",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:13:02.574568Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "a3b5f99b-f5f7-4999-bfb3-1a2117ea47a3",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:14:02.013765Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "6b865c77-facd-4f20-b577-c9500e0062f4",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:14:02.291877Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "8af844f9-06e9-4d25-a32a-e4b630001923",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:14:02.566709Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "02416a91-26db-485f-818a-bbe0af7c857f",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:15:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "aa7b70a6-2941-4290-986d-1676214de5a7",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:02.019220Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "3a0a0b5e-2526-4f32-8823-799d409eda11",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:16:02.022822Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "9f05ce20-78a9-4c09-9358-d3435a0eda7e",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:16:02.298175Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "4cce6983-9da9-4554-ad9a-648bf93d2ce9",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:16:02.575179Z",
+        "reason": "deployment_locked"
+      }
+    ],
+    "sandbox": [
+      {
+        "signal_event_id": "0bfb1d9d-4c19-4977-9fd0-5cfca41bc481",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:10:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "d6d25dfd-c581-414b-848a-d17046705625",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:10:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "290ad12a-9c16-49e8-9fad-270b9d680dce",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:11:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "52b83ac9-db22-4c72-ac6f-89bb2b906c4d",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:12:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "90ba0c60-c8c7-412b-99e6-0c36463fd18b",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:12:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "331ba337-ae7a-4fb6-977b-0bda0b17e016",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:12:30.910946Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "36850c14-7814-4b26-a413-ca92c1059052",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "7e3ad40b-5af9-4777-946b-40217e264e5a",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "d501055b-2fa8-46ab-bf07-d778a4cf21e2",
+        "signal": "OPEN_LONG",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "long_entry_condition"
+      },
+      {
+        "signal_event_id": "50d8cb2c-b19c-42de-87bb-8af18fbfca9d",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:13:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "5543c1c6-d2e8-410e-9e48-e599f096b980",
+        "signal": "CLOSE",
+        "bar_time": "2026-02-27T17:15:00Z",
+        "reason": "long_exit"
+      },
+      {
+        "signal_event_id": "99c1f2bc-50c0-41fe-aad9-b544e4d913b2",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:03.402647Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "1afcb1ff-0f59-4648-90bb-d15bbe92d309",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:03.664545Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "9dd1512d-b2dc-40cb-9c8b-130afb0b83e9",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:03.927862Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "c971b8e6-657b-4bc5-96d3-3a3e9e83c9a9",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:04.195796Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "0d93a6a6-3a3b-49df-b16f-d019fc2395ad",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:04.471118Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "ee9d39cb-05a6-4576-b1cc-947193b6b070",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:04.739816Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "397e1fbb-d1c8-4f12-b8b3-5a49788de4b0",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:05.016504Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "83d58250-6ced-4907-83df-78f3f1c747cf",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:05.300091Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "552b6bef-3331-40f4-a43e-7ea940dcecff",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:05.579076Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "e70c0781-e37e-431c-85d9-71a09dc3e440",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:05.848942Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "1be4931a-8910-48e5-ab25-bfa9c14c1cfa",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:06.124048Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "5544db0b-c0d5-476b-b8e5-a67a9d0a4970",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:06.400736Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "801b012c-213f-4e59-a7a9-10f2c3dd1e88",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:06.665894Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "66740c7a-8131-46e6-99cc-55e1316309c2",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:06.932124Z",
+        "reason": "deployment_locked"
+      },
+      {
+        "signal_event_id": "bfdada1a-24c5-4b31-9132-640244829190",
+        "signal": "NOOP",
+        "bar_time": "2026-02-27T17:15:08.131773Z",
+        "reason": "deployment_locked"
+      }
+    ]
+  },
+  "orders": {
+    "alpaca": [
+      {
+        "order_id": "33f2f81a-52af-442c-985c-948c2f173dbe",
+        "provider_order_id": "91118eab-7e8d-4de3-bb42-7ec5cc20c0bb",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65535.6,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:12:29.751707Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "2fbb2272-b708-4b3b-9a67-eb156401e6c6",
+        "provider_order_id": "dd45d67d-041a-4097-b267-2e129f4399c9",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65466.512,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:12:31.991673Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "19e4c471-5741-4965-b176-3a7fe9b7797f",
+        "provider_order_id": "5bbecdcb-9061-4e66-ba5b-081c3c23a315",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65515.58,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:13:02.271557Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "28abc436-d33d-4973-809e-2b871679418a",
+        "provider_order_id": "a6bd84f7-74a2-4529-9e40-5f6184343cd3",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65453.5,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:13:04.038348Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "ba465b5f-10ab-4267-8bff-3000f0403f48",
+        "provider_order_id": "4a8e6bdd-45cc-4eb4-a67f-b3d8b1479ce2",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65505.78,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:14:02.314011Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "30687f7a-a39a-4361-a8b7-257c475a91b5",
+        "provider_order_id": "31760ab1-79fc-417c-bdf7-eadb6ff1b116",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65477.21,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:14:04.151933Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "53abd91e-4f1c-4e90-a615-3e3c62ae9ac8",
+        "provider_order_id": "d8efe1ea-9f03-4933-8b96-f707f20b971e",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65504.4,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:16:02.269852Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "8fb275de-ee16-4b65-9ee8-34c45520916a",
+        "provider_order_id": "c9d35fcf-d6d6-4262-b46a-4acac3c67205",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65429.82,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:16:04.110257Z",
+        "reject_reason": null
+      }
+    ],
+    "sandbox": [
+      {
+        "order_id": "0bcba0f5-ae65-4ace-a695-b0f15896c157",
+        "provider_order_id": "sandbox-1c3dd844b0f3410a8b76558d",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65520.412,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:12:28.504294Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "4787e7bc-6acd-49e4-8d2e-b09263408049",
+        "provider_order_id": "sandbox-151047eb3c20401abcd8e5b1",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65450.2,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:12:31.102384Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "3211a56a-9e91-4c52-976d-70290b96736d",
+        "provider_order_id": "sandbox-ae57961c2c134d43806984ce",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65520.08,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:13:00.112849Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "8b08d482-1eb7-4b7f-aaa7-f94bebdcdc49",
+        "provider_order_id": "sandbox-b2a56a2b36cd4183ae0ef7f7",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65463.246,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:13:03.299752Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "bae4fcae-31f5-4ffc-a611-651cdf1198dc",
+        "provider_order_id": "sandbox-f9a305a9e97145a49577d995",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65504.508,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:13:56.707493Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "441a6854-2eca-416f-a3b6-b7de3cd2ceca",
+        "provider_order_id": "sandbox-8c3aff508f224d9da60e0e47",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65454.3,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:14:04.923975Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "02c5fec3-c903-4f4a-9c31-e29a0c5214d2",
+        "provider_order_id": "sandbox-dd36fc21fe6f4d9fabf8632d",
+        "side": "buy",
+        "qty": 0.0002,
+        "price": 65492.3,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:15:06.100533Z",
+        "reject_reason": null
+      },
+      {
+        "order_id": "f4149212-d510-4d1c-b89f-a068036a3056",
+        "provider_order_id": "sandbox-48bc0cbc2f94419ca56815aa",
+        "side": "sell",
+        "qty": 0.0002,
+        "price": 65443.13,
+        "status": "filled",
+        "provider_status": "filled",
+        "submitted_at": "2026-02-27T17:16:04.911656Z",
+        "reject_reason": null
+      }
+    ]
+  },
+  "positions": {
+    "alpaca": [
+      {
+        "position_id": "d659a070-e11c-41c8-a333-3817537da0d1",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "symbol": "BTC/USD",
+        "side": "flat",
+        "qty": 0.0,
+        "avg_entry_price": 0.0,
+        "mark_price": 65429.82,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0468636,
+        "created_at": "2026-02-27T17:12:30.053286Z",
+        "updated_at": "2026-02-27T17:16:04.431961Z"
+      }
+    ],
+    "sandbox": [
+      {
+        "position_id": "c23e2675-565e-4766-a8f7-466f2e574104",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "symbol": "BTC/USD",
+        "side": "flat",
+        "qty": 0.0,
+        "avg_entry_price": 0.0,
+        "mark_price": 65443.13,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0452848,
+        "created_at": "2026-02-27T17:12:29.844977Z",
+        "updated_at": "2026-02-27T17:16:05.727027Z"
+      }
+    ]
+  },
+  "pnl": {
+    "alpaca": [
+      {
+        "pnl_snapshot_id": "59e1055d-f8fb-4139-9cd2-f8656e430ea2",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 1000.0,
+        "cash": 986.89288,
+        "margin_used": 13.10712,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "snapshot_time": "2026-02-27T17:12:30.071626Z",
+        "created_at": "2026-02-27T17:12:30.053286Z",
+        "updated_at": "2026-02-27T17:12:30.053286Z"
+      },
+      {
+        "pnl_snapshot_id": "ffee8dfa-e04c-4119-be10-03fe3894c3f9",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 999.9861824,
+        "cash": 999.9861824,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0138176,
+        "snapshot_time": "2026-02-27T17:12:32.330452Z",
+        "created_at": "2026-02-27T17:12:32.316219Z",
+        "updated_at": "2026-02-27T17:12:32.316219Z"
+      },
+      {
+        "pnl_snapshot_id": "e9a60d8b-1dfc-44d6-9ee1-72e56cd60e31",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 999.9861824,
+        "cash": 986.8830664,
+        "margin_used": 13.103116,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0138176,
+        "snapshot_time": "2026-02-27T17:13:02.620377Z",
+        "created_at": "2026-02-27T17:13:02.607412Z",
+        "updated_at": "2026-02-27T17:13:02.607412Z"
+      },
+      {
+        "pnl_snapshot_id": "54b35556-7680-4301-a109-9e6cb86229e9",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 999.9737664,
+        "cash": 999.9737664,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0262336,
+        "snapshot_time": "2026-02-27T17:13:04.368665Z",
+        "created_at": "2026-02-27T17:13:04.359208Z",
+        "updated_at": "2026-02-27T17:13:04.359208Z"
+      },
+      {
+        "pnl_snapshot_id": "11ddeefb-3824-4566-a9fd-1f250efa0522",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 999.9737664,
+        "cash": 986.8726104,
+        "margin_used": 13.101156,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0262336,
+        "snapshot_time": "2026-02-27T17:14:02.634666Z",
+        "created_at": "2026-02-27T17:14:02.621740Z",
+        "updated_at": "2026-02-27T17:14:02.621740Z"
+      },
+      {
+        "pnl_snapshot_id": "fde6cf25-6276-4616-bb81-8ac1a605d0ee",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 999.9680524,
+        "cash": 999.9680524,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0319476,
+        "snapshot_time": "2026-02-27T17:14:04.537359Z",
+        "created_at": "2026-02-27T17:14:04.529150Z",
+        "updated_at": "2026-02-27T17:14:04.529150Z"
+      },
+      {
+        "pnl_snapshot_id": "69a23372-7d48-43b8-99b6-a8ef70d9e089",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 999.9680524,
+        "cash": 986.8671724,
+        "margin_used": 13.10088,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0319476,
+        "snapshot_time": "2026-02-27T17:16:02.589011Z",
+        "created_at": "2026-02-27T17:16:02.571202Z",
+        "updated_at": "2026-02-27T17:16:02.571202Z"
+      },
+      {
+        "pnl_snapshot_id": "55b0fa5f-492c-4584-8743-4a6c4ba941e1",
+        "deployment_id": "8c49e19f-4251-48a1-a1c7-c79d7fec1f2d",
+        "source": "platform_estimate",
+        "equity": 999.9531364,
+        "cash": 999.9531364,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0468636,
+        "snapshot_time": "2026-02-27T17:16:04.439285Z",
+        "created_at": "2026-02-27T17:16:04.431961Z",
+        "updated_at": "2026-02-27T17:16:04.431961Z"
+      }
+    ],
+    "sandbox": [
+      {
+        "pnl_snapshot_id": "06d5f67d-77a8-4d74-bfe5-85da0e418c44",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 1000.0,
+        "cash": 986.8959176,
+        "margin_used": 13.1040824,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "snapshot_time": "2026-02-27T17:12:29.855424Z",
+        "created_at": "2026-02-27T17:12:29.844977Z",
+        "updated_at": "2026-02-27T17:12:29.844977Z"
+      },
+      {
+        "pnl_snapshot_id": "1264c800-4fb4-4ffc-ae0f-bfa6ecd57ec2",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 999.9859576,
+        "cash": 999.9859576,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0140424,
+        "snapshot_time": "2026-02-27T17:12:32.148300Z",
+        "created_at": "2026-02-27T17:12:32.137613Z",
+        "updated_at": "2026-02-27T17:12:32.137613Z"
+      },
+      {
+        "pnl_snapshot_id": "bbdcbf6f-35af-45b2-90a3-1fc989900e88",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 999.9859576,
+        "cash": 986.8819416,
+        "margin_used": 13.104016,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0140424,
+        "snapshot_time": "2026-02-27T17:13:02.348821Z",
+        "created_at": "2026-02-27T17:13:02.335534Z",
+        "updated_at": "2026-02-27T17:13:02.335534Z"
+      },
+      {
+        "pnl_snapshot_id": "08cd703b-1900-4ef2-91de-c05007054b38",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 999.9745908,
+        "cash": 999.9745908,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0254092,
+        "snapshot_time": "2026-02-27T17:13:05.692656Z",
+        "created_at": "2026-02-27T17:13:05.684272Z",
+        "updated_at": "2026-02-27T17:13:05.684272Z"
+      },
+      {
+        "pnl_snapshot_id": "2550699e-e3ea-4f2d-a768-f52838acf08c",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 999.9745908,
+        "cash": 986.8736892,
+        "margin_used": 13.1009016,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0254092,
+        "snapshot_time": "2026-02-27T17:14:02.310584Z",
+        "created_at": "2026-02-27T17:14:02.298718Z",
+        "updated_at": "2026-02-27T17:14:02.298718Z"
+      },
+      {
+        "pnl_snapshot_id": "42ef2dfd-1141-4743-ae54-bd494c5646d2",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 999.9645492,
+        "cash": 999.9645492,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0354508,
+        "snapshot_time": "2026-02-27T17:14:05.805019Z",
+        "created_at": "2026-02-27T17:14:05.801303Z",
+        "updated_at": "2026-02-27T17:14:05.801303Z"
+      },
+      {
+        "pnl_snapshot_id": "9f0b04a7-892f-40eb-9272-9312d6380b9f",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 999.9645492,
+        "cash": 986.8660892,
+        "margin_used": 13.09846,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0354508,
+        "snapshot_time": "2026-02-27T17:15:07.061170Z",
+        "created_at": "2026-02-27T17:15:07.048403Z",
+        "updated_at": "2026-02-27T17:15:07.048403Z"
+      },
+      {
+        "pnl_snapshot_id": "6618b003-5cd7-4e89-8d88-2714a0a18dce",
+        "deployment_id": "e29901e3-cddb-4448-b4fd-27147f0ad3b0",
+        "source": "platform_estimate",
+        "equity": 999.9547152,
+        "cash": 999.9547152,
+        "margin_used": 0.0,
+        "unrealized_pnl": 0.0,
+        "realized_pnl": -0.0452848,
+        "snapshot_time": "2026-02-27T17:16:05.733685Z",
+        "created_at": "2026-02-27T17:16:05.727027Z",
+        "updated_at": "2026-02-27T17:16:05.727027Z"
+      }
+    ]
+  },
+  "comparison": {
+    "cycles": {
+      "cycles_total": 4,
+      "matched_signal_count": 3,
+      "matched_bar_time_count": 3,
+      "signal_match_ratio": 0.75,
+      "bar_time_match_ratio": 0.75,
+      "pairs": [
+        {
+          "cycle_index": 1,
+          "alpaca_signal": "CLOSE",
+          "sandbox_signal": "CLOSE",
+          "alpaca_bar_time": "2026-02-27T17:11:00Z",
+          "sandbox_bar_time": "2026-02-27T17:12:00Z",
+          "signal_match": true,
+          "bar_time_match": false
+        },
+        {
+          "cycle_index": 2,
+          "alpaca_signal": "CLOSE",
+          "sandbox_signal": "CLOSE",
+          "alpaca_bar_time": "2026-02-27T17:13:00Z",
+          "sandbox_bar_time": "2026-02-27T17:13:00Z",
+          "signal_match": true,
+          "bar_time_match": true
+        },
+        {
+          "cycle_index": 3,
+          "alpaca_signal": "NOOP",
+          "sandbox_signal": "CLOSE",
+          "alpaca_bar_time": "2026-02-27T17:13:00Z",
+          "sandbox_bar_time": "2026-02-27T17:13:00Z",
+          "signal_match": false,
+          "bar_time_match": true
+        },
+        {
+          "cycle_index": 4,
+          "alpaca_signal": "CLOSE",
+          "sandbox_signal": "CLOSE",
+          "alpaca_bar_time": "2026-02-27T17:15:00Z",
+          "sandbox_bar_time": "2026-02-27T17:15:00Z",
+          "signal_match": true,
+          "bar_time_match": true
+        }
+      ]
+    },
+    "order_count_delta": 0,
+    "signal_count_delta": 5,
+    "pnl_latest": {
+      "available": true,
+      "alpaca_latest_snapshot_time": "2026-02-27T17:16:04.439285Z",
+      "sandbox_latest_snapshot_time": "2026-02-27T17:16:05.733685Z",
+      "alpaca_equity": 999.9531364,
+      "sandbox_equity": 999.9547152,
+      "equity_delta_abs": 0.0015788000000611646,
+      "alpaca_unrealized_pnl": 0.0,
+      "sandbox_unrealized_pnl": 0.0,
+      "unrealized_delta_abs": 0.0,
+      "alpaca_realized_pnl": -0.0468636,
+      "sandbox_realized_pnl": -0.0452848,
+      "realized_delta_abs": 0.0015787999999999983
+    }
+  }
+}

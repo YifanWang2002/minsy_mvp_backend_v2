@@ -15,15 +15,26 @@ class StreamHandlerMixin:
         stream_state: _TurnStreamState,
     ) -> AsyncIterator[str]:
         resolved_model = preparation.prompt.model or settings.openai_response_model
+        should_send_instructions = self._should_send_instructions(
+            session=session,
+            phase=preparation.phase_before,
+            phase_stage=preparation.ctx.runtime_policy.phase_stage,
+            phase_turn_count=preparation.phase_turn_count,
+        )
+        stream_state.instructions_sent = should_send_instructions
         stream_request_kwargs: dict[str, Any] = {
             "model": resolved_model,
             "input_text": preparation.prompt.enriched_input,
-            "instructions": preparation.prompt.instructions,
             "previous_response_id": session.previous_response_id,
             "tools": preparation.tools,
             "tool_choice": preparation.prompt.tool_choice,
             "reasoning": preparation.prompt.reasoning,
         }
+        max_output_tokens = getattr(preparation.prompt, "max_output_tokens", None)
+        if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+            stream_request_kwargs["max_output_tokens"] = max_output_tokens
+        if should_send_instructions:
+            stream_request_kwargs["instructions"] = preparation.prompt.instructions
         stream_state.request_model = resolved_model
         trace_stream_request_kwargs = self._redact_stream_request_kwargs_for_trace(
             stream_request_kwargs
@@ -33,6 +44,9 @@ class StreamHandlerMixin:
             {
                 "session_id": str(session.id),
                 "phase": preparation.phase_before,
+                "phase_stage": preparation.ctx.runtime_policy.phase_stage,
+                "phase_turn_count": preparation.phase_turn_count,
+                "instructions_sent": should_send_instructions,
                 **trace_stream_request_kwargs,
             },
         )
@@ -185,6 +199,65 @@ class StreamHandlerMixin:
         if timeout_seconds <= 0:
             return _OPENAI_STREAM_HARD_TIMEOUT_SECONDS
         return timeout_seconds
+
+    def _should_send_instructions(
+        self,
+        *,
+        session: Session,
+        phase: str,
+        phase_stage: str | None,
+        phase_turn_count: int,
+    ) -> bool:
+        # First turn in a new response chain must provide instructions.
+        if session.previous_response_id is None:
+            return True
+
+        tracked_phase, tracked_stage = self._read_instruction_context(session)
+        if tracked_phase is None:
+            return True
+
+        # Runtime stage changes require refreshed instructions.
+        if tracked_phase != phase or tracked_stage != phase_stage:
+            return True
+
+        refresh_every = _INSTRUCTION_REFRESH_EVERY_PHASE_TURNS
+        if refresh_every > 0 and phase_turn_count > 0 and phase_turn_count % refresh_every == 0:
+            return True
+
+        return False
+
+    @staticmethod
+    def _read_instruction_context(session: Session) -> tuple[str | None, str | None]:
+        metadata = session.metadata_ if isinstance(session.metadata_, dict) else {}
+        raw = metadata.get(_INSTRUCTION_CONTEXT_META_KEY)
+        if not isinstance(raw, dict):
+            return None, None
+
+        phase = raw.get("phase")
+        stage = raw.get("phase_stage")
+        resolved_phase = phase.strip() if isinstance(phase, str) and phase.strip() else None
+        resolved_stage = stage.strip() if isinstance(stage, str) and stage.strip() else None
+        return resolved_phase, resolved_stage
+
+    @staticmethod
+    def _write_instruction_context(
+        *,
+        session: Session,
+        phase: str,
+        phase_stage: str | None,
+        phase_turn_count: int,
+        instructions_sent: bool,
+    ) -> None:
+        metadata = dict(session.metadata_ or {})
+        resolved_stage = phase_stage.strip() if isinstance(phase_stage, str) and phase_stage.strip() else None
+        metadata[_INSTRUCTION_CONTEXT_META_KEY] = {
+            "phase": phase,
+            "phase_stage": resolved_stage,
+            "phase_turn_count": max(0, int(phase_turn_count)),
+            "instructions_sent": bool(instructions_sent),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        session.metadata_ = metadata
 
     def _sse(self, event: str, payload: dict[str, Any]) -> str:
         trace = get_chat_debug_trace()

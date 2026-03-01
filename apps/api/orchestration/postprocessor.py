@@ -224,6 +224,13 @@ class PostProcessorMixin:
             )
             session.metadata_ = next_metadata
             session_openai_cost_totals = totals
+        self._write_instruction_context(
+            session=session,
+            phase=preparation.phase_before,
+            phase_stage=preparation.ctx.runtime_policy.phase_stage,
+            phase_turn_count=preparation.phase_turn_count,
+            instructions_sent=stream_state.instructions_sent,
+        )
 
         assistant_message = Message(
             session_id=session.id,

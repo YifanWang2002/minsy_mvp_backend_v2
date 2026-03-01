@@ -1,0 +1,205 @@
+{
+  "timestamp": "2026-02-28T03:25:11.318520",
+  "phase": "Phase 1: Advanced Factors Single Testing",
+  "baseline": {
+    "is": {
+      "total_trades": 1144,
+      "winning_trades": 345,
+      "losing_trades": 799,
+      "win_rate": 30.157342657342657,
+      "total_pnl": -3833.5628746655666,
+      "total_return": -38.335628746655665,
+      "final_equity": 6166.437125334433,
+      "max_drawdown_pct": 42.870596079110456,
+      "expectancy": -3.351016498833537
+    },
+    "oos": {
+      "total_trades": 1115,
+      "winning_trades": 355,
+      "losing_trades": 760,
+      "win_rate": 31.838565022421523,
+      "total_pnl": -2305.6260043058646,
+      "total_return": -23.056260043058646,
+      "final_equity": 7694.373995694135,
+      "max_drawdown_pct": 31.35515868698536,
+      "expectancy": -2.067826012830372
+    }
+  },
+  "factors": {
+    "TailRatio": {
+      "description": "Tail Ratio < -0.2 (bullish rejection)",
+      "is": {
+        "total_trades": 391,
+        "winning_trades": 118,
+        "losing_trades": 273,
+        "win_rate": 30.179028132992325,
+        "total_pnl": -1363.082353303076,
+        "total_return": -13.630823533030759,
+        "final_equity": 8636.917646696922,
+        "max_drawdown_pct": 16.285832929060803,
+        "expectancy": -3.4861441260948234
+      },
+      "oos": {
+        "total_trades": 447,
+        "winning_trades": 153,
+        "losing_trades": 294,
+        "win_rate": 34.22818791946309,
+        "total_pnl": -146.2323774191286,
+        "total_return": -1.462323774191286,
+        "final_equity": 9853.767622580866,
+        "max_drawdown_pct": 11.445902903995139,
+        "expectancy": -0.3271417839354107
+      }
+    },
+    "GapQuality": {
+      "description": "Gap Quality > 0.3 (sustained gap)",
+      "is": {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0.0,
+        "total_return": 0.0,
+        "final_equity": 10000.0,
+        "max_drawdown_pct": 0.0,
+        "expectancy": 0.0
+      },
+      "oos": {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0.0,
+        "total_return": 0.0,
+        "final_equity": 10000.0,
+        "max_drawdown_pct": 0.0,
+        "expectancy": 0.0
+      }
+    },
+    "FalseBreakout": {
+      "description": "False Breakout < -0.5 (bullish signal)",
+      "is": {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0.0,
+        "total_return": 0.0,
+        "final_equity": 10000.0,
+        "max_drawdown_pct": 0.0,
+        "expectancy": 0.0
+      },
+      "oos": {
+        "total_trades": 1,
+        "winning_trades": 0,
+        "losing_trades": 1,
+        "win_rate": 0.0,
+        "total_pnl": -50.98917336479058,
+        "total_return": -0.5098917336479057,
+        "final_equity": 9949.010826635209,
+        "max_drawdown_pct": 0.5098917336479099,
+        "expectancy": -50.98917336479058
+      }
+    },
+    "VolatilityPct": {
+      "description": "Volatility > 60th percentile",
+      "is": {
+        "total_trades": 364,
+        "winning_trades": 124,
+        "losing_trades": 240,
+        "win_rate": 34.065934065934066,
+        "total_pnl": -708.65663793017,
+        "total_return": -7.0865663793017,
+        "final_equity": 9291.343362069842,
+        "max_drawdown_pct": 13.190527620285419,
+        "expectancy": -1.9468588954125547
+      },
+      "oos": {
+        "total_trades": 363,
+        "winning_trades": 126,
+        "losing_trades": 237,
+        "win_rate": 34.710743801652896,
+        "total_pnl": -492.5015585752977,
+        "total_return": -4.925015585752977,
+        "final_equity": 9507.498441424692,
+        "max_drawdown_pct": 13.99760494050236,
+        "expectancy": -1.3567536048906272
+      }
+    },
+    "VolumeDivergence": {
+      "description": "Volume Divergence > 0.2 (bullish)",
+      "is": {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0.0,
+        "total_return": 0.0,
+        "final_equity": 10000.0,
+        "max_drawdown_pct": 0.0,
+        "expectancy": 0.0
+      },
+      "oos": {
+        "total_trades": 1,
+        "winning_trades": 0,
+        "losing_trades": 1,
+        "win_rate": 0.0,
+        "total_pnl": -93.89110416052937,
+        "total_return": -0.9389110416052936,
+        "final_equity": 9906.10889583947,
+        "max_drawdown_pct": 0.9389110416052973,
+        "expectancy": -93.89110416052937
+      }
+    },
+    "FollowThrough": {
+      "description": "Follow Through > 0.6 (strong)",
+      "is": {
+        "total_trades": 50,
+        "winning_trades": 19,
+        "losing_trades": 31,
+        "win_rate": 38.0,
+        "total_pnl": 201.67593325464418,
+        "total_return": 2.0167593325464415,
+        "final_equity": 10201.675933254652,
+        "max_drawdown_pct": 1.5169037165219341,
+        "expectancy": 4.033518665092884
+      },
+      "oos": {
+        "total_trades": 43,
+        "winning_trades": 18,
+        "losing_trades": 25,
+        "win_rate": 41.86046511627907,
+        "total_pnl": 285.7829399271543,
+        "total_return": 2.857829399271543,
+        "final_equity": 10285.782939927152,
+        "max_drawdown_pct": 2.3252549201110324,
+        "expectancy": 6.646114882026844
+      }
+    },
+    "MTFAlignment": {
+      "description": "MTF Alignment > 0.5 (bullish)",
+      "is": {
+        "total_trades": 1144,
+        "winning_trades": 345,
+        "losing_trades": 799,
+        "win_rate": 30.157342657342657,
+        "total_pnl": -3833.5628746655707,
+        "total_return": -38.33562874665571,
+        "final_equity": 6166.437125334433,
+        "max_drawdown_pct": 42.20405318053033,
+        "expectancy": -3.3510164988335407
+      },
+      "oos": {
+        "total_trades": 1115,
+        "winning_trades": 355,
+        "losing_trades": 760,
+        "win_rate": 31.838565022421523,
+        "total_pnl": -2305.6260043058915,
+        "total_return": -23.056260043058916,
+        "final_equity": 7694.373995694135,
+        "max_drawdown_pct": 31.26869752585718,
+        "expectancy": -2.067826012830396
+      }
+    }
+  }
+}

@@ -1,0 +1,332 @@
+{
+  "user2": {
+    "email": "2@test.com",
+    "broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+    "deployment_id": "55c6f40f-9a8d-4a3b-860f-7f44896a1eeb",
+    "open_status_code": 200,
+    "open": {
+      "manual_trade_action_id": "67856c46-c3a5-4938-9f96-030310352f12",
+      "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+      "deployment_id": "55c6f40f-9a8d-4a3b-860f-7f44896a1eeb",
+      "action": "open",
+      "payload": {
+        "qty": 0.001,
+        "side": "long",
+        "reason": "ccxt-open-retest2",
+        "symbol": "BTC/USDT",
+        "_execution": {
+          "qty": "0.001",
+          "reason": "ok",
+          "signal": "OPEN_LONG",
+          "status": "completed",
+          "symbol": "BTC/USDT",
+          "order_id": "d27d93ad-53e1-4589-bd72-4fec111633cf",
+          "idempotent_hit": false
+        }
+      },
+      "status": "completed",
+      "created_at": "2026-02-27T14:36:21.395522Z",
+      "updated_at": "2026-02-27T14:36:23.592936Z"
+    },
+    "close_status_code": 200,
+    "close": {
+      "manual_trade_action_id": "bb80a51a-d1f1-474f-86a8-7b57eee6297f",
+      "user_id": "595f4c3c-9192-4c96-b69e-864f59b45c98",
+      "deployment_id": "55c6f40f-9a8d-4a3b-860f-7f44896a1eeb",
+      "action": "close",
+      "payload": {
+        "qty": 0.001,
+        "reason": "ccxt-close-retest2",
+        "symbol": "BTC/USDT",
+        "_close_qty": {
+          "close_qty_local": "0.001",
+          "close_qty_broker": "1.00398584056",
+          "close_qty_source": "broker_positions"
+        },
+        "_execution": {
+          "qty": "0.001",
+          "reason": "ok",
+          "signal": "CLOSE",
+          "status": "completed",
+          "symbol": "BTC/USDT",
+          "order_id": "e8c92209-cb11-4ed0-84ab-2078befd82d3",
+          "idempotent_hit": false
+        }
+      },
+      "status": "completed",
+      "created_at": "2026-02-27T14:36:26.864354Z",
+      "updated_at": "2026-02-27T14:36:30.304913Z"
+    },
+    "orders_count": 2,
+    "positions_count": 1,
+    "pnl_count": 2,
+    "orders": [
+      {
+        "order_id": "e8c92209-cb11-4ed0-84ab-2078befd82d3",
+        "deployment_id": "55c6f40f-9a8d-4a3b-860f-7f44896a1eeb",
+        "provider_order_id": "3345396671265513472",
+        "client_order_id": "manual-bb80a51ad1f1474f86a87b57eee6297f",
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "type": "market",
+        "qty": 0.001,
+        "price": 66126.0,
+        "status": "filled",
+        "provider_status": "filled",
+        "reject_reason": null,
+        "last_sync_at": "2026-02-27T14:36:30.292255Z",
+        "submitted_at": "2026-02-27T14:36:30.277500Z",
+        "metadata": {
+          "action": "close",
+          "signal": "CLOSE",
+          "fill_qty": "0.001",
+          "fill_price": "66126.0",
+          "provider_status": "filled",
+          "manual_action_id": "bb80a51a-d1f1-474f-86a8-7b57eee6297f",
+          "last_state_reason": "manual_action_fill_simulated",
+          "state_transitions": [
+            {
+              "to": "new",
+              "ts": "2026-02-27T14:36:30.277801+00:00",
+              "from": "new",
+              "reason": "provider_submit_response"
+            },
+            {
+              "to": "filled",
+              "ts": "2026-02-27T14:36:30.292291+00:00",
+              "from": "new",
+              "reason": "manual_action_fill_simulated"
+            }
+          ],
+          "provider_filled_qty": "0.001",
+          "last_state_updated_at": "2026-02-27T14:36:30.292295+00:00",
+          "provider_status_updated_at": "2026-02-27T14:36:30.292255+00:00"
+        },
+        "created_at": "2026-02-27T14:36:26.873603Z",
+        "updated_at": "2026-02-27T14:36:30.290546Z"
+      },
+      {
+        "order_id": "d27d93ad-53e1-4589-bd72-4fec111633cf",
+        "deployment_id": "55c6f40f-9a8d-4a3b-860f-7f44896a1eeb",
+        "provider_order_id": "3345396444840206336",
+        "client_order_id": "manual-67856c46c3a549389f96030310352f12",
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "market",
+        "qty": 0.001,
+        "price": 66126.0,
+        "status": "filled",
+        "provider_status": "filled",
+        "reject_reason": null,
+        "last_sync_at": "2026-02-27T14:36:23.571375Z",
+        "submitted_at": "2026-02-27T14:36:23.548426Z",
+        "metadata": {
+          "action": "open",
+          "signal": "OPEN_LONG",
+          "fill_qty": "0.001",
+          "fill_price": "66126.0",
+          "provider_status": "filled",
+          "manual_action_id": "67856c46-c3a5-4938-9f96-030310352f12",
+          "last_state_reason": "manual_action_fill_simulated",
+          "state_transitions": [
+            {
+              "to": "new",
+              "ts": "2026-02-27T14:36:23.548786+00:00",
+              "from": "new",
+              "reason": "provider_submit_response"
+            },
+            {
+              "to": "filled",
+              "ts": "2026-02-27T14:36:23.571405+00:00",
+              "from": "new",
+              "reason": "manual_action_fill_simulated"
+            }
+          ],
+          "provider_filled_qty": "0.001",
+          "last_state_updated_at": "2026-02-27T14:36:23.571409+00:00",
+          "provider_status_updated_at": "2026-02-27T14:36:23.571375+00:00"
+        },
+        "created_at": "2026-02-27T14:36:21.400423Z",
+        "updated_at": "2026-02-27T14:36:23.568187Z"
+      }
+    ],
+    "latest_position": {
+      "position_id": "99dce81c-a70d-4885-8af3-d275393f48f8",
+      "deployment_id": "55c6f40f-9a8d-4a3b-860f-7f44896a1eeb",
+      "symbol": "BTC/USDT",
+      "side": "flat",
+      "qty": 0.0,
+      "avg_entry_price": 0.0,
+      "mark_price": 66126.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "created_at": "2026-02-27T14:36:23.568187Z",
+      "updated_at": "2026-02-27T14:36:30.290546Z"
+    }
+  },
+  "new_user": {
+    "email": "clean_new_20260227t142838z@test.com",
+    "broker_account_id": "0381ae65-e8d2-4cf8-87ab-517748134feb",
+    "deployment_id": "19ddb2fb-7086-4e2b-b372-14d77f7ba490",
+    "open_status_code": 200,
+    "open": {
+      "manual_trade_action_id": "b00998bf-fa06-43a3-a984-60ca4df54ea4",
+      "user_id": "1fc7a932-8bbb-4e1e-9808-ffaefe4dd393",
+      "deployment_id": "19ddb2fb-7086-4e2b-b372-14d77f7ba490",
+      "action": "open",
+      "payload": {
+        "qty": 0.001,
+        "side": "long",
+        "reason": "ccxt-open-retest2",
+        "symbol": "BTC/USDT",
+        "_execution": {
+          "qty": "0.001",
+          "reason": "ok",
+          "signal": "OPEN_LONG",
+          "status": "completed",
+          "symbol": "BTC/USDT",
+          "order_id": "3c92621b-11ab-4621-b2ab-e67466ba508d",
+          "idempotent_hit": false
+        }
+      },
+      "status": "completed",
+      "created_at": "2026-02-27T14:36:36.216228Z",
+      "updated_at": "2026-02-27T14:36:38.927917Z"
+    },
+    "close_status_code": 200,
+    "close": {
+      "manual_trade_action_id": "1c0bb164-014b-492c-bd33-f9bbde321efc",
+      "user_id": "1fc7a932-8bbb-4e1e-9808-ffaefe4dd393",
+      "deployment_id": "19ddb2fb-7086-4e2b-b372-14d77f7ba490",
+      "action": "close",
+      "payload": {
+        "qty": 0.001,
+        "reason": "ccxt-close-retest2",
+        "symbol": "BTC/USDT",
+        "_close_qty": {
+          "close_qty_local": "0.001",
+          "close_qty_broker": "1.003982330595",
+          "close_qty_source": "broker_positions"
+        },
+        "_execution": {
+          "qty": "0.001",
+          "reason": "ok",
+          "signal": "CLOSE",
+          "status": "completed",
+          "symbol": "BTC/USDT",
+          "order_id": "395d3e89-bf38-49ce-b734-b8941ff19381",
+          "idempotent_hit": false
+        }
+      },
+      "status": "completed",
+      "created_at": "2026-02-27T14:36:42.225744Z",
+      "updated_at": "2026-02-27T14:36:45.934882Z"
+    },
+    "orders_count": 2,
+    "positions_count": 1,
+    "pnl_count": 2,
+    "orders": [
+      {
+        "order_id": "395d3e89-bf38-49ce-b734-b8941ff19381",
+        "deployment_id": "19ddb2fb-7086-4e2b-b372-14d77f7ba490",
+        "provider_order_id": "3345397195721285632",
+        "client_order_id": "manual-1c0bb164014b492cbd33f9bbde321efc",
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "type": "market",
+        "qty": 0.001,
+        "price": 66126.0,
+        "status": "filled",
+        "provider_status": "filled",
+        "reject_reason": null,
+        "last_sync_at": "2026-02-27T14:36:45.928076Z",
+        "submitted_at": "2026-02-27T14:36:45.918934Z",
+        "metadata": {
+          "action": "close",
+          "signal": "CLOSE",
+          "fill_qty": "0.001",
+          "fill_price": "66126.0",
+          "provider_status": "filled",
+          "manual_action_id": "1c0bb164-014b-492c-bd33-f9bbde321efc",
+          "last_state_reason": "manual_action_fill_simulated",
+          "state_transitions": [
+            {
+              "to": "new",
+              "ts": "2026-02-27T14:36:45.919167+00:00",
+              "from": "new",
+              "reason": "provider_submit_response"
+            },
+            {
+              "to": "filled",
+              "ts": "2026-02-27T14:36:45.928092+00:00",
+              "from": "new",
+              "reason": "manual_action_fill_simulated"
+            }
+          ],
+          "provider_filled_qty": "0.001",
+          "last_state_updated_at": "2026-02-27T14:36:45.928094+00:00",
+          "provider_status_updated_at": "2026-02-27T14:36:45.928076+00:00"
+        },
+        "created_at": "2026-02-27T14:36:42.230556Z",
+        "updated_at": "2026-02-27T14:36:45.927635Z"
+      },
+      {
+        "order_id": "3c92621b-11ab-4621-b2ab-e67466ba508d",
+        "deployment_id": "19ddb2fb-7086-4e2b-b372-14d77f7ba490",
+        "provider_order_id": "3345396958323679232",
+        "client_order_id": "manual-b00998bffa0643a3a98460ca4df54ea4",
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "market",
+        "qty": 0.001,
+        "price": 66126.0,
+        "status": "filled",
+        "provider_status": "filled",
+        "reject_reason": null,
+        "last_sync_at": "2026-02-27T14:36:38.913765Z",
+        "submitted_at": "2026-02-27T14:36:38.895879Z",
+        "metadata": {
+          "action": "open",
+          "signal": "OPEN_LONG",
+          "fill_qty": "0.001",
+          "fill_price": "66126.0",
+          "provider_status": "filled",
+          "manual_action_id": "b00998bf-fa06-43a3-a984-60ca4df54ea4",
+          "last_state_reason": "manual_action_fill_simulated",
+          "state_transitions": [
+            {
+              "to": "new",
+              "ts": "2026-02-27T14:36:38.896243+00:00",
+              "from": "new",
+              "reason": "provider_submit_response"
+            },
+            {
+              "to": "filled",
+              "ts": "2026-02-27T14:36:38.913823+00:00",
+              "from": "new",
+              "reason": "manual_action_fill_simulated"
+            }
+          ],
+          "provider_filled_qty": "0.001",
+          "last_state_updated_at": "2026-02-27T14:36:38.913827+00:00",
+          "provider_status_updated_at": "2026-02-27T14:36:38.913765+00:00"
+        },
+        "created_at": "2026-02-27T14:36:36.220687Z",
+        "updated_at": "2026-02-27T14:36:38.912478Z"
+      }
+    ],
+    "latest_position": {
+      "position_id": "ca17e98e-1f0a-4a27-b08a-71cccbd252c3",
+      "deployment_id": "19ddb2fb-7086-4e2b-b372-14d77f7ba490",
+      "symbol": "BTC/USDT",
+      "side": "flat",
+      "qty": 0.0,
+      "avg_entry_price": 0.0,
+      "mark_price": 66126.0,
+      "unrealized_pnl": 0.0,
+      "realized_pnl": 0.0,
+      "created_at": "2026-02-27T14:36:38.912478Z",
+      "updated_at": "2026-02-27T14:36:45.927635Z"
+    }
+  }
+}

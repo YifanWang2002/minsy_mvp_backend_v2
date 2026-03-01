@@ -51,6 +51,31 @@ def _provider_status_metadata(metadata: dict[str, Any], provider_status: str) ->
     return payload
 
 
+def _merge_provider_snapshot_metadata(
+    metadata: dict[str, Any],
+    state_raw: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(metadata)
+    if not isinstance(state_raw, dict):
+        return payload
+    for raw_key, target_key in (
+        ("provider", "provider_name"),
+        ("account_uid", "provider_account_uid"),
+        ("asset_class", "provider_asset_class"),
+        ("slippage_bps", "provider_slippage_bps"),
+        ("fee_bps", "provider_fee_bps"),
+        ("fee", "provider_fee"),
+    ):
+        value = state_raw.get(raw_key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        payload[target_key] = text
+    return payload
+
+
 def _extract_reject_reason(raw: dict[str, Any] | None) -> str | None:
     if not isinstance(raw, dict):
         return None
@@ -123,6 +148,7 @@ class OrderManager:
         now = datetime.now(UTC)
         provider_status = str(state.status).strip().lower() or target_status
         metadata = _provider_status_metadata(intent.metadata, provider_status)
+        metadata = _merge_provider_snapshot_metadata(metadata, state.raw)
         order = Order(
             deployment_id=deployment_id,
             provider_order_id=state.provider_order_id,

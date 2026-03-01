@@ -388,13 +388,16 @@ sequenceDiagram
 - 保留 `check_symbol_available` 用于符号验证
 - 价格展示功能已移除，避免 rate limit 问题
 
-## 8.2 Deployment 阶段 `yes deploy` 偶发需要两次
+## 8.2 ~~Deployment 阶段 `yes deploy` 偶发需要两次~~ ✅ 已修复
 
-结论：属实且有结构性原因。
+结论：已修复。
 
-- 第一次常用于 `strategy -> deployment` 转阶段。
-- 真正部署动作通常在 deployment phase 下一轮才执行。
-- 当前没有自动 follow-up deployment turn。
+- 原因：第一次 `yes deploy` 触发 `strategy -> deployment` 转阶段，真正部署动作需要在 deployment phase 下一轮才执行。
+- 修复方案：在 `core.py` 中添加 `_run_deployment_auto_followup` 方法，当检测到 `strategy -> deployment` 转阶段时，自动触发一次 deployment turn。
+- 修改文件：
+  - `apps/api/orchestration/types.py`：`_TurnPostProcessResult` 添加 `transition_from_phase` 和 `transition_to_phase` 字段
+  - `apps/api/orchestration/postprocessor.py`：`_post_process_turn` 返回时填充转阶段信息
+  - `apps/api/orchestration/core.py`：`handle_message_stream` 末尾检测转阶段并触发 auto follow-up
 
 ## 8.3 Stress test 阶段被跳过
 
@@ -427,7 +430,7 @@ sequenceDiagram
 - carryover 仅短窗口、仅一次消费。
 - `/strategies/confirm` 也会重置会话链。
 
-## 8.7 你已修复的 DSL 规范路径问题（已验证）
+## 8.7 ~~你已修复的 DSL 规范路径问题~~（已验证）
 
 结论：当前修复正确，且已经生效。
 
@@ -451,7 +454,7 @@ sequenceDiagram
   - A. 彻底下线 stress phase（删 handler/skills/runtime policy）
   - B. 恢复真实链路（放开 transition + 移除 boundary redirect）
 
-2. **[P0] Deployment 需要重复确认，用户意图无法单轮闭环**
+2. **[P0] ~~Deployment 需要重复确认，用户意图无法单轮闭环~~**
 - 现状：`yes deploy` 常先触发转阶段，再触发实际 deployment。
 - 风险：关键动作体验不确定，容易误判“系统没响应”。
 - 建议：在 `strategy_confirmed -> deployment` 时自动注入一次 deployment follow-up turn，或在 transition metadata 传递 deploy intent 并自动执行 `create+start`。

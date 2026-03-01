@@ -1,0 +1,14 @@
+{
+  "start": "2026-02-27T13:30:58.196582+00:00",
+  "worker_total_lines": 0,
+  "beat_total_lines": 0,
+  "worker_scheduler_tick_lines": 0,
+  "worker_runtime_lines": {
+    "895f4dcb-6b14-4cf2-b32b-289f3206014b": 0,
+    "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe": 0,
+    "9984e3b1-6454-4bca-bc20-2ae6ad5ca487": 0
+  },
+  "beat_publish_lines": 0,
+  "worker_samples": [],
+  "beat_samples": []
+}

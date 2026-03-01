@@ -137,6 +137,10 @@ class BrokerAccountCreateRequest(BaseModel):
     """Create one broker account binding for current user."""
 
     provider: Literal["alpaca", "ccxt", "sandbox"]
+    exchange_id: str | None = Field(default=None, min_length=1, max_length=64)
+    account_uid: str | None = Field(default=None, min_length=1, max_length=128)
+    is_default: bool = False
+    is_sandbox: bool | None = None
     mode: Literal["paper"] = "paper"
     credentials: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -146,6 +150,14 @@ class BrokerAccountCreateRequest(BaseModel):
         if self.provider != "sandbox" and not self.credentials:
             raise ValueError("credentials cannot be empty.")
         return self
+
+    @field_validator("exchange_id", "account_uid")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class BrokerAccountCredentialsUpdateRequest(BaseModel):

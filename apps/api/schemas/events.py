@@ -271,17 +271,44 @@ class BrokerAccountResponse(BaseModel):
     broker_account_id: UUID
     user_id: UUID
     provider: str
+    exchange_id: str = ""
+    account_uid: str = ""
     mode: str
     status: str
+    is_default: bool = False
+    is_sandbox: bool = False
     key_fingerprint: str | None = None
     encryption_version: str | None = None
     updated_source: str | None = None
     last_validated_at: datetime | None = None
     last_validated_status: str | None = None
+    last_validation_error_code: str | None = None
+    capabilities: dict[str, Any] = Field(default_factory=dict)
     validation_metadata: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class CcxtExchangeInfo(BaseModel):
+    """CCXT exchange metadata payload for settings UI dynamic form rendering."""
+
+    exchange_id: str
+    name: str
+    required_fields: list[str] = Field(default_factory=list)
+    optional_fields: list[str] = Field(default_factory=list)
+    supports_sandbox: bool = False
+    supports_testnet: bool = False
+    supports_demo: bool = False
+    supports_paper: bool = False
+    supports_live: bool = False
+    paper_trading_status: str = "not_supported"
+    paper_trading_message: str = ""
+    live_trading_status: str = "disabled"
+    live_trading_message: str = ""
+    description: str | None = None
+    website_title: str | None = None
+    website_url: str | None = None
 
 
 class DeploymentRunResponse(BaseModel):

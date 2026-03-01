@@ -1,0 +1,61 @@
+{
+  "report_source": "runtime/reports/broker_dual_live_report_20260227T133058Z.json",
+  "start": "2026-02-27T13:30:58.196582+00:00",
+  "beat_scheduler_tick_sent_count": 738,
+  "checks": [
+    {
+      "label": "alpaca_user2",
+      "deployment_id": "895f4dcb-6b14-4cf2-b32b-289f3206014b",
+      "queued_task_id": "7756a202-84c0-4470-afbf-c70b4719e7fe",
+      "broker_account_id": "3f30a120-10af-4e53-9756-e8a4f1c7aab9",
+      "run_broker_account_id": "3f30a120-10af-4e53-9756-e8a4f1c7aab9",
+      "task_log_line_count": 2,
+      "deployment_log_line_count": 1,
+      "task_log_samples": [
+        "[2026-02-27 13:32:40,035: INFO/MainProcess] Task paper_trading.run_deployment_runtime[7756a202-84c0-4470-afbf-c70b4719e7fe] received",
+        "[2026-02-27 13:32:48,810: INFO/ForkPoolWorker-1] Task paper_trading.run_deployment_runtime[7756a202-84c0-4470-afbf-c70b4719e7fe] succeeded in 0.04695737495785579s: {'deployment_id': '895f4dcb-6b14-4cf2-b32b-289f3206014b', 'status': 'stopped'}"
+      ],
+      "deployment_log_samples": [
+        "[2026-02-27 13:32:48,810: INFO/ForkPoolWorker-1] Task paper_trading.run_deployment_runtime[7756a202-84c0-4470-afbf-c70b4719e7fe] succeeded in 0.04695737495785579s: {'deployment_id': '895f4dcb-6b14-4cf2-b32b-289f3206014b', 'status': 'stopped'}"
+      ],
+      "task_payload_sample": "{'deployment_id': '895f4dcb-6b14-4cf2-b32b-289f3206014b', 'status': 'stopped'}",
+      "broker_binding_matches_run": true
+    },
+    {
+      "label": "ccxt_user2",
+      "deployment_id": "74f49c34-1a7c-4cc4-9df6-ce3078b7fafe",
+      "queued_task_id": "323cd43e-957c-467c-aa5e-2b1fae9bbf50",
+      "broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+      "run_broker_account_id": "35e3aa4b-be05-4fed-8b3d-5fe03d15b750",
+      "task_log_line_count": 2,
+      "deployment_log_line_count": 1,
+      "task_log_samples": [
+        "[2026-02-27 13:34:09,174: INFO/MainProcess] Task paper_trading.run_deployment_runtime[323cd43e-957c-467c-aa5e-2b1fae9bbf50] received",
+        "[2026-02-27 13:34:20,773: INFO/ForkPoolWorker-2] Task paper_trading.run_deployment_runtime[323cd43e-957c-467c-aa5e-2b1fae9bbf50] succeeded in 0.04749887500656769s: {'deployment_id': '74f49c34-1a7c-4cc4-9df6-ce3078b7fafe', 'status': 'stopped'}"
+      ],
+      "deployment_log_samples": [
+        "[2026-02-27 13:34:20,773: INFO/ForkPoolWorker-2] Task paper_trading.run_deployment_runtime[323cd43e-957c-467c-aa5e-2b1fae9bbf50] succeeded in 0.04749887500656769s: {'deployment_id': '74f49c34-1a7c-4cc4-9df6-ce3078b7fafe', 'status': 'stopped'}"
+      ],
+      "task_payload_sample": "{'deployment_id': '74f49c34-1a7c-4cc4-9df6-ce3078b7fafe', 'status': 'stopped'}",
+      "broker_binding_matches_run": true
+    },
+    {
+      "label": "alpaca_extra_user",
+      "deployment_id": "9984e3b1-6454-4bca-bc20-2ae6ad5ca487",
+      "queued_task_id": "a2e44767-0356-4e29-875a-6fbac297aebc",
+      "broker_account_id": "0e870c1a-51a8-42a9-96d6-9825ae1d9209",
+      "run_broker_account_id": "0e870c1a-51a8-42a9-96d6-9825ae1d9209",
+      "task_log_line_count": 2,
+      "deployment_log_line_count": 1,
+      "task_log_samples": [
+        "[2026-02-27 13:34:21,333: INFO/MainProcess] Task paper_trading.run_deployment_runtime[a2e44767-0356-4e29-875a-6fbac297aebc] received",
+        "[2026-02-27 13:34:29,584: INFO/ForkPoolWorker-4] Task paper_trading.run_deployment_runtime[a2e44767-0356-4e29-875a-6fbac297aebc] succeeded in 0.04766254097921774s: {'deployment_id': '9984e3b1-6454-4bca-bc20-2ae6ad5ca487', 'status': 'stopped'}"
+      ],
+      "deployment_log_samples": [
+        "[2026-02-27 13:34:29,584: INFO/ForkPoolWorker-4] Task paper_trading.run_deployment_runtime[a2e44767-0356-4e29-875a-6fbac297aebc] succeeded in 0.04766254097921774s: {'deployment_id': '9984e3b1-6454-4bca-bc20-2ae6ad5ca487', 'status': 'stopped'}"
+      ],
+      "task_payload_sample": "{'deployment_id': '9984e3b1-6454-4bca-bc20-2ae6ad5ca487', 'status': 'stopped'}",
+      "broker_binding_matches_run": true
+    }
+  ]
+}
