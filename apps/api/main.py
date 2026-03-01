@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -38,6 +39,7 @@ async def lifespan(_: FastAPI):
     """Initialize and close infrastructure resources."""
     banner()
     logger.info("Starting application lifecycle.")
+    catalog_sync_task: asyncio.Task[None] | None = None
 
     # Ensure market-data parquet files exist (downloads on first run).
     ensure_market_data()
@@ -66,12 +68,22 @@ async def lifespan(_: FastAPI):
         )
     await init_postgres()
     await init_redis()
-    await _sync_market_data_catalog_on_startup()
+    catalog_sync_task = asyncio.create_task(
+        _sync_market_data_catalog_on_startup(),
+        name="market-data-catalog-startup-sync",
+    )
+    logger.info("Market-data catalog startup sync scheduled in background.")
     await sync_telegram_webhook_on_startup()
     log_success("Infrastructure initialized.")
     try:
         yield
     finally:
+        if catalog_sync_task is not None and not catalog_sync_task.done():
+            catalog_sync_task.cancel()
+            try:
+                await catalog_sync_task
+            except asyncio.CancelledError:
+                logger.info("Market-data catalog startup sync cancelled on shutdown.")
         await close_redis()
         await close_postgres()
         logger.info("Application lifecycle closed.")
