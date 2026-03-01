@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -206,7 +207,10 @@ async def upsert_catalog_entry_from_parquet(
     file_path: str | Path,
 ) -> CatalogEntry:
     resolved_file = Path(file_path).expanduser().resolve()
-    start_date, end_date, row_count, file_size_bytes = _read_parquet_stats(resolved_file)
+    start_date, end_date, row_count, file_size_bytes = await asyncio.to_thread(
+        _read_parquet_stats,
+        resolved_file,
+    )
     return await upsert_catalog_entry(
         db,
         market=market,
