@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 import re
+from typing import Any
 
 from packages.domain.market_data.data import DataLoader
 
@@ -238,10 +239,16 @@ def get_tradingview_symbol_for_market_instrument(
         return symbol
 
     if market_key == "futures":
-        compact = symbol.replace("=F", "")
-        if compact.endswith("1!"):
-            return compact
-        return f"{compact}1!"
+        compact = symbol.replace("=F", "").rstrip("!")
+        futures_to_proxy: dict[str, str] = {
+            "ES": "SPY",
+            "NQ": "QQQ",
+            "GC": "XAUUSD",
+            "CL": "USOIL",
+            "RTY": "IWM",
+            "YM": "DIA",
+        }
+        return futures_to_proxy.get(compact, compact)
 
     return symbol
 
@@ -311,8 +318,7 @@ def build_pre_strategy_dynamic_state(
     missing_fields: list[str] | None = None,
     collected_fields: dict[str, str] | None = None,
     kyc_profile: dict[str, str] | None = None,
-    symbol_newly_provided_this_turn_hint: bool = False,
-    inferred_instrument_from_user_message: str | None = None,
+    runtime_state: dict[str, Any] | None = None,
 ) -> str:
     """Return dynamic state for pre-strategy turns."""
     if missing_fields is None:
@@ -363,6 +369,20 @@ def build_pre_strategy_dynamic_state(
         market=target_market,
         instrument=target_instrument,
     )
+    runtime = dict(runtime_state or {})
+    instrument_data_status = str(
+        runtime.get("instrument_data_status", "")
+    ).strip() or "not_applicable"
+    instrument_data_symbol = str(
+        runtime.get("instrument_data_symbol", "")
+    ).strip() or "none"
+    instrument_data_market = str(
+        runtime.get("instrument_data_market", "")
+    ).strip() or "none"
+    instrument_available_locally = bool(runtime.get("instrument_available_locally"))
+    download_lookback_days = 730
+    download_default_timeframe = "1m"
+    download_eta_hint_minutes = 2
 
     market_list_str = (
         ", ".join(market_catalog.keys())
@@ -390,8 +410,13 @@ def build_pre_strategy_dynamic_state(
         f"- allowed_instruments_for_target_market: {allowed_instruments_str}\n"
         f"- mapped_market_data_symbol_for_target_instrument: {mapped_market_data_symbol}\n"
         f"- mapped_tradingview_symbol_for_target_instrument: {mapped_tradingview_symbol}\n"
-        f"- symbol_newly_provided_this_turn_hint: {str(symbol_newly_provided_this_turn_hint).lower()}\n"
-        f"- inferred_instrument_from_user_message: "
-        f"{normalize_instrument_value(inferred_instrument_from_user_message) if inferred_instrument_from_user_message else 'none'}\n"
+        f"- instrument_data_status: {instrument_data_status}\n"
+        f"- instrument_data_symbol: {instrument_data_symbol}\n"
+        f"- instrument_data_market: {instrument_data_market}\n"
+        f"- instrument_available_locally: {str(instrument_available_locally).lower()}\n"
+        "- download_requires_user_confirmation: true\n"
+        f"- download_lookback_days: {download_lookback_days}\n"
+        f"- download_default_timeframe: {download_default_timeframe}\n"
+        f"- download_eta_hint_minutes: {download_eta_hint_minutes}\n"
         "[/SESSION STATE]\n\n"
     )

@@ -15,7 +15,7 @@ from datetime import timedelta
 
 from celery import Celery
 from celery.schedules import crontab
-from kombu import Queue
+from kombu import Exchange, Queue
 
 from packages.infra.observability.sentry import init_backend_sentry
 from packages.shared_settings import (
@@ -64,25 +64,34 @@ _ROUTES_ALL: dict[str, dict[str, str]] = {
     **_ROUTES_IO,
 }
 
+_TASK_EXCHANGE = Exchange("backtest", type="direct")
+
+
+def _queue(name: str) -> Queue:
+    """Create a queue bound to the shared exchange with queue-specific routing key."""
+
+    return Queue(name, exchange=_TASK_EXCHANGE, routing_key=name)
+
+
 _QUEUES_CPU: tuple[Queue, ...] = (
-    Queue("backtest"),
-    Queue("stress"),
+    _queue("backtest"),
+    _queue("stress"),
 )
 _QUEUES_IO: tuple[Queue, ...] = (
-    Queue("market_data"),
-    Queue("paper_trading"),
-    Queue("maintenance"),
-    Queue("notifications"),
-    Queue("trade_approval"),
+    _queue("market_data"),
+    _queue("paper_trading"),
+    _queue("maintenance"),
+    _queue("notifications"),
+    _queue("trade_approval"),
 )
 _QUEUES_ALL: tuple[Queue, ...] = (
-    Queue("backtest"),
-    Queue("market_data"),
-    Queue("stress"),
-    Queue("paper_trading"),
-    Queue("maintenance"),
-    Queue("notifications"),
-    Queue("trade_approval"),
+    _queue("backtest"),
+    _queue("market_data"),
+    _queue("stress"),
+    _queue("paper_trading"),
+    _queue("maintenance"),
+    _queue("notifications"),
+    _queue("trade_approval"),
 )
 
 

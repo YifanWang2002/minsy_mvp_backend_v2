@@ -137,7 +137,10 @@ class PromptBuilderMixin:
             allowed_tools=[
                 self._build_strategy_tool_def(
                     allowed_tools=list(_STRATEGY_SCHEMA_ONLY_TOOL_NAMES),
-                )
+                ),
+                self._build_market_data_tool_def(
+                    allowed_tools=list(_STRATEGY_MARKET_DATA_TOOL_NAMES),
+                ),
             ],
         )
 
@@ -178,7 +181,7 @@ class PromptBuilderMixin:
                 allowed_tools=list(_STRATEGY_ARTIFACT_OPS_TOOL_NAMES),
             ),
             self._build_market_data_tool_def(
-                allowed_tools=list(_MARKET_DATA_MINIMAL_TOOL_NAMES),
+                allowed_tools=list(_STRATEGY_MARKET_DATA_TOOL_NAMES),
             ),
             self._build_backtest_tool_def(
                 allowed_tools=list(_BACKTEST_FEEDBACK_TOOL_NAMES),
@@ -208,15 +211,62 @@ class PromptBuilderMixin:
             phase=Phase.DEPLOYMENT.value,
         )
         raw_status = profile.get("deployment_status")
-        status = raw_status.strip().lower() if isinstance(raw_status, str) else "ready"
+        status = raw_status.strip().lower() if isinstance(raw_status, str) else "blocked"
         if status not in {"ready", "deployed", "blocked"}:
-            status = "ready"
+            status = "blocked"
+
+        raw_broker_status = profile.get("broker_readiness_status")
+        broker_status = (
+            raw_broker_status.strip().lower()
+            if isinstance(raw_broker_status, str)
+            else "unknown"
+        )
+        if broker_status not in {"unknown", "no_broker", "needs_choice", "ready", "blocked"}:
+            broker_status = "unknown"
+
+        selected_broker_account_id = self._coerce_uuid_text(
+            profile.get("selected_broker_account_id")
+        )
+        raw_confirmation = profile.get("deployment_confirmation_status")
+        confirmation_status = (
+            raw_confirmation.strip().lower()
+            if isinstance(raw_confirmation, str)
+            else "pending"
+        )
+        if confirmation_status not in {"pending", "confirmed", "needs_changes"}:
+            confirmation_status = "pending"
+
+        can_execute = (
+            status != "deployed"
+            and broker_status == "ready"
+            and selected_broker_account_id is not None
+            and confirmation_status == "confirmed"
+        )
+        allowed_tools = (
+            list(_TRADING_DEPLOYMENT_TOOL_NAMES)
+            if status == "deployed" or can_execute
+            else list(_TRADING_DEPLOYMENT_PREFLIGHT_TOOL_NAMES)
+        )
+
+        if status == "deployed":
+            phase_stage = "deployment_deployed"
+        elif broker_status in {"no_broker", "blocked"}:
+            phase_stage = "deployment_preflight_blocked"
+        elif broker_status == "needs_choice":
+            phase_stage = "deployment_needs_broker_choice"
+        elif broker_status == "ready" and confirmation_status != "confirmed":
+            phase_stage = "deployment_review_pending"
+        elif can_execute:
+            phase_stage = "deployment_execute_ready"
+        else:
+            phase_stage = "deployment_preflight"
+
         return HandlerRuntimePolicy(
-            phase_stage=f"deployment_{status}",
+            phase_stage=phase_stage,
             tool_mode="replace",
             allowed_tools=[
                 self._build_trading_tool_def(
-                    allowed_tools=list(_TRADING_DEPLOYMENT_TOOL_NAMES),
+                    allowed_tools=allowed_tools,
                 )
             ],
         )

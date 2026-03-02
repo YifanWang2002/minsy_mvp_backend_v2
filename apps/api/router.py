@@ -10,6 +10,7 @@ from apps.api.routes.broker_accounts import router as broker_accounts_router
 from apps.api.routes.chat import router as chat_router
 from apps.api.routes.deployments import router as deployments_router
 from apps.api.routes.health import router as health_router
+from apps.api.routes.issue_reports import router as issue_reports_router
 from apps.api.routes.market_data import router as market_data_router
 from apps.api.routes.notification_preferences import router as notification_preferences_router
 from apps.api.routes.portfolio import router as portfolio_router
@@ -23,6 +24,7 @@ from apps.api.routes.trading_stream import router as trading_stream_router
 api_router = APIRouter()
 api_router.include_router(health_router)
 api_router.include_router(auth_router)
+api_router.include_router(issue_reports_router)
 api_router.include_router(chat_router)
 api_router.include_router(sessions_router)
 api_router.include_router(strategies_router)

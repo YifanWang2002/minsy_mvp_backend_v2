@@ -45,6 +45,7 @@ class CcxtRestProvider:
         symbol: str,
         timeframe: str,
         since: datetime | None,
+        until: datetime | None = None,
         limit: int,
         market: str,
     ) -> list[OhlcvBar]:
@@ -68,6 +69,8 @@ class CcxtRestProvider:
                 continue
             try:
                 timestamp = datetime.fromtimestamp(float(item[0]) / 1000.0, tz=UTC)
+                if until is not None and timestamp > until.astimezone(UTC):
+                    continue
                 bars.append(
                     OhlcvBar(
                         timestamp=timestamp,

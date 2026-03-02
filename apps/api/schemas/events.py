@@ -311,6 +311,14 @@ class CcxtExchangeInfo(BaseModel):
     website_url: str | None = None
 
 
+class IssueReportCreateResponse(BaseModel):
+    """Confirmation payload after persisting one issue report bundle."""
+
+    issue_report_id: UUID
+    resolved_session_id: UUID | None = None
+    stored_at: datetime
+
+
 class DeploymentRunResponse(BaseModel):
     """Deployment runtime snapshot."""
 

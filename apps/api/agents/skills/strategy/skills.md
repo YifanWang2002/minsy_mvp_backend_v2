@@ -16,6 +16,7 @@ Reply in **{{LANG_NAME}}**.
 ## Hard Output Contract (MUST)
 - Read `[SESSION STATE]` in every turn.
 - `[SESSION STATE]` includes confirmed-save context keys: `confirmed_strategy_id`, `strategy_market`, `strategy_primary_symbol`, `strategy_tickers_csv`, `strategy_timeframe`.
+- `[SESSION STATE]` also includes pre-strategy data readiness keys: `pre_strategy_instrument_data_status`, `pre_strategy_instrument_data_symbol`, `pre_strategy_instrument_data_market`, `pre_strategy_instrument_available_locally`.
 - `[SESSION STATE]` also includes `tool_compat_session_id`. When it is not `none`, pass `session_id=tool_compat_session_id` to every `strategy_*` tool call for runtime compatibility.
 - When no `strategy_id` yet:
   1) produce short rationale text
@@ -61,6 +62,8 @@ Reply in **{{LANG_NAME}}**.
 - If `strategy_get_dsl`/`strategy_patch_dsl` are unavailable in the current tool set, do not fabricate patch instructions; request the saved `strategy_id` (or ask user to confirm/save first) and stop there.
 
 ## Backtest Data Availability Guardrail (MUST)
+- If `[SESSION STATE].pre_strategy_instrument_data_status=download_started`, assume the requested symbol may still be syncing; check local readiness with `check_symbol_available` and/or `get_symbol_data_coverage` before relying on that symbol for strategy evaluation.
+- If `[SESSION STATE].pre_strategy_instrument_data_status=download_started` and data is still unavailable, continue using market-data sync/status tools in this phase instead of assuming the pre-strategy phase finished the sync.
 - Before every `backtest_create_job`, first try:
   1) `strategy_get_dsl(strategy_id)` to read `dsl_json.universe.market` and `dsl_json.universe.tickers`
   2) `get_symbol_data_coverage(market, symbol)` for the symbol you are about to backtest (use the first ticker unless user requests another)
@@ -82,7 +85,10 @@ Reply in **{{LANG_NAME}}**.
 - Prefer this order:
   1) pre-confirm draft: `strategy_validate_dsl(dsl_json)` and return `strategy_ref` by `strategy_draft_id`
   2) post-confirm updates: `strategy_get_dsl` -> `strategy_patch_dsl`
-  3) post-confirm backtest: `strategy_get_dsl` -> `get_symbol_data_coverage` -> `backtest_create_job` -> `backtest_get_job`
+  3) post-confirm backtest:
+     - `strategy_get_dsl` -> `get_symbol_data_coverage`
+     - if coverage is insufficient: `market_data_detect_missing_ranges` -> `market_data_fetch_missing_ranges` -> `market_data_get_sync_job`
+     - then re-check coverage and run: `backtest_create_job` -> `backtest_get_job`
 - In this phase, only use:
   - `strategy_validate_dsl`
   - `strategy_upsert_dsl`
@@ -103,7 +109,13 @@ Reply in **{{LANG_NAME}}**.
   - `backtest_exit_reason_breakdown`
   - `backtest_underwater_curve`
   - `backtest_rolling_metrics`
+  - `check_symbol_available`
   - `get_symbol_data_coverage`
+  - `market_data_detect_missing_ranges`
+  - `market_data_fetch_missing_ranges`
+  - `market_data_get_sync_job`
+  - `get_symbol_metadata`
+  - `get_symbol_candles`
   - `get_indicator_catalog`
 - `get_indicator_detail`
 - `strategy_upsert_dsl` requires `dsl_json`.
@@ -115,6 +127,9 @@ Reply in **{{LANG_NAME}}**.
 - `strategy_diff_versions` requires `strategy_id`, `from_version`, `to_version`.
 - `strategy_rollback_dsl` requires `strategy_id`, `target_version`, optional `expected_version`.
 - `get_symbol_data_coverage` requires `market` and `symbol`.
+- `market_data_detect_missing_ranges` requires `market`, `symbol`, `timeframe`, `start_date`, `end_date`.
+- `market_data_fetch_missing_ranges` requires `provider`, `market`, `symbol`, `timeframe`; use `provider="alpaca"` and `run_async=true`.
+- `market_data_get_sync_job` requires `sync_job_id`.
 - Keep patches minimal: prefer `replace`/`add`/`remove` and include `test` guards when practical.
 - Use `get_indicator_catalog` to inspect available factor categories and registry contracts.
 - Use `get_indicator_detail` when you need full skill detail for one or more indicators.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -26,6 +27,7 @@ from apps.api.agents.skills.pre_strategy_skills import (
     normalize_instrument_value,
     normalize_market_value,
 )
+from packages.domain.market_data.data import DataLoader
 from packages.shared_settings.schema.settings import settings
 
 _MARKET_DISPLAY_LABELS: dict[str, str] = {
@@ -88,6 +90,17 @@ _FALLBACK_SUBTITLE_BY_FIELD: dict[str, str] = {
     "opportunity_frequency_bucket": "This controls signal cadence and strategy style.",
     "holding_period_bucket": "This controls entry and exit horizon.",
 }
+_PRE_STRATEGY_FALLBACK_MARKET_DATA_TOOLS: tuple[str, ...] = (
+    "check_symbol_available",
+    "get_symbol_data_coverage",
+    "market_data_detect_missing_ranges",
+    "market_data_fetch_missing_ranges",
+    "market_data_get_sync_job",
+)
+_CRYPTO_QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "USD", "BTC", "ETH", "EUR")
+_DATA_RESOLUTION_AWAITING_USER_CHOICE = "awaiting_user_choice"
+_DATA_RESOLUTION_DOWNLOAD_STARTED = "download_started"
+_DATA_RESOLUTION_LOCAL_READY = "local_ready"
 
 
 class PreStrategyHandler:
@@ -114,16 +127,23 @@ class PreStrategyHandler:
         ctx: PhaseContext,
         user_message: str,
     ) -> PromptPieces:
-        phase_data = ctx.session_artifacts.get(Phase.PRE_STRATEGY.value, {})
-        profile = dict(phase_data.get("profile", {}))
+        phase_data = ctx.session_artifacts.setdefault(
+            Phase.PRE_STRATEGY.value,
+            self.init_artifacts(),
+        )
+        profile = self._sanitize_profile(dict(phase_data.get("profile", {})))
+        runtime_state = self._compute_runtime_state(
+            profile=profile,
+            previous_runtime_state=dict(phase_data.get("runtime", {})),
+            turn_context=ctx.turn_context,
+        )
+        phase_data["profile"] = profile
+        phase_data["runtime"] = runtime_state
         missing = self._compute_missing(profile)
+        phase_data["missing_fields"] = missing
 
         kyc_data = ctx.session_artifacts.get(Phase.KYC.value, {})
         kyc_profile = dict(kyc_data.get("profile", {}))
-        inferred_instrument = _infer_instrument_from_message(
-            user_message=user_message,
-            target_market=profile.get("target_market"),
-        )
 
         instructions = build_pre_strategy_static_instructions(
             language=ctx.language,
@@ -133,13 +153,12 @@ class PreStrategyHandler:
             missing_fields=missing,
             collected_fields=profile,
             kyc_profile=kyc_profile,
-            symbol_newly_provided_this_turn_hint=False,
-            inferred_instrument_from_user_message=inferred_instrument,
+            runtime_state=runtime_state,
         )
         return PromptPieces(
             instructions=instructions,
             enriched_input=state_block + user_message,
-            tools=None,
+            tools=_build_pre_strategy_tools(),
             model=settings.openai_response_model,
             reasoning={"effort": "none"},
         )
@@ -155,9 +174,10 @@ class PreStrategyHandler:
         artifacts = ctx.session_artifacts
         phase_data = artifacts.setdefault(
             Phase.PRE_STRATEGY.value,
-            {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)},
+            {"profile": {}, "missing_fields": list(REQUIRED_FIELDS), "runtime": {}},
         )
         profile = dict(phase_data.get("profile", {}))
+        runtime_state = dict(phase_data.get("runtime", {}))
 
         for patch in raw_patches:
             validated = self._validate_patch(patch)
@@ -165,11 +185,17 @@ class PreStrategyHandler:
                 profile.update(validated)
 
         profile = self._sanitize_profile(profile)
+        runtime_state = self._compute_runtime_state(
+            profile=profile,
+            previous_runtime_state=runtime_state,
+            turn_context=ctx.turn_context,
+        )
         missing = self._compute_missing(profile)
-        completed = not missing
+        completed = not missing and not self._requires_data_resolution(runtime_state)
 
         phase_data["profile"] = profile
         phase_data["missing_fields"] = missing
+        phase_data["runtime"] = runtime_state
 
         result = PostProcessResult(
             artifacts=artifacts,
@@ -233,25 +259,69 @@ class PreStrategyHandler:
             allowed_order = get_instruments_for_market(market)
             if not allowed_order:
                 return payload
+            current_instrument = profile.get("target_instrument")
+            current_instrument_value = (
+                _normalize_target_instrument_value(current_instrument, target_market=market)
+                if isinstance(current_instrument, str) and current_instrument.strip()
+                else ""
+            )
             allowed = set(allowed_order)
             filtered = [
                 option
                 for option in option_list
                 if isinstance(option, dict)
                 and isinstance(option.get("id"), str)
-                and normalize_instrument_value(option.get("id")) in allowed
+                and (
+                    normalize_instrument_value(option.get("id")) in allowed
+                    or (
+                        current_instrument_value
+                        and _normalize_target_instrument_value(
+                            option.get("id"),
+                            target_market=market,
+                        )
+                        == current_instrument_value
+                    )
+                )
             ]
-            if len(filtered) < 2:
+            if not filtered and current_instrument_value:
                 filtered = [
                     {
-                        "id": instrument,
+                        "id": current_instrument_value,
                         "label": format_instrument_label(
-                            market=market, instrument=instrument
+                            market=market,
+                            instrument=current_instrument_value,
                         ),
-                        "subtitle": instrument,
+                        "subtitle": current_instrument_value,
                     }
-                    for instrument in allowed_order
                 ]
+            if not filtered:
+                return None
+            if len(filtered) < 2 and any(
+                normalize_instrument_value(option.get("id", "")) in allowed
+                for option in filtered
+            ):
+                filtered = [
+                    *filtered,
+                    *[
+                        {
+                            "id": instrument,
+                            "label": format_instrument_label(
+                                market=market, instrument=instrument
+                            ),
+                            "subtitle": instrument,
+                        }
+                        for instrument in allowed_order
+                    ],
+                ]
+            deduped: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            for option in filtered:
+                option_id = str(option.get("id", "")).strip()
+                if not option_id or option_id in seen_ids:
+                    continue
+                seen_ids.add(option_id)
+                deduped.append(option)
+            filtered = deduped
             result["options"] = filtered
             return result
 
@@ -328,7 +398,7 @@ class PreStrategyHandler:
     # -- artifacts init ------------------------------------------------
 
     def init_artifacts(self) -> dict[str, Any]:
-        return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)}
+        return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS), "runtime": {}}
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
         if ctx.language == "zh":
@@ -350,8 +420,41 @@ class PreStrategyHandler:
     def _validate_patch(self, patch: dict[str, Any]) -> dict[str, str]:
         valid_values = self.valid_values
         validated: dict[str, str] = {}
+        raw_market = patch.get("target_market")
+        market_value = ""
+        if isinstance(raw_market, str) and raw_market.strip():
+            market_value = _normalize_field_value("target_market", raw_market)
+            if market_value and _is_field_value_allowed(
+                field="target_market",
+                value=market_value,
+                valid_values=valid_values,
+            ):
+                validated["target_market"] = market_value
+            else:
+                market_value = ""
 
-        for field in REQUIRED_FIELDS:
+        raw_instrument = patch.get("target_instrument")
+        if isinstance(raw_instrument, str) and raw_instrument.strip():
+            instrument_value = _normalize_target_instrument_value(
+                raw_instrument,
+                target_market=market_value or None,
+            )
+            if instrument_value and _is_target_instrument_allowed(
+                value=instrument_value,
+                target_market=market_value or None,
+                valid_values=valid_values,
+            ):
+                validated["target_instrument"] = instrument_value
+                if "target_market" not in validated:
+                    inferred_market = _infer_market_for_instrument(instrument_value)
+                    if inferred_market and _is_field_value_allowed(
+                        field="target_market",
+                        value=inferred_market,
+                        valid_values=valid_values,
+                    ):
+                        validated["target_market"] = inferred_market
+
+        for field in ("opportunity_frequency_bucket", "holding_period_bucket"):
             raw_value = patch.get(field)
             if not isinstance(raw_value, str) or not raw_value.strip():
                 continue
@@ -367,7 +470,35 @@ class PreStrategyHandler:
         valid_values = self.valid_values
         cleaned: dict[str, str] = {}
 
-        for field in REQUIRED_FIELDS:
+        raw_market = profile.get("target_market")
+        if isinstance(raw_market, str) and raw_market.strip():
+            market_value = _normalize_field_value("target_market", raw_market)
+            if market_value and _is_field_value_allowed(
+                field="target_market",
+                value=market_value,
+                valid_values=valid_values,
+            ):
+                cleaned["target_market"] = market_value
+
+        raw_instrument = profile.get("target_instrument")
+        target_market = cleaned.get("target_market")
+        if isinstance(raw_instrument, str) and raw_instrument.strip():
+            instrument_value = _normalize_target_instrument_value(
+                raw_instrument,
+                target_market=target_market,
+            )
+            inferred_market = _infer_market_for_instrument(instrument_value) if instrument_value else None
+            market_for_validation = target_market or inferred_market
+            if instrument_value and _is_target_instrument_allowed(
+                value=instrument_value,
+                target_market=market_for_validation,
+                valid_values=valid_values,
+            ):
+                cleaned["target_instrument"] = instrument_value
+                if target_market is None and inferred_market is not None:
+                    cleaned["target_market"] = inferred_market
+
+        for field in ("opportunity_frequency_bucket", "holding_period_bucket"):
             raw_value = profile.get(field)
             if not isinstance(raw_value, str) or not raw_value.strip():
                 continue
@@ -376,22 +507,6 @@ class PreStrategyHandler:
                 continue
             if _is_field_value_allowed(field=field, value=value, valid_values=valid_values):
                 cleaned[field] = value
-
-        market = cleaned.get("target_market")
-        instrument = cleaned.get("target_instrument")
-
-        if market is None and instrument is not None:
-            inferred_market = get_market_for_instrument(instrument)
-            if inferred_market is not None:
-                cleaned["target_market"] = inferred_market
-                market = inferred_market
-
-        if (
-            market is not None
-            and instrument is not None
-            and instrument not in set(get_instruments_for_market(market))
-        ):
-            cleaned.pop("target_instrument", None)
 
         return cleaned
 
@@ -416,24 +531,7 @@ class PreStrategyHandler:
             ]
 
         if target_field == "target_instrument":
-            phase_data = ctx.session_artifacts.get(Phase.PRE_STRATEGY.value, {})
-            profile = phase_data.get("profile", {})
-            market_raw = profile.get("target_market")
-            if not isinstance(market_raw, str):
-                return []
-            market = normalize_market_value(market_raw)
-            allowed_order = get_instruments_for_market(market)
-            return [
-                {
-                    "id": instrument,
-                    "label": format_instrument_label(
-                        market=market,
-                        instrument=instrument,
-                    ),
-                    "subtitle": instrument,
-                }
-                for instrument in allowed_order
-            ]
+            return []
 
         if target_field == "opportunity_frequency_bucket":
             return [
@@ -463,6 +561,78 @@ class PreStrategyHandler:
 
         return []
 
+    def _compute_runtime_state(
+        self,
+        *,
+        profile: dict[str, str],
+        previous_runtime_state: dict[str, Any],
+        turn_context: dict[str, Any],
+    ) -> dict[str, Any]:
+        market = profile.get("target_market")
+        instrument = profile.get("target_instrument")
+        if not market or not instrument:
+            return {}
+
+        normalized_market = normalize_market_value(market)
+        normalized_instrument = _normalize_target_instrument_value(
+            instrument,
+            target_market=normalized_market,
+        )
+        if not normalized_market or not normalized_instrument:
+            return {}
+
+        local_available = _is_symbol_available_locally(
+            market=normalized_market,
+            symbol=normalized_instrument,
+        )
+        previous_status = ""
+        previous_market = ""
+        previous_instrument = ""
+        if isinstance(previous_runtime_state, dict):
+            previous_status = str(
+                previous_runtime_state.get("instrument_data_status", "")
+            ).strip()
+            previous_market = str(
+                previous_runtime_state.get("instrument_data_market", "")
+            ).strip()
+            previous_instrument = str(
+                previous_runtime_state.get("instrument_data_symbol", "")
+            ).strip()
+
+        same_symbol_as_previous = (
+            previous_market == normalized_market
+            and previous_instrument == normalized_instrument
+        )
+        download_started_this_turn = _turn_started_download_for_symbol(
+            turn_context=turn_context,
+            market=normalized_market,
+            symbol=normalized_instrument,
+        )
+
+        if local_available:
+            status = _DATA_RESOLUTION_LOCAL_READY
+        elif download_started_this_turn:
+            status = _DATA_RESOLUTION_DOWNLOAD_STARTED
+        elif (
+            same_symbol_as_previous
+            and previous_status == _DATA_RESOLUTION_DOWNLOAD_STARTED
+        ):
+            status = _DATA_RESOLUTION_DOWNLOAD_STARTED
+        else:
+            status = _DATA_RESOLUTION_AWAITING_USER_CHOICE
+
+        return {
+            "instrument_data_status": status,
+            "instrument_data_market": normalized_market,
+            "instrument_data_symbol": normalized_instrument,
+            "instrument_available_locally": local_available,
+        }
+
+    @staticmethod
+    def _requires_data_resolution(runtime_state: dict[str, Any]) -> bool:
+        status = str(runtime_state.get("instrument_data_status", "")).strip()
+        return status == _DATA_RESOLUTION_AWAITING_USER_CHOICE
+
 
 def _has_value(value: Any) -> bool:
     if value is None:
@@ -476,7 +646,7 @@ def _normalize_field_value(field: str, value: str) -> str:
     if field == "target_market":
         return normalize_market_value(value)
     if field == "target_instrument":
-        return normalize_instrument_value(value)
+        return _normalize_target_instrument_value(value, target_market=None)
     return value.strip()
 
 
@@ -492,98 +662,185 @@ def _is_field_value_allowed(
     return value in allowed
 
 
-def _infer_instrument_from_message(
+def _is_target_instrument_allowed(
     *,
-    user_message: str,
-    target_market: Any,
-) -> str | None:
-    market_catalog = get_pre_strategy_market_instrument_map()
-    if not market_catalog:
+    value: str,
+    target_market: str | None,
+    valid_values: dict[str, set[str]],
+) -> bool:
+    if value in valid_values.get("target_instrument", set()):
+        return True
+    market = normalize_market_value(target_market) if isinstance(target_market, str) and target_market.strip() else ""
+    if not market:
+        market = _infer_market_for_instrument(value) or ""
+    if not market:
+        return False
+    return _instrument_matches_market(value=value, target_market=market)
+
+
+def _build_pre_strategy_tools() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "mcp",
+            "server_label": "market_data",
+            "server_url": settings.market_data_mcp_server_url,
+            "allowed_tools": list(_PRE_STRATEGY_FALLBACK_MARKET_DATA_TOOLS),
+            "require_approval": "never",
+        }
+    ]
+
+
+def _infer_market_for_instrument(instrument: str) -> str | None:
+    normalized = normalize_instrument_value(instrument)
+    if not normalized:
         return None
 
-    target_market_key = (
-        normalize_market_value(target_market)
-        if isinstance(target_market, str) and target_market.strip()
-        else ""
-    )
+    catalog_market = get_market_for_instrument(normalized)
+    if catalog_market is not None:
+        return catalog_market
 
-    if target_market_key and target_market_key in market_catalog:
-        candidates: list[tuple[str, str]] = [
-            (target_market_key, instrument)
-            for instrument in market_catalog[target_market_key]
-        ]
-    else:
-        candidates = [
-            (market, instrument)
-            for market, instruments in market_catalog.items()
-            for instrument in instruments
-        ]
-
-    for market, instrument in candidates:
-        for alias in _instrument_aliases(market=market, instrument=instrument):
-            if _message_contains_alias(user_message=user_message, alias=alias):
-                return instrument
-
-        market_data_symbol = get_market_data_symbol_for_market_instrument(
-            market=market,
-            instrument=instrument,
-        )
-        if _message_contains_alias(user_message=user_message, alias=market_data_symbol):
-            return instrument
-
+    if _instrument_matches_market(value=normalized, target_market="crypto"):
+        return "crypto"
+    if _instrument_matches_market(value=normalized, target_market="forex"):
+        return "forex"
+    if _instrument_matches_market(value=normalized, target_market="us_stocks"):
+        return "us_stocks"
+    if _instrument_matches_market(value=normalized, target_market="futures"):
+        return "futures"
     return None
 
 
-def _instrument_aliases(*, market: str, instrument: str) -> tuple[str, ...]:
-    symbol = normalize_instrument_value(instrument)
-    aliases: set[str] = {symbol}
+def _normalize_target_instrument_value(
+    raw_value: str,
+    *,
+    target_market: str | None,
+) -> str:
+    raw = raw_value.strip()
+    if not raw:
+        return ""
 
-    if market == "crypto":
-        if symbol.endswith("USD") and len(symbol) > 3:
-            base = symbol[:-3]
-            aliases.update(
-                {
-                    base,
-                    f"{base}USD",
-                    f"{base}USDT",
-                    f"{base}/USD",
-                    f"{base}/USDT",
-                    f"{base}-USD",
-                    f"{base}-USDT",
-                }
-            )
-        elif symbol.endswith("USDT") and len(symbol) > 4:
-            base = symbol[:-4]
-            aliases.update(
-                {
-                    base,
-                    f"{base}USD",
-                    f"{base}USDT",
-                    f"{base}/USD",
-                    f"{base}/USDT",
-                }
-            )
+    market = normalize_market_value(target_market) if isinstance(target_market, str) and target_market.strip() else ""
+    normalized = normalize_instrument_value(raw)
+    if not normalized:
+        return ""
 
-    if market == "forex" and len(symbol) == 6 and symbol.isalpha():
-        aliases.add(f"{symbol[:3]}/{symbol[3:]}")
-        aliases.add(f"{symbol[:3]}-{symbol[3:]}")
+    inferred_market = market or _infer_market_for_instrument(normalized) or ""
+    if inferred_market == "crypto":
+        compact = re.sub(r"[^A-Z0-9]+", "", normalized)
+        for quote in _CRYPTO_QUOTE_SUFFIXES:
+            if compact.endswith(quote) and len(compact) > len(quote):
+                return f"{compact[:-len(quote)]}USD"
+        if re.fullmatch(r"[A-Z0-9]{2,12}", compact):
+            return f"{compact}USD"
+        return ""
 
-    return tuple(sorted(aliases, key=len, reverse=True))
+    if inferred_market == "forex":
+        compact = re.sub(r"[^A-Z]+", "", normalized.replace("=X", ""))
+        if len(compact) == 6 and compact.isalpha():
+            return compact
+        return ""
+
+    if inferred_market == "us_stocks":
+        compact = normalized.replace("/", "").replace(" ", "")
+        if re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", compact):
+            return compact
+        return ""
+
+    if inferred_market == "futures":
+        compact = normalized.replace("/", "").replace(" ", "")
+        if compact.endswith("=F") and re.fullmatch(r"[A-Z0-9]{1,6}=F", compact):
+            return compact
+        if re.fullmatch(r"[A-Z0-9]{1,6}", compact):
+            return compact
+        return ""
+
+    return normalized
 
 
-def _message_contains_alias(*, user_message: str, alias: str) -> bool:
-    alias_clean = re.sub(r"[^a-z0-9]+", "", alias.lower())
-    if not alias_clean:
+def _instrument_matches_market(*, value: str, target_market: str) -> bool:
+    normalized = normalize_instrument_value(value)
+    market = normalize_market_value(target_market)
+    if not normalized or not market:
         return False
 
-    lower = user_message.lower()
-    compact = re.sub(r"[^a-z0-9]+", "", lower)
-    if len(alias_clean) <= 3:
-        return (
-            re.search(
-                rf"(?<![a-z0-9]){re.escape(alias_clean)}(?![a-z0-9])",
-                lower,
-            )
-            is not None
+    if market == "crypto":
+        return any(
+            normalized.endswith(quote) and len(normalized) > len(quote)
+            for quote in _CRYPTO_QUOTE_SUFFIXES
         )
-    return alias_clean in compact
+    if market == "forex":
+        compact = normalized.replace("=X", "")
+        return len(compact) == 6 and compact.isalpha()
+    if market == "us_stocks":
+        return re.fullmatch(r"[A-Z][A-Z0-9.-]{0,9}", normalized) is not None
+    if market == "futures":
+        compact = normalized.removesuffix("=F")
+        return re.fullmatch(r"[A-Z0-9]{1,6}", compact) is not None
+    return False
+
+
+def _is_symbol_available_locally(*, market: str, symbol: str) -> bool:
+    if not market or not symbol:
+        return False
+    loader = DataLoader()
+    try:
+        market_key = loader.normalize_market(market)
+    except ValueError:
+        return False
+    symbol_key = normalize_instrument_value(symbol)
+    return symbol_key in set(loader.get_available_symbols(market_key))
+
+
+def _turn_started_download_for_symbol(
+    *,
+    turn_context: dict[str, Any],
+    market: str,
+    symbol: str,
+) -> bool:
+    tool_calls_raw = turn_context.get("mcp_tool_calls")
+    if not isinstance(tool_calls_raw, list):
+        return False
+
+    expected_market = normalize_market_value(market)
+    expected_symbol = normalize_instrument_value(symbol)
+    for call in tool_calls_raw:
+        if not isinstance(call, dict):
+            continue
+        if str(call.get("status", "")).strip().lower() != "success":
+            continue
+        name = str(call.get("name") or call.get("tool_name") or "").strip()
+        if name not in {"market_data_fetch_missing_ranges", "market_data_get_sync_job"}:
+            continue
+        if _mcp_call_targets_symbol(
+            call=call,
+            expected_market=expected_market,
+            expected_symbol=expected_symbol,
+        ):
+            return True
+    return False
+
+
+def _mcp_call_targets_symbol(
+    *,
+    call: dict[str, Any],
+    expected_market: str,
+    expected_symbol: str,
+) -> bool:
+    arguments_raw = call.get("arguments")
+    if not isinstance(arguments_raw, str) or not arguments_raw.strip():
+        return False
+    try:
+        arguments = json.loads(arguments_raw)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(arguments, dict):
+        return False
+
+    market_raw = arguments.get("market")
+    symbol_raw = arguments.get("symbol")
+    if not isinstance(market_raw, str) or not isinstance(symbol_raw, str):
+        return False
+    return (
+        normalize_market_value(market_raw) == expected_market
+        and normalize_instrument_value(symbol_raw) == expected_symbol
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 _SKILLS_DIR = Path(__file__).parent
 _STRATEGY_SKILLS_MD = _SKILLS_DIR / "strategy" / "skills.md"
@@ -123,6 +124,7 @@ def build_strategy_dynamic_state(
     missing_fields: list[str] | None = None,
     collected_fields: dict[str, str] | None = None,
     pre_strategy_fields: dict[str, str] | None = None,
+    pre_strategy_runtime: dict[str, Any] | None = None,
     session_id: str | None = None,
 ) -> str:
     """Build `[SESSION STATE]` block for strategy phase."""
@@ -138,6 +140,19 @@ def build_strategy_dynamic_state(
 
     collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
     pre_scope = ", ".join(f"{key}={value}" for key, value in pre.items() if value) or "none"
+    pre_runtime = dict(pre_strategy_runtime or {})
+    pre_strategy_instrument_data_status = str(
+        pre_runtime.get("instrument_data_status", "")
+    ).strip() or "unknown"
+    pre_strategy_instrument_data_symbol = str(
+        pre_runtime.get("instrument_data_symbol", "")
+    ).strip() or "none"
+    pre_strategy_instrument_data_market = str(
+        pre_runtime.get("instrument_data_market", "")
+    ).strip() or "none"
+    pre_strategy_instrument_available_locally = bool(
+        pre_runtime.get("instrument_available_locally")
+    )
     strategy_id = str(fields.get("strategy_id", "")).strip() or "none"
     strategy_market = str(fields.get("strategy_market", "")).strip() or "none"
     strategy_primary_symbol = str(fields.get("strategy_primary_symbol", "")).strip() or "none"
@@ -160,6 +175,10 @@ def build_strategy_dynamic_state(
     return (
         "[SESSION STATE]\n"
         f"- pre_strategy_scope: {pre_scope}\n"
+        f"- pre_strategy_instrument_data_status: {pre_strategy_instrument_data_status}\n"
+        f"- pre_strategy_instrument_data_symbol: {pre_strategy_instrument_data_symbol}\n"
+        f"- pre_strategy_instrument_data_market: {pre_strategy_instrument_data_market}\n"
+        f"- pre_strategy_instrument_available_locally: {str(pre_strategy_instrument_available_locally).lower()}\n"
         f"- already_collected: {collected}\n"
         f"- confirmed_strategy_id: {strategy_id}\n"
         f"- strategy_market: {strategy_market}\n"

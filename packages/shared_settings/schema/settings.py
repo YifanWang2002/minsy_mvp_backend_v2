@@ -455,7 +455,7 @@ class Settings(BaseSettings):
         alias="MARKET_DATA_REFRESH_SYMBOL_RATE_LIMIT",
     )
     market_data_sync_batch_limit: int = Field(
-        default=500,
+        default=5000,
         alias="MARKET_DATA_SYNC_BATCH_LIMIT",
     )
     market_data_sync_max_ranges: int = Field(
@@ -469,6 +469,10 @@ class Settings(BaseSettings):
     market_data_sync_lock_ttl_seconds: int = Field(
         default=1800,
         alias="MARKET_DATA_SYNC_LOCK_TTL_SECONDS",
+    )
+    market_data_sync_request_start_interval_seconds: float = Field(
+        default=0.15,
+        alias="MARKET_DATA_SYNC_REQUEST_START_INTERVAL_SECONDS",
     )
     ccxt_market_data_enabled: bool = Field(
         default=True,
@@ -981,6 +985,13 @@ class Settings(BaseSettings):
         if value < 1:
             raise ValueError("MARKET_DATA sync numeric settings must be >= 1.")
         return value
+
+    @field_validator("market_data_sync_request_start_interval_seconds")
+    @classmethod
+    def _validate_market_data_sync_request_start_interval_seconds(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("MARKET_DATA_SYNC_REQUEST_START_INTERVAL_SECONDS must be >= 0.")
+        return float(value)
 
     @field_validator("ccxt_market_data_timeout_seconds")
     @classmethod

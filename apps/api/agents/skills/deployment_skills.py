@@ -11,8 +11,23 @@ _SKILLS_DIR = Path(__file__).parent
 _DEPLOYMENT_SKILLS_MD = _SKILLS_DIR / "deployment" / "skills.md"
 _UTILS_SKILLS_MD = _SKILLS_DIR / "utils" / "skills.md"
 
-REQUIRED_FIELDS: list[str] = ["deployment_status"]
+REQUIRED_FIELDS: list[str] = [
+    "selected_broker_account_id",
+    "deployment_confirmation_status",
+]
 VALID_STATUS_VALUES: set[str] = {"ready", "deployed", "blocked"}
+VALID_BROKER_READINESS_VALUES: set[str] = {
+    "unknown",
+    "no_broker",
+    "needs_choice",
+    "ready",
+    "blocked",
+}
+VALID_CONFIRMATION_VALUES: set[str] = {
+    "pending",
+    "confirmed",
+    "needs_changes",
+}
 
 _LANGUAGE_NAMES: dict[str, str] = {
     "en": "English",
@@ -60,20 +75,27 @@ def build_deployment_static_instructions(*, language: str = "en") -> str:
 
 def build_deployment_dynamic_state(
     *,
-    collected_fields: dict[str, str] | None = None,
+    missing_fields: list[str] | None = None,
+    collected_fields: dict[str, Any] | None = None,
     deployment_state: dict[str, Any] | None = None,
+    phase_stage: str | None = None,
 ) -> str:
     fields = dict(collected_fields or {})
     runtime_state = dict(deployment_state or {})
-    missing = [field for field in REQUIRED_FIELDS if not fields.get(field)]
+    missing = list(missing_fields or [])
     has_missing = bool(missing)
     next_missing = missing[0] if missing else "none"
     missing_str = ", ".join(missing) if missing else "none - all collected"
-    collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
+    collected = (
+        ", ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+        or "none"
+    )
     runtime_json = json.dumps(runtime_state, ensure_ascii=True, sort_keys=True)
+    stage = str(phase_stage or "").strip() or "deployment"
 
     return (
         "[SESSION STATE]\n"
+        f"- deployment_phase_stage: {stage}\n"
         f"- already_collected: {collected}\n"
         f"- still_missing: {missing_str}\n"
         f"- has_missing_fields: {str(has_missing).lower()}\n"

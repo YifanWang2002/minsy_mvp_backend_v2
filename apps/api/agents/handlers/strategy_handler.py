@@ -52,6 +52,7 @@ class StrategyHandler:
             profile["strategy_id"] = stress_profile["strategy_id"]
         pre_strategy_data = ctx.session_artifacts.get(Phase.PRE_STRATEGY.value, {})
         pre_profile = dict(pre_strategy_data.get("profile", {}))
+        pre_runtime = dict(pre_strategy_data.get("runtime", {}))
         missing = self._compute_missing(profile)
 
         instructions = build_strategy_static_instructions(
@@ -62,6 +63,7 @@ class StrategyHandler:
             missing_fields=missing,
             collected_fields=profile,
             pre_strategy_fields=pre_profile,
+            pre_strategy_runtime=pre_runtime,
             session_id=str(ctx.session_id),
         )
         return PromptPieces(
@@ -228,10 +230,20 @@ class StrategyHandler:
         )
         deployment_profile["strategy_id"] = strategy_id
         deployment_profile.update(scope_updates)
-        deployment_profile["deployment_status"] = "ready"
+        deployment_profile["deployment_status"] = "blocked"
+        deployment_profile["broker_readiness_status"] = "unknown"
+        deployment_profile["deployment_confirmation_status"] = "pending"
+        deployment_profile.pop("selected_broker_account_id", None)
+        deployment_profile.pop("selected_broker_label", None)
+        deployment_profile.pop("selected_broker_source", None)
+        deployment_profile.setdefault("planned_capital_allocated", "10000")
+        deployment_profile.setdefault("planned_auto_start", True)
         deployment_profile["deployment_prepared_at"] = confirmed_at
         deployment_block["profile"] = deployment_profile
-        deployment_block["missing_fields"] = []
+        deployment_block["missing_fields"] = [
+            "selected_broker_account_id",
+            "deployment_confirmation_status",
+        ]
 
         deployment_runtime_raw = deployment_block.get("runtime")
         deployment_runtime = (
@@ -244,7 +256,21 @@ class StrategyHandler:
                 "strategy_id": strategy_id,
                 "strategy_name": str(scope_updates.get("strategy_name", "")).strip()
                 or None,
-                "deployment_status": "ready",
+                "deployment_status": "blocked",
+                "broker_readiness_status": "unknown",
+                "selected_broker_account_id": None,
+                "selected_broker_label": None,
+                "selected_broker_source": None,
+                "deployment_confirmation_status": "pending",
+                "deployment_summary_snapshot": {},
+                "auto_execute_pending": False,
+                "planned_capital_allocated": deployment_profile.get(
+                    "planned_capital_allocated",
+                    "10000",
+                ),
+                "planned_auto_start": bool(
+                    deployment_profile.get("planned_auto_start", True)
+                ),
                 "prepared_at": confirmed_at,
             }
         )

@@ -22,12 +22,21 @@ from packages.domain.trading.services.broker_validation_service import (
     BrokerCredentialValidationResult,
     BrokerValidationService,
 )
+from packages.domain.trading.broker_capability_policy import (
+    build_broker_capabilities,
+)
 from packages.domain.trading.services.ccxt_exchange_catalog import (
     list_supported_ccxt_exchanges,
 )
 from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.broker_account_audit_log import BrokerAccountAuditLog
 from packages.infra.db.models.user import User
+from packages.infra.trading.broker_account_store import (
+    deactivate_builtin_sandbox_account as store_deactivate_builtin_sandbox_account,
+)
+from packages.infra.trading.broker_account_store import (
+    ensure_builtin_sandbox_account as store_ensure_builtin_sandbox_account,
+)
 from packages.infra.providers.trading.credentials import (
     CredentialCipher,
     CredentialEncryptionError,
@@ -192,40 +201,6 @@ def _resolve_account_uid(
     if key_fingerprint:
         return key_fingerprint
     return uuid4().hex
-
-
-def _default_capabilities(
-    *,
-    provider: str,
-    exchange_id: str,
-    is_sandbox: bool,
-) -> dict[str, Any]:
-    provider_key = provider.strip().lower()
-    if provider_key == "alpaca":
-        return {
-            "asset_classes": ["us_equity", "crypto"],
-            "order_types": ["market", "limit", "stop", "stop_limit"],
-            "time_in_force": ["day", "gtc", "ioc", "fok"],
-            "sandbox_supported": True,
-        }
-    if provider_key == "ccxt":
-        return {
-            "exchange_id": exchange_id,
-            "asset_classes": ["crypto"],
-            "order_types": ["market", "limit"],
-            "time_in_force": ["gtc", "ioc", "fok"],
-            "sandbox_supported": bool(is_sandbox),
-        }
-    if provider_key == "sandbox":
-        return {
-            "asset_classes": ["us_equity", "crypto"],
-            "order_types": ["market", "limit"],
-            "time_in_force": ["gtc"],
-            "sandbox_supported": True,
-            "execution_model": "internal_simulated",
-            "market_data_source": "alpaca",
-        }
-    return {}
 
 
 def _resolve_last_validation_error_code(
@@ -442,7 +417,7 @@ async def create_broker_account(
         validation_metadata=validation_metadata,
         key_fingerprint=key_fingerprint,
     )
-    capabilities = _default_capabilities(
+    capabilities = build_broker_capabilities(
         provider=payload.provider,
         exchange_id=exchange_id,
         is_sandbox=is_sandbox,
@@ -536,6 +511,45 @@ async def create_broker_account(
         await db.rollback()
         _raise_integrity_error(exc)
     await db.refresh(account)
+    return _to_response(account)
+
+
+@router.post(
+    "/builtin-sandbox",
+    response_model=BrokerAccountResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_builtin_sandbox_broker_account(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BrokerAccountResponse:
+    account = await store_ensure_builtin_sandbox_account(
+        db,
+        user_id=user.id,
+    )
+    return _to_response(account)
+
+
+@router.post(
+    "/builtin-sandbox/deactivate",
+    response_model=BrokerAccountResponse,
+)
+async def deactivate_builtin_sandbox_broker_account(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BrokerAccountResponse:
+    account = await store_deactivate_builtin_sandbox_account(
+        db,
+        user_id=user.id,
+    )
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "BUILTIN_SANDBOX_BROKER_NOT_FOUND",
+                "message": "No active built-in sandbox broker account found.",
+            },
+        )
     return _to_response(account)
 
 
@@ -647,7 +661,7 @@ async def rotate_broker_account_credentials(
         key_fingerprint=next_key_fingerprint,
         existing_account_uid=existing_account_uid,
     )
-    capabilities = _default_capabilities(
+    capabilities = build_broker_capabilities(
         provider=account.provider,
         exchange_id=exchange_id,
         is_sandbox=is_sandbox,
@@ -752,7 +766,7 @@ async def validate_broker_account(
         key_fingerprint=account.key_fingerprint,
         existing_account_uid=account.account_uid,
     )
-    capabilities = _default_capabilities(
+    capabilities = build_broker_capabilities(
         provider=account.provider,
         exchange_id=exchange_id,
         is_sandbox=is_sandbox,

@@ -11,6 +11,11 @@ from mcp.server.fastmcp import Context, FastMCP
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from packages.domain.trading.broker_capability_policy import (
+    derive_supported_markets,
+    evaluate_broker_compatibility,
+    normalize_market,
+)
 from packages.domain.exceptions import DomainError
 from packages.shared_settings.schema.settings import settings
 from apps.mcp.common.utils import log_mcp_tool_result, to_json, utc_now_iso
@@ -26,6 +31,10 @@ from packages.infra.db.models.order import Order
 from packages.infra.db.models.position import Position
 from packages.infra.db.models.strategy import Strategy
 from packages.infra.db.models.user import User
+from packages.infra.trading.broker_account_store import (
+    ensure_builtin_sandbox_account,
+    list_user_broker_accounts,
+)
 from packages.domain.trading import deployment_ops
 from packages.infra.queue.publishers import enqueue_paper_trading_runtime
 
@@ -36,6 +45,9 @@ _VALID_DEPLOYMENT_STATUS: frozenset[str] = frozenset(
 TOOL_NAMES: tuple[str, ...] = (
     "trading_ping",
     "trading_capabilities",
+    "trading_list_broker_accounts",
+    "trading_check_deployment_readiness",
+    "trading_create_builtin_sandbox_broker_account",
     "trading_create_paper_deployment",
     "trading_list_deployments",
     "trading_start_deployment",
@@ -184,6 +196,120 @@ def _normalize_capital_allocated(value: Any) -> tuple[Decimal, str | None]:
     return capital, None
 
 
+def _serialize_broker_account_summary(account: BrokerAccount) -> dict[str, Any]:
+    capabilities = (
+        dict(account.capabilities)
+        if isinstance(account.capabilities, dict)
+        else {}
+    )
+    metadata = dict(account.metadata_) if isinstance(account.metadata_, dict) else {}
+    validation_metadata = (
+        dict(account.validation_metadata)
+        if isinstance(account.validation_metadata, dict)
+        else {}
+    )
+    supported_markets = derive_supported_markets(capabilities)
+    provider = str(account.provider).strip().lower()
+    exchange_id = str(account.exchange_id).strip().lower()
+    provider_label = provider.upper() if provider else "BROKER"
+    exchange_label = exchange_id.upper() if exchange_id else provider_label
+    if provider == "ccxt" and exchange_id:
+        label = f"{provider_label} / {exchange_label}"
+    elif provider == "sandbox":
+        label = "Built-in Sandbox"
+    else:
+        label = provider_label.title()
+
+    return {
+        "broker_account_id": str(account.id),
+        "provider": account.provider,
+        "exchange_id": account.exchange_id,
+        "account_uid": account.account_uid,
+        "mode": account.mode,
+        "status": account.status,
+        "is_default": bool(account.is_default),
+        "is_sandbox": bool(account.is_sandbox),
+        "label": label,
+        "capabilities": capabilities,
+        "derived_capabilities": {
+            "supported_markets": supported_markets,
+            "supports_us_stocks": "us_stocks" in supported_markets,
+            "supports_crypto": "crypto" in supported_markets,
+            "supports_forex": "forex" in supported_markets,
+            "supports_futures": "futures" in supported_markets,
+        },
+        "metadata": metadata,
+        "validation_metadata": validation_metadata,
+        "mcp_server_label": "trading",
+        "mcp_proxy_route": "/trading/*",
+        "mcp_proxy_port": 8110,
+        "mcp_domain_port": 8115,
+    }
+
+
+async def _load_owned_strategy_for_context(
+    *,
+    db: Any,
+    user_id: UUID,
+    session_id: UUID | None,
+    strategy_id: str,
+) -> tuple[Strategy | None, str | None]:
+    resolved_strategy_id, strategy_error = await _resolve_strategy_id_for_context(
+        db=db,
+        user_id=user_id,
+        session_id=session_id,
+        strategy_id=strategy_id,
+    )
+    if strategy_error is not None or resolved_strategy_id is None:
+        return None, strategy_error or "Strategy not found."
+
+    strategy = await db.scalar(
+        select(Strategy).where(
+            Strategy.id == resolved_strategy_id,
+            Strategy.user_id == user_id,
+        )
+    )
+    if strategy is None:
+        return None, "Strategy not found for current user."
+    return strategy, None
+
+
+def _extract_strategy_scope(strategy: Strategy) -> dict[str, Any]:
+    dsl_payload = (
+        strategy.dsl_payload
+        if isinstance(strategy.dsl_payload, dict)
+        else {}
+    )
+    universe = (
+        dsl_payload.get("universe")
+        if isinstance(dsl_payload.get("universe"), dict)
+        else {}
+    )
+    raw_symbols = (
+        universe.get("tickers")
+        if isinstance(universe.get("tickers"), list)
+        else strategy.symbols
+    )
+    symbols = [
+        str(symbol).strip().upper()
+        for symbol in raw_symbols
+        if str(symbol).strip()
+    ]
+    market = normalize_market(universe.get("market") or "")
+    timeframe = (
+        str(dsl_payload.get("timeframe") or "").strip()
+        or str(strategy.timeframe or "").strip()
+        or None
+    )
+    return {
+        "strategy_id": str(strategy.id),
+        "strategy_name": str(strategy.name).strip(),
+        "market": market,
+        "symbols": symbols,
+        "timeframe": timeframe,
+    }
+
+
 async def _resolve_strategy_id_for_context(
     *,
     db: Any,
@@ -261,7 +387,11 @@ async def _resolve_broker_account_id_for_context(
             BrokerAccount.mode == "paper",
             BrokerAccount.status == "active",
         )
-        .order_by(BrokerAccount.updated_at.desc(), BrokerAccount.created_at.desc())
+        .order_by(
+            BrokerAccount.is_default.desc(),
+            BrokerAccount.updated_at.desc(),
+            BrokerAccount.created_at.desc(),
+        )
         .limit(1)
     )
     if candidate is None:
@@ -289,6 +419,196 @@ def trading_capabilities() -> str:
             "supported_tools": list(TOOL_NAMES),
             "require_user_context": True,
             "supported_mode": "paper",
+        },
+    )
+
+
+async def trading_list_broker_accounts(
+    ctx: Context | None = None,
+) -> str:
+    """List current user's broker accounts with derived capability summaries."""
+
+    user_id, error_payload = _require_context_user_id(
+        tool="trading_list_broker_accounts",
+        ctx=ctx,
+    )
+    if error_payload is not None or user_id is None:
+        return error_payload or _payload(
+            tool="trading_list_broker_accounts",
+            ok=False,
+            error_code="MISSING_CONTEXT",
+            error_message="Missing user context.",
+        )
+
+    try:
+        async with await _new_db_session() as db:
+            rows = await list_user_broker_accounts(
+                db,
+                user_id=user_id,
+                active_only=False,
+            )
+            accounts = [_serialize_broker_account_summary(row) for row in rows]
+    except (HTTPException, DomainError) as exc:
+        code, message = _http_error_code_message(exc)
+        return _payload(
+            tool="trading_list_broker_accounts",
+            ok=False,
+            error_code=code,
+            error_message=message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="trading_list_broker_accounts",
+            ok=False,
+            error_code="TRADING_LIST_BROKER_ACCOUNTS_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    default_broker_account_id = None
+    for account in accounts:
+        if account.get("status") == "active" and bool(account.get("is_default")):
+            default_broker_account_id = account["broker_account_id"]
+            break
+    if default_broker_account_id is None:
+        for account in accounts:
+            if account.get("status") == "active":
+                default_broker_account_id = account["broker_account_id"]
+                break
+
+    return _payload(
+        tool="trading_list_broker_accounts",
+        ok=True,
+        data={
+            "count": len(accounts),
+            "default_broker_account_id": default_broker_account_id,
+            "accounts": accounts,
+        },
+    )
+
+
+async def trading_check_deployment_readiness(
+    strategy_id: str = "",
+    broker_account_id: str = "",
+    ctx: Context | None = None,
+) -> str:
+    """Evaluate whether deployment can proceed with current broker bindings."""
+
+    try:
+        claims = _resolve_context_claims(ctx)
+    except ValueError as exc:
+        return _payload(
+            tool="trading_check_deployment_readiness",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+        )
+    if claims is None:
+        return _payload(
+            tool="trading_check_deployment_readiness",
+            ok=False,
+            error_code="MISSING_CONTEXT",
+            error_message=(
+                "Missing MCP context token. "
+                "This tool requires user-scoped context from orchestrator."
+            ),
+        )
+
+    explicit_broker_account_id = broker_account_id.strip()
+    if explicit_broker_account_id:
+        try:
+            explicit_broker_account_id = str(
+                _parse_uuid(explicit_broker_account_id, "broker_account_id")
+            )
+        except ValueError as exc:
+            return _payload(
+                tool="trading_check_deployment_readiness",
+                ok=False,
+                error_code="INVALID_UUID",
+                error_message=str(exc),
+            )
+
+    try:
+        async with await _new_db_session() as db:
+            strategy, strategy_error = await _load_owned_strategy_for_context(
+                db=db,
+                user_id=claims.user_id,
+                session_id=claims.session_id,
+                strategy_id=strategy_id,
+            )
+            if strategy_error is not None or strategy is None:
+                return _payload(
+                    tool="trading_check_deployment_readiness",
+                    ok=False,
+                    error_code="STRATEGY_NOT_FOUND",
+                    error_message=strategy_error or "Strategy not found.",
+                )
+
+            strategy_scope = _extract_strategy_scope(strategy)
+            rows = await list_user_broker_accounts(
+                db,
+                user_id=claims.user_id,
+                active_only=False,
+            )
+            accounts = [_serialize_broker_account_summary(row) for row in rows]
+    except (HTTPException, DomainError) as exc:
+        code, message = _http_error_code_message(exc)
+        return _payload(
+            tool="trading_check_deployment_readiness",
+            ok=False,
+            error_code=code,
+            error_message=message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="trading_check_deployment_readiness",
+            ok=False,
+            error_code="TRADING_DEPLOYMENT_READINESS_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    known_account_ids = {
+        str(account.get("broker_account_id"))
+        for account in accounts
+        if str(account.get("broker_account_id", "")).strip()
+    }
+    if explicit_broker_account_id and explicit_broker_account_id not in known_account_ids:
+        return _payload(
+            tool="trading_check_deployment_readiness",
+            ok=False,
+            error_code="BROKER_ACCOUNT_NOT_FOUND",
+            error_message="Broker account not found for current user.",
+        )
+
+    readiness = evaluate_broker_compatibility(
+        strategy_market=strategy_scope.get("market"),
+        accounts=accounts,
+        explicit_broker_account_id=explicit_broker_account_id or None,
+    )
+    matched_account_ids = set(readiness.get("matched_broker_account_ids") or [])
+    matched_accounts = [
+        account
+        for account in accounts
+        if account.get("broker_account_id") in matched_account_ids
+    ]
+
+    default_broker_account_id = None
+    for account in accounts:
+        if account.get("status") == "active" and bool(account.get("is_default")):
+            default_broker_account_id = account.get("broker_account_id")
+            break
+
+    return _payload(
+        tool="trading_check_deployment_readiness",
+        ok=True,
+        data={
+            "status": readiness.get("status"),
+            "strategy_scope": strategy_scope,
+            "default_broker_account_id": default_broker_account_id,
+            "preferred_broker_account_id": readiness.get("preferred_broker_account_id"),
+            "matched_broker_account_ids": list(matched_account_ids),
+            "matched_accounts": matched_accounts,
+            "blockers": list(readiness.get("blockers") or []),
+            "accounts": accounts,
         },
     )
 
@@ -452,6 +772,61 @@ async def trading_create_paper_deployment(
             "resolved_strategy_id": str(resolved_strategy_id),
             "resolved_broker_account_id": str(resolved_broker_account_id),
         },
+    )
+
+
+async def trading_create_builtin_sandbox_broker_account(
+    ctx: Context | None = None,
+) -> str:
+    """Create or reactivate the current user's built-in sandbox broker account."""
+
+    user_id, error_payload = _require_context_user_id(
+        tool="trading_create_builtin_sandbox_broker_account",
+        ctx=ctx,
+    )
+    if error_payload is not None or user_id is None:
+        return error_payload or _payload(
+            tool="trading_create_builtin_sandbox_broker_account",
+            ok=False,
+            error_code="MISSING_CONTEXT",
+            error_message="Missing user context.",
+        )
+
+    try:
+        async with await _new_db_session() as db:
+            user = await db.scalar(select(User).where(User.id == user_id))
+            if user is None:
+                return _payload(
+                    tool="trading_create_builtin_sandbox_broker_account",
+                    ok=False,
+                    error_code="USER_NOT_FOUND",
+                    error_message="User not found for MCP context.",
+                )
+
+            account = await ensure_builtin_sandbox_account(
+                db,
+                user_id=user.id,
+            )
+    except (HTTPException, DomainError) as exc:
+        code, message = _http_error_code_message(exc)
+        return _payload(
+            tool="trading_create_builtin_sandbox_broker_account",
+            ok=False,
+            error_code=code,
+            error_message=message,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _payload(
+            tool="trading_create_builtin_sandbox_broker_account",
+            ok=False,
+            error_code="TRADING_CREATE_BUILTIN_SANDBOX_BROKER_ERROR",
+            error_message=f"{type(exc).__name__}: {exc}",
+        )
+
+    return _payload(
+        tool="trading_create_builtin_sandbox_broker_account",
+        ok=True,
+        data={"broker_account": _serialize_broker_account_summary(account)},
     )
 
 
@@ -802,6 +1177,9 @@ def register_trading_tools(mcp: FastMCP) -> None:
     """Register trading-domain tools."""
     mcp.tool()(trading_ping)
     mcp.tool()(trading_capabilities)
+    mcp.tool()(trading_list_broker_accounts)
+    mcp.tool()(trading_check_deployment_readiness)
+    mcp.tool()(trading_create_builtin_sandbox_broker_account)
     mcp.tool()(trading_create_paper_deployment)
     mcp.tool()(trading_list_deployments)
     mcp.tool()(trading_start_deployment)

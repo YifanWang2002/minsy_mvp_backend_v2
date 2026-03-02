@@ -141,6 +141,7 @@ class AlpacaMarketDataClient:
         symbol: str,
         *,
         since: datetime | None = None,
+        until: datetime | None = None,
         timeframe: str = "1Min",
         limit: int = 500,
         market: str | None = None,
@@ -155,6 +156,8 @@ class AlpacaMarketDataClient:
         }
         if since is not None:
             params["start"] = since.astimezone(UTC).isoformat()
+        if until is not None:
+            params["end"] = until.astimezone(UTC).isoformat()
 
         if market_type == "crypto":
             path = f"/v1beta3/crypto/{self.crypto_feed}/bars"

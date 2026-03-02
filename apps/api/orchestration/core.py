@@ -138,6 +138,7 @@ class OrchestratorCoreMixin:
         carryover_block = self._consume_phase_carryover_memory(
             session=session, phase=phase_before
         )
+        stored_user_message = self._resolve_user_message_for_storage(payload.message)
         prompt_user_message = (
             f"{carryover_block}{payload.message}"
             if isinstance(carryover_block, str) and carryover_block.strip()
@@ -148,7 +149,7 @@ class OrchestratorCoreMixin:
         user_message = Message(
             session_id=session.id,
             role="user",
-            content=payload.message,
+            content=stored_user_message,
             phase=phase_before,
         )
         self.db.add(user_message)
@@ -270,6 +271,14 @@ class OrchestratorCoreMixin:
                 and post_process_result.transition_to_phase == Phase.DEPLOYMENT.value
             ):
                 async for followup_event in self._run_deployment_auto_followup(
+                    user=user,
+                    session=session,
+                    streamer=streamer,
+                    language=language,
+                ):
+                    yield followup_event
+            elif await self._consume_deployment_auto_execute_flag(session=session):
+                async for followup_event in self._run_deployment_execution_followup(
                     user=user,
                     session=session,
                     streamer=streamer,
@@ -491,17 +500,100 @@ class OrchestratorCoreMixin:
             # Swallow the error to avoid breaking the main turn; user can
             # manually retry deployment in the next message.
 
+    async def _consume_deployment_auto_execute_flag(
+        self,
+        *,
+        session: Session,
+    ) -> bool:
+        if session.current_phase != Phase.DEPLOYMENT.value:
+            return False
+        artifacts = session.artifacts
+        if not isinstance(artifacts, dict):
+            return False
+        deployment_block = artifacts.get(Phase.DEPLOYMENT.value)
+        if not isinstance(deployment_block, dict):
+            return False
+        runtime_raw = deployment_block.get("runtime")
+        if not isinstance(runtime_raw, dict):
+            return False
+        if not bool(runtime_raw.get("auto_execute_pending")):
+            return False
+
+        runtime_state = dict(runtime_raw)
+        runtime_state["auto_execute_pending"] = False
+        runtime_state["auto_execute_triggered_at"] = datetime.now(UTC).isoformat()
+        deployment_block = dict(deployment_block)
+        deployment_block["runtime"] = runtime_state
+        artifacts = dict(artifacts)
+        artifacts[Phase.DEPLOYMENT.value] = deployment_block
+        session.artifacts = artifacts
+        session.previous_response_id = None
+        await self.db.commit()
+        await self.db.refresh(session)
+        return True
+
+    async def _run_deployment_execution_followup(
+        self,
+        *,
+        user: User,
+        session: Session,
+        streamer: ResponsesEventStreamer,
+        language: str,
+    ) -> AsyncIterator[str]:
+        """Auto follow-up after user confirms the deployment summary."""
+        auto_message = _default_deployment_execute_message(language=language)
+        follow_up_payload = ChatSendRequest(
+            session_id=session.id,
+            message=auto_message,
+        )
+
+        log_agent(
+            "orchestrator",
+            f"session={session.id} deployment_execute_followup_start",
+        )
+
+        try:
+            async for chunk in self.handle_message_stream(
+                user,
+                follow_up_payload,
+                streamer,
+                language=language,
+            ):
+                yield chunk
+        except Exception as exc:  # noqa: BLE001
+            err_name = type(exc).__name__
+            log_agent(
+                "orchestrator",
+                f"session={session.id} deployment_execute_followup_error={err_name}",
+            )
+            # Swallow the error to avoid breaking the confirming turn.
+
 
 def _default_deployment_auto_message(*, language: str) -> str:
     """Generate the auto follow-up message for deployment phase."""
     if language.startswith("zh"):
         return (
             "用户已确认策略并准备部署。"
-            "请检查部署状态，如果一切就绪，创建并启动 paper deployment。"
+            "请先做 broker readiness 预检，必要时引导绑定或创建 builtin sandbox，"
+            "然后输出 deployment summary 并等待用户确认。"
         )
     return (
         "The user has confirmed the strategy and is ready to deploy. "
-        "Please check deployment readiness and create/start a paper deployment."
+        "Run broker readiness preflight first, handle broker selection if needed, "
+        "then present a deployment summary and wait for confirmation."
+    )
+
+
+def _default_deployment_execute_message(*, language: str) -> str:
+    """Generate the auto follow-up message after deployment confirmation."""
+    if language.startswith("zh"):
+        return (
+            "用户已经确认本次 deployment summary。"
+            "请使用当前已确认的 broker 和参数继续执行创建/启动 paper deployment。"
+        )
+    return (
+        "The user has confirmed the deployment summary. "
+        "Use the confirmed broker and settings to create and start the paper deployment now."
     )
 
 

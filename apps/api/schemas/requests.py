@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -171,6 +172,50 @@ class BrokerAccountCredentialsUpdateRequest(BaseModel):
         if not value:
             raise ValueError("credentials cannot be empty.")
         return value
+
+
+class IssueReportCreateRequest(BaseModel):
+    """Upload one user-reported issue bundle with screenshot and context."""
+
+    screenshot_png_base64: str = Field(min_length=32, max_length=12_000_000)
+    description: str | None = Field(default=None, max_length=4000)
+    reported_at: datetime | None = None
+    client_user_id: str | None = Field(default=None, max_length=128)
+    session_id_hint: UUID | None = None
+    current_route: str | None = Field(default=None, max_length=128)
+    settings_category: str | None = Field(default=None, max_length=64)
+    source: str | None = Field(default=None, max_length=64)
+    locale: str | None = Field(default=None, max_length=32)
+    theme_mode: str | None = Field(default=None, max_length=32)
+    platform: str | None = Field(default=None, max_length=32)
+    client_context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("screenshot_png_base64")
+    @classmethod
+    def validate_screenshot_png_base64(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("screenshot_png_base64 cannot be empty.")
+        return normalized
+
+    @field_validator(
+        "description",
+        "client_user_id",
+        "current_route",
+        "settings_category",
+        "source",
+        "locale",
+        "theme_mode",
+        "platform",
+    )
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
 
 
 class DeploymentCreateRequest(BaseModel):

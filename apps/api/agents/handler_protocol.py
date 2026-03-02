@@ -40,6 +40,7 @@ class PhaseContext:
     session_id: UUID | None = None
     language: str = "en"
     runtime_policy: RuntimePolicy = field(default_factory=RuntimePolicy)
+    turn_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

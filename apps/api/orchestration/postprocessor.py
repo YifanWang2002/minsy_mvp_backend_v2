@@ -65,9 +65,24 @@ class PostProcessorMixin:
             existing_genui=selected_genui_payloads,
             mcp_tool_calls=final_mcp_tool_calls,
         )
+        choice_selection = self._extract_choice_selection_payload(payload.message)
 
+        handler_ctx = PhaseContext(
+            user_id=preparation.ctx.user_id,
+            session_artifacts=preparation.ctx.session_artifacts,
+            session_id=preparation.ctx.session_id,
+            language=preparation.ctx.language,
+            runtime_policy=preparation.ctx.runtime_policy,
+            turn_context={
+                "choice_selection": choice_selection,
+                "mcp_tool_calls": final_mcp_tool_calls,
+                "genui_payloads": selected_genui_payloads,
+            },
+        )
         result = await preparation.handler.post_process(
-            preparation.ctx, raw_patches, self.db
+            handler_ctx,
+            raw_patches,
+            self.db,
         )
         session.artifacts = result.artifacts
         if result.completed:
@@ -86,6 +101,7 @@ class PostProcessorMixin:
             session_id=preparation.ctx.session_id,
             language=preparation.ctx.language,
             runtime_policy=preparation.ctx.runtime_policy,
+            turn_context=handler_ctx.turn_context,
         )
         filtered_genui_payloads: list[dict[str, Any]] = []
         for genui_payload in selected_genui_payloads:
@@ -156,7 +172,7 @@ class PostProcessorMixin:
                 session=session,
                 from_phase=preparation.phase_before,
                 to_phase=session.current_phase,
-                user_message=payload.message,
+                user_message=self._resolve_user_message_for_storage(payload.message),
                 assistant_message=assistant_text,
             )
 
@@ -328,6 +344,38 @@ class PostProcessorMixin:
         cleaned = self._strip_mcp_pseudo_tool_tags(cleaned)
 
         return cleaned, genui_payloads, patch_payloads
+
+    def _resolve_user_message_for_storage(self, text: str) -> str:
+        choice_selection = self._extract_choice_selection_payload(text)
+        if not isinstance(choice_selection, dict):
+            return text
+        label = choice_selection.get("selected_option_label")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+        return text
+
+    def _extract_choice_selection_payload(
+        self,
+        text: str,
+    ) -> dict[str, Any] | None:
+        payloads = self._extract_json_by_tag(text, "CHOICE_SELECTION")
+        if not payloads:
+            return None
+        payload = payloads[-1]
+        choice_id = payload.get("choice_id")
+        option_id = payload.get("selected_option_id")
+        if not isinstance(choice_id, str) or not choice_id.strip():
+            return None
+        if not isinstance(option_id, str) or not option_id.strip():
+            return None
+        normalized = {
+            "choice_id": choice_id.strip(),
+            "selected_option_id": option_id.strip(),
+        }
+        label = payload.get("selected_option_label")
+        if isinstance(label, str) and label.strip():
+            normalized["selected_option_label"] = label.strip()
+        return normalized
 
     def _extract_json_by_tag(self, text: str, tag: str) -> list[dict[str, Any]]:
         payloads: list[dict[str, Any]] = []

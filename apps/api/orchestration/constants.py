@@ -36,6 +36,8 @@ _BACKTEST_DEFAULT_CHARTS: tuple[str, ...] = (
 _STRATEGY_SCHEMA_ONLY_TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
     "strategy_upsert_dsl",
+    "get_indicator_catalog",
+    "get_indicator_detail",
 )
 _STRATEGY_ARTIFACT_OPS_TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
@@ -49,6 +51,15 @@ _STRATEGY_ARTIFACT_OPS_TOOL_NAMES: tuple[str, ...] = (
     "strategy_rollback_dsl",
     "get_indicator_detail",
     "get_indicator_catalog",
+)
+_STRATEGY_MARKET_DATA_TOOL_NAMES: tuple[str, ...] = (
+    "check_symbol_available",
+    "get_symbol_data_coverage",
+    "market_data_detect_missing_ranges",
+    "market_data_fetch_missing_ranges",
+    "market_data_get_sync_job",
+    "get_symbol_metadata",
+    "get_symbol_candles",
 )
 _MARKET_DATA_MINIMAL_TOOL_NAMES: tuple[str, ...] = ("get_symbol_data_coverage",)
 _BACKTEST_BOOTSTRAP_TOOL_NAMES: tuple[str, ...] = (
@@ -67,14 +78,23 @@ _BACKTEST_FEEDBACK_TOOL_NAMES: tuple[str, ...] = (
     "backtest_underwater_curve",
     "backtest_rolling_metrics",
 )
-_TRADING_DEPLOYMENT_TOOL_NAMES: tuple[str, ...] = (
-    "trading_create_paper_deployment",
+_TRADING_DEPLOYMENT_PREFLIGHT_TOOL_NAMES: tuple[str, ...] = (
+    "trading_list_broker_accounts",
+    "trading_check_deployment_readiness",
+    "trading_create_builtin_sandbox_broker_account",
     "trading_list_deployments",
+)
+_TRADING_DEPLOYMENT_EXECUTION_TOOL_NAMES: tuple[str, ...] = (
+    "trading_create_paper_deployment",
     "trading_start_deployment",
     "trading_pause_deployment",
     "trading_stop_deployment",
     "trading_get_positions",
     "trading_get_orders",
+)
+_TRADING_DEPLOYMENT_TOOL_NAMES: tuple[str, ...] = (
+    *_TRADING_DEPLOYMENT_PREFLIGHT_TOOL_NAMES,
+    *_TRADING_DEPLOYMENT_EXECUTION_TOOL_NAMES,
 )
 _MCP_CONTEXT_ENABLED_SERVER_LABELS: frozenset[str] = frozenset(
     {"strategy", "backtest", "market_data", "stress", "trading"}
@@ -104,9 +124,12 @@ __all__ = [
     "_BACKTEST_DEFAULT_CHARTS",
     "_STRATEGY_SCHEMA_ONLY_TOOL_NAMES",
     "_STRATEGY_ARTIFACT_OPS_TOOL_NAMES",
+    "_STRATEGY_MARKET_DATA_TOOL_NAMES",
     "_MARKET_DATA_MINIMAL_TOOL_NAMES",
     "_BACKTEST_BOOTSTRAP_TOOL_NAMES",
     "_BACKTEST_FEEDBACK_TOOL_NAMES",
+    "_TRADING_DEPLOYMENT_PREFLIGHT_TOOL_NAMES",
+    "_TRADING_DEPLOYMENT_EXECUTION_TOOL_NAMES",
     "_TRADING_DEPLOYMENT_TOOL_NAMES",
     "_MCP_CONTEXT_ENABLED_SERVER_LABELS",
     "_kyc_handler",

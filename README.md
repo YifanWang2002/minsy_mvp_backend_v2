@@ -520,3 +520,44 @@ uv run pytest -q \
 | Provider/Exchange 细粒度能力注册表 | 部分完成 | 当前有默认 capabilities 与 CCXT catalog，但没有独立 capability registry + 协商层。 |
 | CCXT 统一约束预检 | 部分完成 | OKX 关键兼容已做；但通用最小下单量/步进/价格精度预检与自动 rounding 仍需补全。 |
 | Broker 级观测与 SLO 分解 | 部分完成 | `/status` 可看 live_trading 总体健康；缺 provider/exchange 维度成功率、延迟、错误率分解。 |
+
+---
+
+## 12. Orchestrator / AI Chat Debug Notes
+
+为排查 `ffe5035de34fe020b76e6fe67d407f60542ea226` 引入的对话回归，当前调试分支采用“先整体回退，再按组回加”的方式。
+
+### 12.1 已定义的改动分组
+
+当前保留的分组划分如下：
+
+- Group 1: `[SESSION STATE]` compact 化 + skills 契约字段改名
+  - 现象风险：模型读状态不稳定、重复追问、`AGENT_UI_JSON` / patch 契约漂移
+  - 代表文件：`apps/api/agents/skills/state_compact.py`、`apps/api/agents/skills/*_skills.py`、`apps/api/agents/skills/pre_strategy/skills.md`
+- Group 2: orchestrator 工具暴露矩阵 / phase-stage runtime policy
+  - 现象风险：每轮可见工具集合变化，导致 tool availability 与 skills 文本不一致
+  - 代表文件：`apps/api/orchestration/constants.py`、`apps/api/orchestration/prompt_builder.py`
+- Group 3: pre-strategy 缺失 symbol 下载 workflow + TradingView 规则
+  - 现象风险：聊天更偏工具导向，symbol 不在本地时会先走下载确认流程；图表 symbol 映射规则变化
+  - 代表文件：`apps/api/agents/skills/pre_strategy/skills.md`、`apps/api/agents/skills/pre_strategy_skills.py`、`apps/api/agents/skills/utils/tradingview.md`
+- Group 4: instruction 刷新策略 + `max_output_tokens`
+  - 现象风险：长对话中 system prompt / skills 约束漂移，或输出预算导致回复过短/截断
+  - 代表文件：`apps/api/orchestration/stream_handler.py`、`apps/api/orchestration/prompt_builder.py`、`apps/api/orchestration/postprocessor.py`
+
+### 12.2 当前调试状态
+
+- `main` 已先回退至稳定版本，避免生产继续暴露该批回归。
+- 当前工作分支用于逐组 re-apply 和对话回归对比：
+  - `debug/revert-orchestrator-ai-chat-ffe5035`
+- 当前正在单独验证 Group 3。
+
+### 12.3 Patch / 备份位置
+
+为便于逐组恢复，以下文件已保留：
+
+- 回退子集 patch：
+  - `.codex_tmp/ffe5035_orchestrator_ai_chat_subset.patch`
+- 回退前本地 skills 脏改动备份：
+  - `.codex_tmp/skills_dirty_before_orchestrator_rollback_20260301.patch`
+
+如果需要继续按组恢复，优先从上述 patch 中摘取目标 hunk，而不是重新手工比对整条 commit。

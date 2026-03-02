@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -45,6 +46,14 @@ _INTERNAL_TO_EXTERNAL_STATUS: dict[str, str] = {
 }
 
 _SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"alpaca", "ccxt"})
+_RANGE_SPLIT_SPAN_BY_TIMEFRAME: dict[str, timedelta] = {
+    "1m": timedelta(days=90),
+    "5m": timedelta(days=180),
+}
+_FETCH_CONCURRENCY_BY_TIMEFRAME: dict[str, int] = {
+    "1m": 12,
+    "5m": 8,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +88,26 @@ class MarketDataSyncJobView:
     errors: tuple[dict[str, Any], ...]
     submitted_at: datetime
     completed_at: datetime | None
+
+
+class _RequestStartLimiter:
+    """Spread request start times so high concurrency does not burst the provider."""
+
+    def __init__(self, *, min_interval_seconds: float) -> None:
+        self._min_interval_seconds = max(float(min_interval_seconds), 0.0)
+        self._lock = asyncio.Lock()
+        self._next_ready_at = 0.0
+
+    async def wait_turn(self) -> None:
+        if self._min_interval_seconds <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        async with self._lock:
+            now = loop.time()
+            if now < self._next_ready_at:
+                await asyncio.sleep(self._next_ready_at - now)
+                now = loop.time()
+            self._next_ready_at = now + self._min_interval_seconds
 
 
 class MarketDataSyncJobNotFoundError(LookupError):
@@ -286,60 +315,99 @@ async def execute_market_data_sync_job(
         loader = DataLoader()
 
         total = len(ranges)
-        for index, target_range in enumerate(ranges):
-            chunk = MarketDataSyncChunk(
-                job_id=job.id,
-                chunk_index=index,
-                chunk_start=target_range.start,
-                chunk_end=target_range.end,
-                fetched_rows=0,
-                written_rows=0,
-                status="pending",
-                metadata_={},
-                error_message=None,
-            )
-            db.add(chunk)
+        fetch_concurrency = max(1, _FETCH_CONCURRENCY_BY_TIMEFRAME.get(timeframe_key, 1))
+        request_semaphore = asyncio.Semaphore(fetch_concurrency)
+        request_start_limiter = _RequestStartLimiter(
+            min_interval_seconds=settings.market_data_sync_request_start_interval_seconds
+        )
+        completed = 0
+        for batch_start in range(0, total, fetch_concurrency):
+            batch_ranges = ranges[batch_start : batch_start + fetch_concurrency]
+            batch_chunks: list[MarketDataSyncChunk] = []
+            for offset, target_range in enumerate(batch_ranges):
+                chunk = MarketDataSyncChunk(
+                    job_id=job.id,
+                    chunk_index=batch_start + offset,
+                    chunk_start=target_range.start,
+                    chunk_end=target_range.end,
+                    fetched_rows=0,
+                    written_rows=0,
+                    status="pending",
+                    metadata_={},
+                    error_message=None,
+                )
+                db.add(chunk)
+                batch_chunks.append(chunk)
             await db.flush()
 
-            try:
-                bars = await _fetch_provider_range(
-                    provider_name=provider_name,
-                    provider_client=provider_client,
-                    market=job.market,
-                    symbol=job.symbol,
-                    timeframe=timeframe_key,
-                    start=target_range.start,
-                    end=target_range.end,
-                )
-                frame = _bars_to_frame(bars=bars)
-                write_result = append_ohlcv_rows(
-                    loader=loader,
-                    market=job.market,
-                    symbol=job.symbol,
-                    timeframe=timeframe_key,
-                    rows=frame,
-                )
-                rows_written_total += write_result.rows_written
-                catalog_years_touched.update(_extract_frame_years(frame))
-
-                chunk.fetched_rows = len(frame)
-                chunk.written_rows = write_result.rows_written
-                chunk.status = "completed"
-                chunk.metadata_ = {
-                    "rows_input": write_result.rows_input,
-                    "files_touched": write_result.files_touched,
-                }
-            except Exception as exc:  # noqa: BLE001
-                message = f"{type(exc).__name__}: {exc}"
-                errors.append(message)
-                chunk.status = "failed"
-                chunk.error_message = message
-
-            completed = index + 1
-            job.rows_written = rows_written_total
-            job.progress = min(95, int((completed / total) * 90) + 5)
-            job.current_step = f"processing_range_{completed}_of_{total}"
+            job.current_step = (
+                f"fetching_batch_{(batch_start // fetch_concurrency) + 1}_of_"
+                f"{((total - 1) // fetch_concurrency) + 1}"
+            )
             await _commit_if_requested(db, auto_commit=auto_commit)
+
+            batch_results = await asyncio.gather(
+                *[
+                    _fetch_provider_range(
+                        provider_name=provider_name,
+                        provider_client=provider_client,
+                        market=job.market,
+                        symbol=job.symbol,
+                        timeframe=timeframe_key,
+                        start=target_range.start,
+                        end=target_range.end,
+                        request_semaphore=request_semaphore,
+                        request_start_limiter=request_start_limiter,
+                    )
+                    for target_range in batch_ranges
+                ],
+                return_exceptions=True,
+            )
+
+            for target_range, chunk, batch_result in zip(
+                batch_ranges,
+                batch_chunks,
+                batch_results,
+                strict=False,
+            ):
+                if isinstance(batch_result, Exception):
+                    message = f"{type(batch_result).__name__}: {batch_result}"
+                    errors.append(message)
+                    chunk.status = "failed"
+                    chunk.error_message = message
+                else:
+                    frame = _bars_to_frame(bars=batch_result)
+                    try:
+                        write_result = append_ohlcv_rows(
+                            loader=loader,
+                            market=job.market,
+                            symbol=job.symbol,
+                            timeframe=timeframe_key,
+                            rows=frame,
+                        )
+                        rows_written_total += write_result.rows_written
+                        catalog_years_touched.update(_extract_frame_years(frame))
+
+                        chunk.fetched_rows = len(frame)
+                        chunk.written_rows = write_result.rows_written
+                        chunk.status = "completed"
+                        chunk.metadata_ = {
+                            "rows_input": write_result.rows_input,
+                            "files_touched": write_result.files_touched,
+                            "range_start": target_range.start.isoformat(),
+                            "range_end": target_range.end.isoformat(),
+                        }
+                    except Exception as exc:  # noqa: BLE001
+                        message = f"{type(exc).__name__}: {exc}"
+                        errors.append(message)
+                        chunk.status = "failed"
+                        chunk.error_message = message
+
+                completed += 1
+                job.rows_written = rows_written_total
+                job.progress = min(95, int((completed / total) * 90) + 5)
+                job.current_step = f"processing_range_{completed}_of_{total}"
+                await _commit_if_requested(db, auto_commit=auto_commit)
 
         if rows_written_total > 0 and catalog_years_touched:
             try:
@@ -354,15 +422,21 @@ async def execute_market_data_sync_job(
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"CatalogSyncError: {type(exc).__name__}: {exc}")
 
-        if errors and rows_written_total == 0:
+        partial_failure = bool(errors and rows_written_total > 0)
+        if errors:
             job.status = "failed"
-            job.error_message = errors[0]
+            job.error_message = "; ".join(errors[:3])
         else:
             job.status = "completed"
-            job.error_message = "; ".join(errors[:3]) if errors else None
+            job.error_message = None
 
         job.progress = 100
-        job.current_step = "completed" if job.status == "completed" else "failed"
+        if job.status == "completed":
+            job.current_step = "completed"
+        elif partial_failure:
+            job.current_step = "failed_partial"
+        else:
+            job.current_step = "failed"
         job.completed_at = datetime.now(UTC)
         await _commit_if_requested(db, auto_commit=auto_commit)
         refreshed = await db.scalar(
@@ -416,11 +490,12 @@ def _resolve_missing_ranges(
 ) -> list[MissingRange]:
     if isinstance(missing_ranges, list) and missing_ranges:
         parsed = deserialize_missing_ranges(missing_ranges)
-        return [
+        ranges = [
             item
             for item in parsed
             if item.end >= requested_start and item.start <= requested_end
         ]
+        return _split_missing_ranges_for_sync(ranges=ranges, timeframe=timeframe)
 
     try:
         coverage = detect_missing_ranges(
@@ -433,7 +508,10 @@ def _resolve_missing_ranges(
         )
     except LocalCoverageInputError as exc:
         raise MarketDataSyncInputError(str(exc)) from exc
-    return list(coverage.missing_ranges)
+    return _split_missing_ranges_for_sync(
+        ranges=list(coverage.missing_ranges),
+        timeframe=timeframe,
+    )
 
 
 def _to_view(job: MarketDataSyncJob) -> MarketDataSyncJobView:
@@ -508,50 +586,120 @@ async def _fetch_provider_range(
     timeframe: str,
     start: datetime,
     end: datetime,
+    request_semaphore: asyncio.Semaphore | None = None,
+    request_start_limiter: _RequestStartLimiter | None = None,
 ) -> list[OhlcvBar]:
+    request_windows = _split_range_into_request_windows(
+        start=start,
+        end=end,
+        timeframe=timeframe,
+        limit=max(1, int(settings.market_data_sync_batch_limit)),
+    )
+    if not request_windows:
+        return []
+
+    timeframe_value = _to_alpaca_timeframe(timeframe) if provider_name == "alpaca" else timeframe
+    window_results = await asyncio.gather(
+        *[
+            _fetch_provider_window(
+                provider_client=provider_client,
+                market=market,
+                symbol=symbol,
+                timeframe=timeframe_value,
+                start=window.start,
+                end=window.end,
+                limit=max(1, min(int(settings.market_data_sync_batch_limit), int(window.bars))),
+                request_semaphore=request_semaphore,
+                request_start_limiter=request_start_limiter,
+            )
+            for window in request_windows
+        ],
+        return_exceptions=True,
+    )
+
+    for item in window_results:
+        if isinstance(item, Exception):
+            raise item
+
     bars: dict[datetime, OhlcvBar] = {}
-    step = _timeframe_delta(timeframe)
-    cursor = _ensure_utc(start)
-    boundary = _ensure_utc(end)
-    batch_limit = settings.market_data_sync_batch_limit
-
-    while cursor <= boundary:
-        if provider_name == "alpaca":
-            fetched = await provider_client.fetch_ohlcv(
-                symbol=symbol,
-                market=market,
-                timeframe=_to_alpaca_timeframe(timeframe),
-                since=cursor,
-                limit=batch_limit,
-            )
-        else:
-            fetched = await provider_client.fetch_ohlcv(
-                symbol=symbol,
-                market=market,
-                timeframe=timeframe,
-                since=cursor,
-                limit=batch_limit,
-            )
-
-        if not fetched:
-            break
-
+    for fetched in window_results:
+        assert not isinstance(fetched, Exception)
         normalized = sorted((_normalize_bar(item) for item in fetched), key=lambda item: item.timestamp)
         for item in normalized:
             if item.timestamp < start or item.timestamp > end:
                 continue
             bars[item.timestamp] = item
 
-        last_timestamp = max(item.timestamp for item in normalized)
-        next_cursor = last_timestamp + step
-        if next_cursor <= cursor:
-            break
-        cursor = next_cursor
-
-        if len(fetched) < batch_limit and last_timestamp < boundary:
-            break
-
     return [bars[key] for key in sorted(bars)]
+
+
+async def _fetch_provider_window(
+    *,
+    provider_client: Any,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    start: datetime,
+    end: datetime,
+    limit: int,
+    request_semaphore: asyncio.Semaphore | None,
+    request_start_limiter: _RequestStartLimiter | None,
+) -> list[OhlcvBar]:
+    for attempt in range(2):
+        try:
+            if request_semaphore is None:
+                if request_start_limiter is not None:
+                    await request_start_limiter.wait_turn()
+                return await provider_client.fetch_ohlcv(
+                    symbol=symbol,
+                    market=market,
+                    timeframe=timeframe,
+                    since=_ensure_utc(start),
+                    until=_ensure_utc(end),
+                    limit=max(1, int(limit)),
+                )
+
+            async with request_semaphore:
+                if request_start_limiter is not None:
+                    await request_start_limiter.wait_turn()
+                return await provider_client.fetch_ohlcv(
+                    symbol=symbol,
+                    market=market,
+                    timeframe=timeframe,
+                    since=_ensure_utc(start),
+                    until=_ensure_utc(end),
+                    limit=max(1, int(limit)),
+                )
+        except Exception as exc:  # noqa: BLE001
+            if not _is_rate_limit_error(exc) or attempt >= 1:
+                raise
+            await asyncio.sleep(float(attempt + 1))
+
+    raise RuntimeError("unreachable")
+
+
+def _split_range_into_request_windows(
+    *,
+    start: datetime,
+    end: datetime,
+    timeframe: str,
+    limit: int,
+) -> list[MissingRange]:
+    safe_limit = max(1, int(limit))
+    step = _timeframe_delta(timeframe)
+    max_span = step * max(safe_limit - 1, 0)
+    cursor = _ensure_utc(start)
+    boundary = _ensure_utc(end)
+    if boundary < cursor:
+        return []
+
+    windows: list[MissingRange] = []
+    while cursor <= boundary:
+        window_end = min(boundary, cursor + max_span)
+        bars = max(int((window_end - cursor) / step) + 1, 1)
+        windows.append(MissingRange(start=cursor, end=window_end, bars=bars))
+        cursor = window_end + step
+    return windows
 
 
 def _bars_to_frame(*, bars: list[OhlcvBar]) -> pd.DataFrame:
@@ -583,6 +731,12 @@ def _normalize_bar(bar: OhlcvBar) -> OhlcvBar:
         close=bar.close,
         volume=bar.volume,
     )
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    return int(status_code or 0) == 429
 
 
 def _normalize_provider(value: str) -> str:
@@ -627,6 +781,39 @@ def _timeframe_delta(timeframe: str) -> timedelta:
     if minutes >= 1440:
         return timedelta(days=1)
     return timedelta(minutes=minutes)
+
+
+def _split_missing_ranges_for_sync(
+    *,
+    ranges: list[MissingRange],
+    timeframe: str,
+) -> list[MissingRange]:
+    max_span = _RANGE_SPLIT_SPAN_BY_TIMEFRAME.get(timeframe)
+    if max_span is None or not ranges:
+        return list(ranges)
+
+    step = _timeframe_delta(timeframe)
+    split_ranges: list[MissingRange] = []
+    for item in ranges:
+        start = _ensure_utc(item.start)
+        end = _ensure_utc(item.end)
+        if end <= start:
+            split_ranges.append(MissingRange(start=start, end=end, bars=max(int(item.bars), 1)))
+            continue
+
+        cursor = start
+        while cursor <= end:
+            chunk_end = min(end, cursor + max_span - step)
+            bars = max(int((chunk_end - cursor) / step) + 1, 1)
+            split_ranges.append(
+                MissingRange(
+                    start=cursor,
+                    end=chunk_end,
+                    bars=bars,
+                )
+            )
+            cursor = chunk_end + step
+    return split_ranges
 
 
 def _ensure_utc(value: datetime) -> datetime:

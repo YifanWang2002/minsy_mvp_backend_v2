@@ -67,3 +67,37 @@ def test_010_rotate_credentials_and_deactivate(
     )
     assert deactivated.status_code == 200, deactivated.text
     assert deactivated.json()["status"] == "inactive"
+
+
+def test_020_builtin_sandbox_create_deactivate_and_reactivate(
+    api_test_client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    created = api_test_client.post(
+        "/api/v1/broker-accounts/builtin-sandbox",
+        headers=auth_headers,
+    )
+    assert created.status_code == 201, created.text
+    created_payload = created.json()
+    broker_account_id = str(created_payload["broker_account_id"])
+    assert created_payload["provider"] == "sandbox"
+    assert created_payload["mode"] == "paper"
+    assert created_payload["status"] == "active"
+
+    deactivated = api_test_client.post(
+        "/api/v1/broker-accounts/builtin-sandbox/deactivate",
+        headers=auth_headers,
+    )
+    assert deactivated.status_code == 200, deactivated.text
+    deactivated_payload = deactivated.json()
+    assert str(deactivated_payload["broker_account_id"]) == broker_account_id
+    assert deactivated_payload["status"] == "inactive"
+
+    reactivated = api_test_client.post(
+        "/api/v1/broker-accounts/builtin-sandbox",
+        headers=auth_headers,
+    )
+    assert reactivated.status_code == 201, reactivated.text
+    reactivated_payload = reactivated.json()
+    assert str(reactivated_payload["broker_account_id"]) == broker_account_id
+    assert reactivated_payload["status"] == "active"

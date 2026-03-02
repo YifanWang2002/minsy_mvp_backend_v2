@@ -26,6 +26,14 @@ When requesting frontend-rendered performance charts from a completed backtest, 
 <AGENT_UI_JSON>{"type":"backtest_charts","job_id":"<uuid>","charts":["equity_curve","underwater_curve","monthly_return_table"],"sampling":"eod","max_points":365}</AGENT_UI_JSON>
 ```
 
+When the frontend sends a user click from a `choice_prompt`, the user message may arrive as:
+
+```
+<CHOICE_SELECTION>{"choice_id":"<snake_case_id>","selected_option_id":"<option_id_or_uuid>","selected_option_label":"<localised label>"}</CHOICE_SELECTION>
+```
+
+Treat this as the authoritative user selection for the current turn.
+
 ## Supported Fields
 
 ### `choice_prompt`
@@ -67,6 +75,8 @@ When requesting frontend-rendered performance charts from a completed backtest, 
 
 - `choice_id`, option `id` values, and all JSON keys must always be **English snake_case**.
 - `question`, `subtitle`, option `label`, and option `subtitle` values must be in the **user's language**.
+- If the user message contains a `<CHOICE_SELECTION>` block, use `choice_id` and `selected_option_id` as the canonical selection context for this turn.
+- `selected_option_label` is user-facing display text; prefer `selected_option_id` for state updates, tool decisions, and follow-up logic.
 - Include at least 2 options.
 - Do **not** wrap the JSON in markdown code fences.
 - Default to at most one `<AGENT_UI_JSON>` block per turn, unless the active phase/system instruction explicitly asks for multiple blocks in the same turn (e.g. chart + choice).
