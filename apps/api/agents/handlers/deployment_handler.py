@@ -64,6 +64,10 @@ class DeploymentHandler:
             deployment_state=runtime_state,
             phase_stage=ctx.runtime_policy.phase_stage,
         )
+        state_block += self._build_confirmation_input_guidance(
+            missing_fields=missing,
+            choice_selection=ctx.turn_context.get("choice_selection"),
+        )
         return PromptPieces(
             instructions=instructions,
             enriched_input=state_block + user_message,
@@ -92,10 +96,22 @@ class DeploymentHandler:
             validated = self._validate_patch(patch)
             if not validated:
                 continue
-            selected_changed = "selected_broker_account_id" in validated
+            selected_changed = (
+                "selected_broker_account_id" in validated
+                and self._normalize_uuid_text(profile.get("selected_broker_account_id"))
+                != validated.get("selected_broker_account_id")
+            )
+            deployment_inputs_changed = self._did_deployment_input_values_change(
+                profile=profile,
+                patch=validated,
+            )
             profile.update(validated)
             if selected_changed:
                 profile["selected_broker_source"] = "user_choice"
+            if (
+                (selected_changed or deployment_inputs_changed)
+                and "deployment_confirmation_status" not in validated
+            ):
                 profile["deployment_confirmation_status"] = "pending"
 
         self._apply_tool_call_updates(
@@ -252,6 +268,35 @@ class DeploymentHandler:
             "deployment summary before executing deployment tools."
         )
 
+    def _build_confirmation_input_guidance(
+        self,
+        *,
+        missing_fields: list[str],
+        choice_selection: Any,
+    ) -> str:
+        if "deployment_confirmation_status" not in missing_fields:
+            return ""
+        if isinstance(choice_selection, dict):
+            return (
+                "[CURRENT TURN]\n"
+                "- structured_choice_selection_present: true\n"
+                "- confirmation_rule: A valid choice click is explicit confirmation.\n"
+                "[/CURRENT TURN]\n\n"
+            )
+        return (
+            "[CURRENT TURN]\n"
+            "- structured_choice_selection_present: false\n"
+            "- confirmation_rule: If the user clearly and semantically approves "
+            "proceeding with this deployment in natural language, you may mark "
+            "deployment_confirmation_status as confirmed.\n"
+            "- semantic_requirement: Use the user's meaning, not exact keywords. "
+            "A button click is one valid confirmation path, but it is not required.\n"
+            "- required_behavior: If the user is ambiguous, still waiting, or "
+            "asking for changes, keep deployment_confirmation_status pending or "
+            "set it to needs_changes instead of confirmed.\n"
+            "[/CURRENT TURN]\n\n"
+        )
+
     def _compute_missing(self, profile: dict[str, Any]) -> list[str]:
         deployment_status = self._normalize_deployment_status(profile.get("deployment_status"))
         if deployment_status == "deployed":
@@ -312,6 +357,23 @@ class DeploymentHandler:
             output["planned_risk_limits"] = dict(risk_limits)
 
         return output
+
+    def _did_deployment_input_values_change(
+        self,
+        *,
+        profile: dict[str, Any],
+        patch: dict[str, Any],
+    ) -> bool:
+        for field in (
+            "planned_capital_allocated",
+            "planned_auto_start",
+            "planned_risk_limits",
+        ):
+            if field not in patch:
+                continue
+            if patch.get(field) != profile.get(field):
+                return True
+        return False
 
     def _apply_tool_call_updates(
         self,

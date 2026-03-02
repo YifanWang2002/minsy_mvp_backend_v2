@@ -219,7 +219,7 @@ async def test_deployment_handler_requires_explicit_choice_when_multiple_brokers
     assert len(choice_prompt["options"]) == 2
 
 
-async def test_deployment_handler_sets_auto_execute_after_confirmation() -> None:
+async def test_deployment_handler_accepts_semantic_confirmation_patch_without_choice() -> None:
     handler = DeploymentHandler()
     broker_id = "6b3f4e8b-e0d4-4cb1-911f-0119985c31e8"
     artifacts = {
@@ -405,3 +405,44 @@ async def test_deployment_handler_choice_selection_confirm_sets_confirmed_and_au
     assert result.missing_fields == []
     assert updated["profile"]["deployment_confirmation_status"] == "confirmed"
     assert updated["runtime"]["auto_execute_pending"] is True
+
+
+async def test_deployment_handler_parameter_change_resets_confirmation() -> None:
+    handler = DeploymentHandler()
+    broker_id = "6b3f4e8b-e0d4-4cb1-911f-0119985c31e8"
+    artifacts = {
+        Phase.DEPLOYMENT.value: {
+            "profile": {
+                "strategy_name": "ETH Mean Reversion",
+                "strategy_market": "crypto",
+                "strategy_primary_symbol": "ETHUSD",
+                "broker_readiness_status": "ready",
+                "selected_broker_account_id": broker_id,
+                "selected_broker_label": "Built-in Sandbox",
+                "deployment_status": "ready",
+                "deployment_confirmation_status": "confirmed",
+                "planned_capital_allocated": "10000",
+                "planned_auto_start": True,
+                "planned_risk_limits": {},
+            },
+            "missing_fields": [],
+            "runtime": {},
+        }
+    }
+    ctx = PhaseContext(
+        user_id=uuid4(),
+        session_artifacts=artifacts,
+        turn_context={"mcp_tool_calls": []},
+    )
+
+    result = await handler.post_process(
+        ctx,
+        [{"planned_capital_allocated": "20000"}],
+        SimpleNamespace(),
+    )
+
+    updated = result.artifacts[Phase.DEPLOYMENT.value]
+    assert updated["profile"]["planned_capital_allocated"] == "20000"
+    assert updated["profile"]["deployment_confirmation_status"] == "pending"
+    assert updated["runtime"]["auto_execute_pending"] is False
+    assert result.missing_fields == ["deployment_confirmation_status"]

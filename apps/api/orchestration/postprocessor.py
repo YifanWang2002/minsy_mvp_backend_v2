@@ -340,6 +340,11 @@ class PostProcessorMixin:
 
         cleaned = self._strip_tag_blocks(text, _AGENT_UI_TAG)
         cleaned = self._strip_tag_blocks(cleaned, _AGENT_STATE_PATCH_TAG)
+        inline_patch_payloads, cleaned = self._extract_inline_json_by_token(
+            cleaned,
+            _AGENT_STATE_PATCH_TAG,
+        )
+        patch_payloads.extend(inline_patch_payloads)
         cleaned = self._strip_session_state_echo(cleaned)
         cleaned = self._strip_mcp_pseudo_tool_tags(cleaned)
 
@@ -391,6 +396,97 @@ class PostProcessorMixin:
 
     def _strip_tag_blocks(self, text: str, tag: str) -> str:
         return self._build_tag_pattern(tag).sub("", text)
+
+    def _extract_inline_json_by_token(
+        self,
+        text: str,
+        token: str,
+    ) -> tuple[list[dict[str, Any]], str]:
+        payloads: list[dict[str, Any]] = []
+        if not text:
+            return payloads, text
+
+        pattern = re.compile(
+            rf"(?i)\b{re.escape(token)}\b\s*(?:=|:)?\s*",
+        )
+        cursor = 0
+        output_parts: list[str] = []
+
+        while cursor < len(text):
+            match = pattern.search(text, cursor)
+            if match is None:
+                output_parts.append(text[cursor:])
+                break
+
+            start = match.start()
+            json_start = match.end()
+            while json_start < len(text) and text[json_start].isspace():
+                json_start += 1
+            if json_start >= len(text) or text[json_start] != "{":
+                output_parts.append(text[cursor:match.end()])
+                cursor = match.end()
+                continue
+
+            json_end = self._find_json_object_end(text, json_start)
+            if json_end is None:
+                output_parts.append(text[cursor:match.end()])
+                cursor = match.end()
+                continue
+
+            output_parts.append(text[cursor:start])
+            raw_json = text[json_start:json_end]
+            try:
+                parsed = json.loads(raw_json)
+            except json.JSONDecodeError:
+                output_parts.append(text[start:json_end])
+                cursor = json_end
+                continue
+            if isinstance(parsed, dict):
+                payloads.append(parsed)
+                trailing = json_end
+                while trailing < len(text) and text[trailing] in {" ", "\t"}:
+                    trailing += 1
+                if trailing < len(text) and text[trailing] == "\n":
+                    trailing += 1
+                cursor = trailing
+                continue
+
+            output_parts.append(text[start:json_end])
+            cursor = json_end
+
+        return payloads, "".join(output_parts)
+
+    @staticmethod
+    def _find_json_object_end(text: str, start_index: int) -> int | None:
+        depth = 0
+        in_string = False
+        escaped = False
+
+        for index in range(start_index, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                    continue
+                if char == "\\":
+                    escaped = True
+                    continue
+                if char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+                continue
+            if char == "{":
+                depth += 1
+                continue
+            if char == "}":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+
+        return None
 
     def _strip_session_state_echo(self, text: str) -> str:
         # Remove full [SESSION STATE] ... [/SESSION STATE] echoes.

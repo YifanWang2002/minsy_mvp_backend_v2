@@ -46,12 +46,16 @@ class PromptBuilderMixin:
             artifacts=artifacts,
             user_runtime_policy=user_runtime_policy,
         )
+        choice_selection = self._extract_choice_selection_from_message(payload.message)
         ctx = PhaseContext(
             user_id=user.id,
             session_artifacts=artifacts,
             session_id=session.id,
             language=language,
             runtime_policy=runtime_policy,
+            turn_context={
+                "choice_selection": choice_selection,
+            },
         )
         prompt = handler.build_prompt(ctx, prompt_user_message)
         tools = self._merge_tools(
@@ -224,9 +228,6 @@ class PromptBuilderMixin:
         if broker_status not in {"unknown", "no_broker", "needs_choice", "ready", "blocked"}:
             broker_status = "unknown"
 
-        selected_broker_account_id = self._coerce_uuid_text(
-            profile.get("selected_broker_account_id")
-        )
         raw_confirmation = profile.get("deployment_confirmation_status")
         confirmation_status = (
             raw_confirmation.strip().lower()
@@ -236,17 +237,7 @@ class PromptBuilderMixin:
         if confirmation_status not in {"pending", "confirmed", "needs_changes"}:
             confirmation_status = "pending"
 
-        can_execute = (
-            status != "deployed"
-            and broker_status == "ready"
-            and selected_broker_account_id is not None
-            and confirmation_status == "confirmed"
-        )
-        allowed_tools = (
-            list(_TRADING_DEPLOYMENT_TOOL_NAMES)
-            if status == "deployed" or can_execute
-            else list(_TRADING_DEPLOYMENT_PREFLIGHT_TOOL_NAMES)
-        )
+        allowed_tools = list(_TRADING_DEPLOYMENT_TOOL_NAMES)
 
         if status == "deployed":
             phase_stage = "deployment_deployed"
@@ -256,7 +247,7 @@ class PromptBuilderMixin:
             phase_stage = "deployment_needs_broker_choice"
         elif broker_status == "ready" and confirmation_status != "confirmed":
             phase_stage = "deployment_review_pending"
-        elif can_execute:
+        elif broker_status == "ready" and confirmation_status == "confirmed":
             phase_stage = "deployment_execute_ready"
         else:
             phase_stage = "deployment_preflight"
@@ -454,3 +445,38 @@ class PromptBuilderMixin:
             tool_mode=runtime.tool_mode,
             allowed_tools=list(runtime.allowed_tools or []),
         )
+
+    @staticmethod
+    def _extract_choice_selection_from_message(text: str) -> dict[str, Any] | None:
+        if not isinstance(text, str) or not text.strip():
+            return None
+        match = re.search(
+            r"<\s*CHOICE_SELECTION\s*>([\s\S]*?)<\s*/\s*CHOICE_SELECTION\s*>",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        raw_json = match.group(1)
+        if not isinstance(raw_json, str) or not raw_json.strip():
+            return None
+        try:
+            payload = json.loads(raw_json.strip())
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        choice_id = payload.get("choice_id")
+        option_id = payload.get("selected_option_id")
+        if not isinstance(choice_id, str) or not choice_id.strip():
+            return None
+        if not isinstance(option_id, str) or not option_id.strip():
+            return None
+        normalized: dict[str, Any] = {
+            "choice_id": choice_id.strip(),
+            "selected_option_id": option_id.strip(),
+        }
+        label = payload.get("selected_option_label")
+        if isinstance(label, str) and label.strip():
+            normalized["selected_option_label"] = label.strip()
+        return normalized

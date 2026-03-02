@@ -15,7 +15,7 @@ def _extract_trading_allowed_tools(policy: Any) -> set[str]:
     raise AssertionError("trading tool definition missing")
 
 
-def test_deployment_preflight_runtime_policy_hides_execution_tools_until_confirmed() -> None:
+def test_deployment_preflight_runtime_policy_exposes_full_toolset() -> None:
     orchestrator = ChatOrchestrator(None)  # type: ignore[arg-type]
 
     policy = orchestrator._build_phase_runtime_policy(
@@ -35,11 +35,11 @@ def test_deployment_preflight_runtime_policy_hides_execution_tools_until_confirm
     assert policy.phase_stage == "deployment_needs_broker_choice"
     assert "trading_check_deployment_readiness" in allowed
     assert "trading_create_builtin_sandbox_broker_account" in allowed
-    assert "trading_create_paper_deployment" not in allowed
-    assert "trading_start_deployment" not in allowed
+    assert "trading_create_paper_deployment" in allowed
+    assert "trading_start_deployment" in allowed
 
 
-def test_deployment_execute_runtime_policy_exposes_execution_tools_after_confirmation() -> None:
+def test_deployment_execute_runtime_policy_still_exposes_full_toolset_after_confirmation() -> None:
     orchestrator = ChatOrchestrator(None)  # type: ignore[arg-type]
 
     policy = orchestrator._build_phase_runtime_policy(

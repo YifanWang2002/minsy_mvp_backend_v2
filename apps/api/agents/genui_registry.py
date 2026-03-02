@@ -99,6 +99,8 @@ def _normalize_choice_prompt(payload: dict[str, Any]) -> dict[str, Any] | None:
     question = payload.get("question")
     if not isinstance(question, str) or not question.strip():
         return None
+    if not options_out:
+        return None
 
     result: dict[str, Any] = {
         "type": "choice_prompt",
