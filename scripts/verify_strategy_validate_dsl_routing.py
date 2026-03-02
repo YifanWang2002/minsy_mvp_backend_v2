@@ -38,6 +38,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional second URL to compare against (for example mcp.minsyai.com).",
     )
+    parser.add_argument(
+        "--expect-compare-failure",
+        action="store_true",
+        help="Treat a compare probe failure as the expected outcome.",
+    )
     return parser
 
 
@@ -145,11 +150,22 @@ async def _run() -> int:
         compare = await _call_strategy_validate(url=compare_url, session_id=args.session_id)
         print(f"\n[compare] {compare.url}")
         print(_render_payload(compare.payload))
+    elif args.expect_compare_failure:
+        print("--expect-compare-failure requires --compare-url", file=sys.stderr)
+        return 1
 
     if not primary.ok:
         return 1
-    if compare is not None and not compare.ok:
-        return 1
+    if compare is not None:
+        if args.expect_compare_failure:
+            if compare.ok:
+                print(
+                    "compare URL unexpectedly succeeded while failure was expected",
+                    file=sys.stderr,
+                )
+                return 1
+        elif not compare.ok:
+            return 1
     return 0
 
 
