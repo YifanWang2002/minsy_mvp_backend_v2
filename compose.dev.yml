@@ -6,7 +6,7 @@ x-backend-common: &backend-common
   working_dir: /app
   environment:
     PYTHONUNBUFFERED: "1"
-    MINSY_ENV_PROFILE: dev
+    MINSY_ENV_PROFILE: ${MINSY_ENV_PROFILE:-dev}
   volumes:
     - ./env:/app/env:ro
     - ./data:/app/data

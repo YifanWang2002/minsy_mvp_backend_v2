@@ -52,12 +52,13 @@ jobs:
 
             COMPOSE_CMD="docker compose -f $COMPOSE_FILE"
 
-            # Match backend runtime env loading order (base + service overlays).
-            MINSY_ENV_PROFILE="${MINSY_ENV_PROFILE:-dev}"
-            if [ "$MINSY_ENV_PROFILE" != "dev" ] && [ "$MINSY_ENV_PROFILE" != "prod" ]; then
-              echo "ERROR: MINSY_ENV_PROFILE must be dev or prod (got: $MINSY_ENV_PROFILE)" >&2
-              exit 1
+            # The GCP VM workflow is the production deploy path.
+            # Force the prod profile so runtime MCP URLs, CORS, and env layering
+            # all resolve consistently on the remote host.
+            if [ -n "${MINSY_ENV_PROFILE:-}" ] && [ "${MINSY_ENV_PROFILE}" != "prod" ]; then
+              echo "INFO: overriding workflow MINSY_ENV_PROFILE=${MINSY_ENV_PROFILE} with prod for GCP VM deploy."
             fi
+            MINSY_ENV_PROFILE="prod"
 
             if [ ! -f "env/.env.${MINSY_ENV_PROFILE}" ]; then
               echo "ERROR: missing required profile file env/.env.${MINSY_ENV_PROFILE}" >&2
