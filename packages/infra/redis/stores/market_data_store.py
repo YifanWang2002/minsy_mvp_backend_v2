@@ -241,17 +241,13 @@ class RedisMarketDataStore:
         normalized_symbol = _normalize_symbol(symbol)
         normalized_tf = _normalize_timeframe(timeframe)
         ts_ms = _to_ms(timestamp)
-        encoded_bar = json.dumps(
-            {
-                "ts_ms": ts_ms,
-                "open": _to_float(open_),
-                "high": _to_float(high),
-                "low": _to_float(low),
-                "close": _to_float(close),
-                "volume": _to_float(volume),
-            },
-            ensure_ascii=True,
-            separators=(",", ":"),
+        encoded_bar = self._encode_bar(
+            ts_ms=ts_ms,
+            open_=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
         )
         bars_key = self._bars_key(
             timeframe=normalized_tf,
@@ -266,8 +262,18 @@ class RedisMarketDataStore:
         try:
             client = get_sync_redis_client()
             pipeline = client.pipeline(transaction=True)
-            pipeline.lpush(bars_key, encoded_bar)
-            pipeline.ltrim(bars_key, 0, self._bars_maxlen(normalized_tf) - 1)
+            latest_raw = client.lindex(bars_key, 0)
+            latest_ts_ms = self._decode_bar_ts_ms(latest_raw)
+            if latest_ts_ms is not None and ts_ms < latest_ts_ms:
+                pipeline.set(checkpoint_key, str(latest_ts_ms), ex=self.checkpoint_ttl_seconds)
+                pipeline.execute()
+                self._clear_error()
+                return True
+            if latest_ts_ms is not None and ts_ms == latest_ts_ms:
+                pipeline.lset(bars_key, 0, encoded_bar)
+            else:
+                pipeline.lpush(bars_key, encoded_bar)
+                pipeline.ltrim(bars_key, 0, self._bars_maxlen(normalized_tf) - 1)
             pipeline.set(checkpoint_key, str(ts_ms), ex=self.checkpoint_ttl_seconds)
             pipeline.execute()
             self._clear_error()
@@ -276,6 +282,66 @@ class RedisMarketDataStore:
             self._record_error("append_bar", exc)
             logger.warning(
                 "redis market-data bar write failed market=%s symbol=%s tf=%s error=%s",
+                normalized_market,
+                normalized_symbol,
+                normalized_tf,
+                type(exc).__name__,
+            )
+            return False
+
+    def replace_bars(
+        self,
+        *,
+        market: str,
+        symbol: str,
+        timeframe: str,
+        bars: list[RedisBar],
+    ) -> bool:
+        normalized_market = _normalize_market(market)
+        normalized_symbol = _normalize_symbol(symbol)
+        normalized_tf = _normalize_timeframe(timeframe)
+        bars_key = self._bars_key(
+            timeframe=normalized_tf,
+            market=normalized_market,
+            symbol=normalized_symbol,
+        )
+        checkpoint_key = self._checkpoint_key(
+            market=normalized_market,
+            symbol=normalized_symbol,
+            timeframe=normalized_tf,
+        )
+        try:
+            client = get_sync_redis_client()
+            pipeline = client.pipeline(transaction=True)
+            pipeline.delete(bars_key)
+            trimmed = list(bars)[-self._bars_maxlen(normalized_tf) :]
+            for bar in trimmed:
+                pipeline.lpush(
+                    bars_key,
+                    self._encode_bar(
+                        ts_ms=_to_ms(bar.timestamp),
+                        open_=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        volume=bar.volume,
+                    ),
+                )
+            if trimmed:
+                pipeline.set(
+                    checkpoint_key,
+                    str(_to_ms(trimmed[-1].timestamp)),
+                    ex=self.checkpoint_ttl_seconds,
+                )
+            else:
+                pipeline.delete(checkpoint_key)
+            pipeline.execute()
+            self._clear_error()
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self._record_error("replace_bars", exc)
+            logger.warning(
+                "redis market-data bar replace failed market=%s symbol=%s tf=%s error=%s",
                 normalized_market,
                 normalized_symbol,
                 normalized_tf,
@@ -338,6 +404,43 @@ class RedisMarketDataStore:
                 )
             )
         return rows
+
+    def _encode_bar(
+        self,
+        *,
+        ts_ms: int,
+        open_: float | Decimal | int,
+        high: float | Decimal | int,
+        low: float | Decimal | int,
+        close: float | Decimal | int,
+        volume: float | Decimal | int,
+    ) -> str:
+        return json.dumps(
+            {
+                "ts_ms": int(ts_ms),
+                "open": _to_float(open_),
+                "high": _to_float(high),
+                "low": _to_float(low),
+                "close": _to_float(close),
+                "volume": _to_float(volume),
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
+
+    def _decode_bar_ts_ms(self, raw: object | None) -> int | None:
+        if raw is None:
+            return None
+        try:
+            decoded = json.loads(str(raw))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(decoded, dict):
+            return None
+        try:
+            return int(decoded.get("ts_ms"))
+        except (TypeError, ValueError):
+            return None
 
     def get_checkpoint(self, *, market: str, symbol: str, timeframe: str) -> int | None:
         normalized_market = _normalize_market(market)

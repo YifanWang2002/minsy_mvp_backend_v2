@@ -59,7 +59,7 @@ class AggregatedBar:
 
 
 @dataclass(slots=True)
-class _BucketState:
+class _ComponentBar:
     ts_ms: int
     open: float
     high: float
@@ -67,14 +67,52 @@ class _BucketState:
     close: float
     volume: float
 
+
+@dataclass(slots=True)
+class _BucketState:
+    ts_ms: int
+    components: dict[int, _ComponentBar]
+
+    def has_components(self) -> bool:
+        return bool(self.components)
+
+    def upsert_component(
+        self,
+        *,
+        ts_ms: int,
+        open_: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: float,
+    ) -> None:
+        self.components[int(ts_ms)] = _ComponentBar(
+            ts_ms=int(ts_ms),
+            open=float(open_),
+            high=float(high),
+            low=float(low),
+            close=float(close),
+            volume=float(volume),
+        )
+
     def to_bar(self) -> AggregatedBar:
+        ordered = [self.components[key] for key in sorted(self.components)]
+        if not ordered:
+            return AggregatedBar(
+                ts_ms=self.ts_ms,
+                open=0.0,
+                high=0.0,
+                low=0.0,
+                close=0.0,
+                volume=0.0,
+            )
         return AggregatedBar(
             ts_ms=self.ts_ms,
-            open=self.open,
-            high=self.high,
-            low=self.low,
-            close=self.close,
-            volume=self.volume,
+            open=ordered[0].open,
+            high=max(item.high for item in ordered),
+            low=min(item.low for item in ordered),
+            close=ordered[-1].close,
+            volume=sum(item.volume for item in ordered),
         )
 
 
@@ -113,30 +151,33 @@ class BarAggregator:
             if state is None:
                 self._states[key] = _BucketState(
                     ts_ms=bucket_start,
-                    open=float(open_),
-                    high=float(high),
-                    low=float(low),
-                    close=float(close),
-                    volume=float(volume),
+                    components={},
+                )
+                self._states[key].upsert_component(
+                    ts_ms=ts_ms,
+                    open_=open_,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=volume,
                 )
                 continue
 
             if state.ts_ms != bucket_start:
-                closed[timeframe] = state.to_bar()
+                if state.has_components():
+                    closed[timeframe] = state.to_bar()
                 self._states[key] = _BucketState(
                     ts_ms=bucket_start,
-                    open=float(open_),
-                    high=float(high),
-                    low=float(low),
-                    close=float(close),
-                    volume=float(volume),
+                    components={},
                 )
-                continue
-
-            state.high = max(state.high, float(high))
-            state.low = min(state.low, float(low))
-            state.close = float(close)
-            state.volume += float(volume)
+            self._states[key].upsert_component(
+                ts_ms=ts_ms,
+                open_=open_,
+                high=high,
+                low=low,
+                close=close,
+                volume=volume,
+            )
         return closed
 
     def checkpoint(self) -> dict[str, int]:
@@ -155,12 +196,17 @@ class BarAggregator:
             market, symbol, timeframe = parts
             self._states[(market, symbol, timeframe)] = _BucketState(
                 ts_ms=int(ts_ms),
-                open=0.0,
-                high=0.0,
-                low=0.0,
-                close=0.0,
-                volume=0.0,
+                components={},
             )
+
+    def clear_symbol(self, *, market: str, symbol: str) -> None:
+        stale_keys = [
+            key
+            for key in self._states
+            if key[0] == market and key[1] == symbol
+        ]
+        for key in stale_keys:
+            self._states.pop(key, None)
 
     def flush(
         self,
@@ -173,7 +219,7 @@ class BarAggregator:
         for timeframe in self.timeframes:
             key = (market, symbol, timeframe)
             state = self._states.pop(key, None)
-            if state is None:
+            if state is None or not state.has_components():
                 continue
             closed[timeframe] = state.to_bar()
         return closed

@@ -61,6 +61,44 @@ class OhlcvRing:
         if self.size < self.capacity:
             self.size += 1
 
+    def append_or_replace(
+        self,
+        *,
+        ts_ms: int,
+        open_: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: float,
+    ) -> str:
+        if self.size > 0:
+            latest_idx = (self.head - 1) % self.capacity
+            latest_ts = int(self.ts[latest_idx])
+            if int(ts_ms) < latest_ts:
+                return "ignored"
+            if int(ts_ms) == latest_ts:
+                self.ts[latest_idx] = int(ts_ms)
+                self.open[latest_idx] = float(open_)
+                self.high[latest_idx] = float(high)
+                self.low[latest_idx] = float(low)
+                self.close[latest_idx] = float(close)
+                self.volume[latest_idx] = float(volume)
+                return "replaced"
+
+        self.append(
+            ts_ms=ts_ms,
+            open_=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+        )
+        return "appended"
+
+    def reset(self) -> None:
+        self.head = 0
+        self.size = 0
+
     def _ordered_indices(self) -> np.ndarray:
         if self.size == 0:
             return np.array([], dtype=np.int64)

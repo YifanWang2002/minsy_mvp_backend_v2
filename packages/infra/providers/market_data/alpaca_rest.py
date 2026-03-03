@@ -7,6 +7,16 @@ from datetime import datetime
 from packages.infra.providers.market_data.alpaca_client import AlpacaMarketDataClient
 from packages.infra.providers.trading.adapters.base import OhlcvBar, QuoteSnapshot
 
+_TIMEFRAME_TO_ALPACA: dict[str, str] = {
+    "1m": "1Min",
+    "5m": "5Min",
+    "15m": "15Min",
+    "60m": "1Hour",
+    "1h": "1Hour",
+    "4h": "4Hour",
+    "1d": "1Day",
+}
+
 
 class AlpacaRestProvider:
     """REST wrapper around Alpaca market-data client."""
@@ -39,13 +49,38 @@ class AlpacaRestProvider:
         symbol: str,
         market: str,
         since: datetime | None = None,
+        until: datetime | None = None,
         limit: int = 500,
     ) -> list[OhlcvBar]:
+        return await self.fetch_recent_bars(
+            symbol=symbol,
+            market=market,
+            timeframe="1m",
+            since=since,
+            until=until,
+            limit=limit,
+        )
+
+    async def fetch_recent_bars(
+        self,
+        *,
+        symbol: str,
+        market: str,
+        timeframe: str,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 500,
+    ) -> list[OhlcvBar]:
+        normalized_tf = timeframe.strip().lower()
+        provider_tf = _TIMEFRAME_TO_ALPACA.get(normalized_tf)
+        if provider_tf is None:
+            return []
         return await self._client.fetch_ohlcv(
             symbol=symbol,
             market=market,
-            timeframe="1Min",
+            timeframe=provider_tf,
             since=since,
+            until=until,
             limit=limit,
         )
 

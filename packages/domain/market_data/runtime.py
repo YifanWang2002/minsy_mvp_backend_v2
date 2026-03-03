@@ -85,6 +85,7 @@ class MarketDataRuntime:
         self._rings_agg: dict[tuple[str, str, str], OhlcvRing] = {}
         self._quotes: dict[tuple[str, str], QuoteSnapshot] = {}
         self._checkpoints: dict[str, int] = {}
+        self._latest_1m_ts_ms: dict[tuple[str, str], int] = {}
         self._redis_store = redis_store or redis_market_data_store
         self._subscription_store = subscription_store or redis_subscription_store
         self._metrics: dict[str, int] = {
@@ -285,13 +286,27 @@ class MarketDataRuntime:
         closed_runtime: dict[str, RuntimeBar] = {}
         closed_aggregated: tuple[tuple[str, AggregatedBar], ...] = ()
         with self._lock:
+            base_key = (normalized_market, normalized_symbol)
+            latest_ts_ms = self._latest_1m_ts_ms.get(base_key)
+            if latest_ts_ms is None and self._redis_read_enabled():
+                persisted_checkpoint = self._redis_store.get_checkpoint(
+                    market=normalized_market,
+                    symbol=normalized_symbol,
+                    timeframe="1m",
+                )
+                if persisted_checkpoint is not None:
+                    latest_ts_ms = int(persisted_checkpoint)
+                    self._latest_1m_ts_ms[base_key] = latest_ts_ms
+            if latest_ts_ms is not None and ts_ms < latest_ts_ms:
+                return {}
+            self._latest_1m_ts_ms[base_key] = ts_ms
+
             if self._memory_cache_enabled():
-                base_key = (normalized_market, normalized_symbol)
                 ring = self._rings_1m.get(base_key)
                 if ring is None:
                     ring = OhlcvRing.create(settings.market_data_ring_capacity_1m)
                     self._rings_1m[base_key] = ring
-                ring.append(
+                ring.append_or_replace(
                     ts_ms=ts_ms,
                     open_=_to_float(bar.open),
                     high=_to_float(bar.high),
@@ -352,6 +367,79 @@ class MarketDataRuntime:
                     self._increment_metric("redis_write_errors")
 
         return closed_runtime
+
+    def hydrate_bars(
+        self,
+        *,
+        market: str,
+        symbol: str,
+        timeframe: str,
+        bars: list[OhlcvBar | RuntimeBar],
+    ) -> list[RuntimeBar]:
+        normalized_bars = self.restore_bars(
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+        )
+        normalized_market = _normalize_market(market)
+        normalized_symbol = _normalize_symbol(symbol)
+        normalized_tf = timeframe.strip().lower()
+
+        if self._redis_write_enabled():
+            ok = self._redis_store.replace_bars(
+                market=normalized_market,
+                symbol=normalized_symbol,
+                timeframe=normalized_tf,
+                bars=[
+                    RedisBar(
+                        timestamp=bar.timestamp,
+                        open=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        volume=bar.volume,
+                    )
+                    for bar in normalized_bars
+                ],
+            )
+            if not ok:
+                self._increment_metric("redis_write_errors")
+
+        return normalized_bars
+
+    def restore_bars(
+        self,
+        *,
+        market: str,
+        symbol: str,
+        timeframe: str,
+        bars: list[OhlcvBar | RuntimeBar],
+    ) -> list[RuntimeBar]:
+        normalized_market = _normalize_market(market)
+        normalized_symbol = _normalize_symbol(symbol)
+        normalized_tf = timeframe.strip().lower()
+        normalized_bars = self._normalize_history_bars(
+            timeframe=normalized_tf,
+            bars=bars,
+        )
+
+        with self._lock:
+            if self._memory_cache_enabled():
+                self._replace_ring_with_bars(
+                    market=normalized_market,
+                    symbol=normalized_symbol,
+                    timeframe=normalized_tf,
+                    bars=normalized_bars,
+                )
+            if normalized_tf == "1m":
+                self._rebuild_aggregator_state_for_symbol(
+                    market=normalized_market,
+                    symbol=normalized_symbol,
+                    bars=normalized_bars,
+                )
+
+        return normalized_bars
 
     def _append_aggregated_bar(
         self,
@@ -417,7 +505,7 @@ class MarketDataRuntime:
             )
             if bars:
                 self._increment_metric("redis_read_hits")
-                return self._runtime_bars_from_redis_rows(bars)
+                return self._dedupe_runtime_bars(self._runtime_bars_from_redis_rows(bars))
             if self._redis_store.has_recent_error():
                 self._increment_metric("redis_read_errors")
             else:
@@ -500,6 +588,7 @@ class MarketDataRuntime:
             self._rings_agg.clear()
             self._quotes.clear()
             self._checkpoints.clear()
+            self._latest_1m_ts_ms.clear()
             self._factor_cache.clear()
             for key in self._metrics:
                 self._metrics[key] = 0
@@ -526,7 +615,7 @@ class MarketDataRuntime:
             if ring is None:
                 return []
             payload = ring.latest(limit)
-        return self._runtime_bars_from_arrays(payload)
+        return self._dedupe_runtime_bars(self._runtime_bars_from_arrays(payload))
 
     def _memory_checkpoints(self) -> dict[str, int]:
         with self._lock:
@@ -575,6 +664,120 @@ class MarketDataRuntime:
                 )
             )
         return rows
+
+    def _normalize_history_bars(
+        self,
+        *,
+        timeframe: str,
+        bars: list[OhlcvBar | RuntimeBar],
+    ) -> list[RuntimeBar]:
+        deduped: dict[int, RuntimeBar] = {}
+        for item in bars:
+            if isinstance(item, RuntimeBar):
+                runtime_bar = item
+            else:
+                runtime_bar = RuntimeBar(
+                    timestamp=item.timestamp,
+                    open=_to_float(item.open),
+                    high=_to_float(item.high),
+                    low=_to_float(item.low),
+                    close=_to_float(item.close),
+                    volume=_to_float(item.volume),
+                )
+            ts_ms = _to_ms(runtime_bar.timestamp)
+            deduped[ts_ms] = RuntimeBar(
+                timestamp=_from_ms(ts_ms),
+                open=float(runtime_bar.open),
+                high=float(runtime_bar.high),
+                low=float(runtime_bar.low),
+                close=float(runtime_bar.close),
+                volume=float(runtime_bar.volume),
+            )
+
+        maxlen = (
+            settings.market_data_ring_capacity_1m
+            if timeframe == "1m"
+            else settings.market_data_ring_capacity_aggregated
+        )
+        ordered_ts_ms = sorted(deduped)[-max(1, int(maxlen)) :]
+        return [deduped[ts_ms] for ts_ms in ordered_ts_ms]
+
+    def _replace_ring_with_bars(
+        self,
+        *,
+        market: str,
+        symbol: str,
+        timeframe: str,
+        bars: list[RuntimeBar],
+    ) -> None:
+        if timeframe == "1m":
+            ring = OhlcvRing.create(settings.market_data_ring_capacity_1m)
+            for bar in bars:
+                ring.append(
+                    ts_ms=_to_ms(bar.timestamp),
+                    open_=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                )
+            self._rings_1m[(market, symbol)] = ring
+            if bars:
+                latest_ts_ms = _to_ms(bars[-1].timestamp)
+                self._checkpoints[f"{market}:{symbol}:1m"] = latest_ts_ms
+                self._latest_1m_ts_ms[(market, symbol)] = latest_ts_ms
+            else:
+                self._checkpoints.pop(f"{market}:{symbol}:1m", None)
+                self._latest_1m_ts_ms.pop((market, symbol), None)
+            return
+
+        ring = OhlcvRing.create(settings.market_data_ring_capacity_aggregated)
+        for bar in bars:
+            ring.append(
+                ts_ms=_to_ms(bar.timestamp),
+                open_=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+            )
+        self._rings_agg[(market, symbol, timeframe)] = ring
+        if bars:
+            self._checkpoints[f"{market}:{symbol}:{timeframe}"] = _to_ms(
+                bars[-1].timestamp,
+            )
+        else:
+            self._checkpoints.pop(f"{market}:{symbol}:{timeframe}", None)
+
+    def _rebuild_aggregator_state_for_symbol(
+        self,
+        *,
+        market: str,
+        symbol: str,
+        bars: list[RuntimeBar],
+    ) -> None:
+        self._aggregator.clear_symbol(market=market, symbol=symbol)
+        for bar in bars:
+            self._aggregator.ingest_1m_bar(
+                market=market,
+                symbol=symbol,
+                ts_ms=_to_ms(bar.timestamp),
+                open_=bar.open,
+                high=bar.high,
+                low=bar.low,
+                close=bar.close,
+                volume=bar.volume,
+            )
+
+    def _dedupe_runtime_bars(self, rows: list[RuntimeBar]) -> list[RuntimeBar]:
+        if len(rows) < 2:
+            return rows
+        deduped: dict[int, RuntimeBar] = {}
+        for row in rows:
+            deduped[_to_ms(row.timestamp)] = row
+        if len(deduped) == len(rows):
+            return rows
+        return [deduped[ts_ms] for ts_ms in sorted(deduped)]
 
 
 market_data_runtime = MarketDataRuntime()

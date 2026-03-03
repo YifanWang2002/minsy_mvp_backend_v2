@@ -18,10 +18,16 @@ def enqueue_paper_trading_runtime(deployment_id: UUID | str) -> str:
     return str(result.id)
 
 
-def enqueue_market_data_refresh(*, market: str, symbol: str) -> str:
+def enqueue_market_data_refresh(
+    *,
+    market: str,
+    symbol: str,
+    requested_timeframe: str | None = None,
+    min_bars: int | None = None,
+) -> str:
     result = celery_app.send_task(
         "market_data.refresh_symbol",
-        args=(market, symbol),
+        args=(market, symbol, requested_timeframe, min_bars),
         queue="market_data",
     )
     return str(result.id)

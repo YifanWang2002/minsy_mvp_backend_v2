@@ -233,6 +233,10 @@ class Settings(BaseSettings):
         default=True,
         alias="PAPER_TRADING_EXECUTE_ORDERS",
     )
+    paper_trading_default_position_pct: float = Field(
+        default=0.025,
+        alias="PAPER_TRADING_DEFAULT_POSITION_PCT",
+    )
     paper_trading_loop_interval_seconds: float = Field(
         default=1.0,
         alias="PAPER_TRADING_LOOP_INTERVAL_SECONDS",
@@ -399,12 +403,20 @@ class Settings(BaseSettings):
         alias="MARKET_DATA_REFRESH_ACTIVE_SUBSCRIPTIONS_INTERVAL_SECONDS",
     )
     market_data_aggregate_timeframes_csv: str = Field(
-        default="5m,15m,1h,1d",
+        default="5m,15m,1h,4h,1d",
         alias="MARKET_DATA_AGGREGATE_TIMEFRAMES",
     )
     market_data_aggregate_timezone: str = Field(
         default="UTC",
         alias="MARKET_DATA_AGGREGATE_TIMEZONE",
+    )
+    market_data_history_target_bars: int = Field(
+        default=2500,
+        alias="MARKET_DATA_HISTORY_TARGET_BARS",
+    )
+    market_data_history_warmup_chunk_bars: int = Field(
+        default=500,
+        alias="MARKET_DATA_HISTORY_WARMUP_CHUNK_BARS",
     )
     market_data_ring_capacity_1m: int = Field(
         default=45000,
@@ -799,6 +811,13 @@ class Settings(BaseSettings):
             raise ValueError("PAPER_TRADING_LOOP_INTERVAL_SECONDS must be > 0.")
         return value
 
+    @field_validator("paper_trading_default_position_pct")
+    @classmethod
+    def _validate_paper_trading_default_position_pct(cls, value: float) -> float:
+        if value <= 0 or value > 1:
+            raise ValueError("PAPER_TRADING_DEFAULT_POSITION_PCT must be > 0 and <= 1.")
+        return value
+
     @field_validator("paper_trading_starting_retry_seconds")
     @classmethod
     def _validate_paper_trading_starting_retry_seconds(cls, value: float) -> float:
@@ -952,7 +971,10 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "market_data_ring_capacity_1m", "market_data_ring_capacity_aggregated"
+        "market_data_history_target_bars",
+        "market_data_history_warmup_chunk_bars",
+        "market_data_ring_capacity_1m",
+        "market_data_ring_capacity_aggregated",
     )
     @classmethod
     def _validate_market_data_ring_capacity(cls, value: int) -> int:

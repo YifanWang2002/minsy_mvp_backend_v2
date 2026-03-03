@@ -19,8 +19,19 @@ def enqueue_paper_trading_runtime(deployment_id: UUID | str) -> str:
     return _enqueue_paper_trading_runtime(deployment_id)
 
 
-def enqueue_market_data_refresh(*, market: str, symbol: str) -> str:
-    return _enqueue_market_data_refresh(market=market, symbol=symbol)
+def enqueue_market_data_refresh(
+    *,
+    market: str,
+    symbol: str,
+    requested_timeframe: str | None = None,
+    min_bars: int | None = None,
+) -> str:
+    return _enqueue_market_data_refresh(
+        market=market,
+        symbol=symbol,
+        requested_timeframe=requested_timeframe,
+        min_bars=min_bars,
+    )
 
 
 def enqueue_execute_approved_open(request_id: UUID | str) -> str | None:

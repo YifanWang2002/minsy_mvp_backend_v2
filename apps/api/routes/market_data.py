@@ -36,6 +36,58 @@ def _normalize_market(market: str) -> str:
     return normalized
 
 
+def _timeframe_step(value: str) -> timedelta | None:
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized.endswith("m"):
+        try:
+            minutes = int(normalized[:-1] or "0")
+        except ValueError:
+            return None
+        if minutes <= 0:
+            return None
+        return timedelta(minutes=minutes)
+    if normalized.endswith("h"):
+        try:
+            hours = int(normalized[:-1] or "0")
+        except ValueError:
+            return None
+        if hours <= 0:
+            return None
+        return timedelta(hours=hours)
+    if normalized.endswith("d"):
+        try:
+            days = int(normalized[:-1] or "0")
+        except ValueError:
+            return None
+        if days <= 0:
+            return None
+        return timedelta(days=days)
+    return None
+
+
+def _bars_are_stale(
+    *,
+    market: str,
+    timeframe: str,
+    bars: list[object],
+) -> bool:
+    if not bars:
+        return False
+    normalized_market = market.strip().lower()
+    if normalized_market not in {"crypto", "forex"}:
+        return False
+    step = _timeframe_step(timeframe)
+    if step is None:
+        return False
+    latest = getattr(bars[-1], "timestamp", None)
+    if not isinstance(latest, datetime):
+        return False
+    max_lag = max(step * 3, timedelta(minutes=20))
+    return latest.astimezone(UTC) < (datetime.now(UTC) - max_lag)
+
+
 @router.get("/quote", response_model=MarketDataQuoteResponse)
 async def get_latest_quote(
     symbol: str = Query(min_length=1, max_length=32),
@@ -100,8 +152,21 @@ async def get_recent_bars(
         timeframe=normalized_timeframe,
         limit=limit,
     )
-    if not bars and refresh_if_empty:
-        enqueue_market_data_refresh(market=normalized_market, symbol=normalized_symbol)
+    should_enqueue_refresh = refresh_if_empty and (
+        not bars
+        or _bars_are_stale(
+            market=normalized_market,
+            timeframe=normalized_timeframe,
+            bars=bars,
+        )
+    )
+    if should_enqueue_refresh:
+        enqueue_market_data_refresh(
+            market=normalized_market,
+            symbol=normalized_symbol,
+            requested_timeframe=normalized_timeframe,
+            min_bars=limit,
+        )
         bars = market_data_runtime.get_recent_bars(
             market=normalized_market,
             symbol=normalized_symbol,
