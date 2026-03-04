@@ -6,20 +6,23 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.services.trading_queue_service import enqueue_market_data_refresh
 from packages.domain.market_data.refresh_dedupe import reserve_market_data_refresh_slot
-from packages.domain.market_data.runtime import MarketDataRuntime, RuntimeBar, market_data_runtime
+from packages.domain.market_data.runtime import RuntimeBar, market_data_runtime
 from packages.domain.user.services.auth_service import AuthService
 from packages.infra.db.models.trading_event_outbox import TradingEventOutbox
 from packages.infra.db.models.user import User
 from packages.infra.db.session import get_db_session
-from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
 from packages.infra.observability.logger import logger
+from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
 
+from . import market_data as market_data_route
 from .trading_stream import _load_owned_deployment, _poll_outbox_events
 
 router = APIRouter(prefix="/ws", tags=["trading-ws"])
@@ -129,7 +132,28 @@ async def _hydrate_bar_snapshot_from_provider(
     )
 
 
-async def _load_bar_snapshot(
+async def _finalize_bar_window(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    bars: list[RuntimeBar],
+) -> list[RuntimeBar]:
+    live_bar = await market_data_route._build_live_bar(
+        market=market,
+        symbol=symbol,
+        timeframe=timeframe,
+        historical_bars=bars,
+    )
+    return market_data_route._merge_live_bar(
+        bars=bars,
+        live_bar=live_bar,
+        limit=limit,
+    )
+
+
+async def _read_bar_window(
     *,
     market: str,
     symbol: str,
@@ -143,35 +167,127 @@ async def _load_bar_snapshot(
         timeframe=timeframe,
         limit=limit,
     )
-    if len(bars) >= limit:
+    return await _finalize_bar_window(
+        market=market,
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+        bars=bars,
+    )
+
+
+def _bars_ready_for_snapshot(
+    *,
+    market: str,
+    timeframe: str,
+    bars: list[RuntimeBar],
+    limit: int,
+) -> bool:
+    if len(bars) < limit:
+        return False
+    return not market_data_route._bars_are_stale(
+        market=market,
+        timeframe=timeframe,
+        bars=bars,
+    )
+
+
+def _prefer_bar_window(
+    current: list[RuntimeBar],
+    candidate: list[RuntimeBar],
+) -> list[RuntimeBar]:
+    if not current:
+        return candidate
+    if not candidate:
+        return current
+    current_latest = current[-1].timestamp
+    candidate_latest = candidate[-1].timestamp
+    if candidate_latest > current_latest:
+        return candidate
+    if candidate_latest < current_latest:
+        return current
+    if len(candidate) >= len(current):
+        return candidate
+    return current
+
+
+def _bar_subscription_subscriber_id(
+    *,
+    connection_id: str,
+    market: str,
+    symbol: str,
+    timeframe: str,
+) -> str:
+    return f"ws-bars:{connection_id}:{market}:{symbol}:{timeframe}"
+
+
+async def _load_bar_snapshot(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    limit: int,
+) -> list[RuntimeBar]:
+    bars = await _read_bar_window(
+        market=market,
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+    )
+    if _bars_ready_for_snapshot(
+        market=market,
+        timeframe=timeframe,
+        bars=bars,
+        limit=limit,
+    ):
         return bars
 
     if reserve_market_data_refresh_slot(market, symbol):
+        enqueue_market_data_refresh(
+            market=market,
+            symbol=symbol,
+            requested_timeframe=timeframe,
+            min_bars=limit,
+        )
         hydrated = await _hydrate_bar_snapshot_from_provider(
             market=market,
             symbol=symbol,
             timeframe=timeframe,
             limit=limit,
         )
-        if len(hydrated) > len(bars):
-            bars = hydrated
-        if len(bars) >= limit:
+        hydrated = await _finalize_bar_window(
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=limit,
+            bars=hydrated,
+        )
+        bars = _prefer_bar_window(bars, hydrated)
+        if _bars_ready_for_snapshot(
+            market=market,
+            timeframe=timeframe,
+            bars=bars,
+            limit=limit,
+        ):
             return bars
 
     best = bars
     deadline = time.monotonic() + _BAR_WARMUP_MAX_WAIT_SECONDS
     while time.monotonic() < deadline:
         await asyncio.sleep(_BAR_WARMUP_WAIT_INTERVAL)
-        candidate = await asyncio.to_thread(
-            market_data_runtime.get_recent_bars,
+        candidate = await _read_bar_window(
             market=market,
             symbol=symbol,
             timeframe=timeframe,
             limit=limit,
         )
-        if len(candidate) > len(best):
-            best = candidate
-        if len(candidate) >= limit:
+        best = _prefer_bar_window(best, candidate)
+        if _bars_ready_for_snapshot(
+            market=market,
+            timeframe=timeframe,
+            bars=candidate,
+            limit=limit,
+        ):
             return candidate
     return best
 
@@ -241,11 +357,13 @@ async def ws_trading(
 
     await websocket.accept()
     user_id = str(user.id)
+    connection_id = uuid4().hex
 
     # deployment_id → cursor
     subscriptions: dict[str, int] = {}
     # (market, symbol, timeframe) → last_sent_ts_seconds
     bar_subscriptions: dict[tuple[str, str, str], int] = {}
+    bar_runtime_subscribers: dict[tuple[str, str, str], str] = {}
     running = True
 
     async def _send_json(data: dict) -> None:
@@ -254,6 +372,12 @@ async def ws_trading(
         except Exception:
             nonlocal running
             running = False
+
+    def _unsubscribe_bar_key(key: tuple[str, str, str]) -> None:
+        subscriber_id = bar_runtime_subscribers.pop(key, None)
+        if subscriber_id is None:
+            return
+        market_data_runtime.unsubscribe(subscriber_id)
 
     async def _handle_subscribe(
         msg: dict,
@@ -325,6 +449,21 @@ async def ws_trading(
         if not symbol:
             await _send_json({"event": "error", "message": "symbol is required for subscribe_bars"})
             return
+        key = (market, symbol, timeframe)
+        subscriber_id = bar_runtime_subscribers.get(key)
+        if subscriber_id is None:
+            subscriber_id = _bar_subscription_subscriber_id(
+                connection_id=connection_id,
+                market=market,
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+            bar_runtime_subscribers[key] = subscriber_id
+        market_data_runtime.subscribe(
+            subscriber_id,
+            [symbol],
+            market=market,
+        )
         bars = await _load_bar_snapshot(
             market=market,
             symbol=symbol,
@@ -340,7 +479,7 @@ async def ws_trading(
             "bars": bar_dicts,
         })
         last_ts = max((_bar_ts_seconds(b) for b in bars), default=0)
-        bar_subscriptions[(market, symbol, timeframe)] = last_ts
+        bar_subscriptions[key] = last_ts
         await _send_json({
             "event": "bars_subscribed",
             "market": market,
@@ -355,6 +494,7 @@ async def ws_trading(
         key = (market, symbol, timeframe)
         if key in bar_subscriptions:
             del bar_subscriptions[key]
+        _unsubscribe_bar_key(key)
         await _send_json({
             "event": "bars_unsubscribed",
             "market": market,
@@ -468,13 +608,26 @@ async def ws_trading(
                     if not running:
                         break
                     market, symbol, timeframe = key
-                    bars = await asyncio.to_thread(
-                        market_data_runtime.get_recent_bars,
+                    bars = await _read_bar_window(
                         market=market,
                         symbol=symbol,
                         timeframe=timeframe,
                         limit=_BAR_PUSH_LIMIT,
                     )
+                    if (
+                        not bars
+                        or market_data_route._bars_are_stale(
+                            market=market,
+                            timeframe=timeframe,
+                            bars=bars,
+                        )
+                    ) and reserve_market_data_refresh_slot(market, symbol):
+                        enqueue_market_data_refresh(
+                            market=market,
+                            symbol=symbol,
+                            requested_timeframe=timeframe,
+                            min_bars=_BAR_PUSH_LIMIT,
+                        )
                     # Send bars with ts >= last_sent (catches updates to current bar)
                     new_bars = [b for b in bars if _bar_ts_seconds(b) >= last_ts]
                     if not new_bars:
@@ -516,6 +669,8 @@ async def ws_trading(
         pusher_task.cancel()
         bar_pusher_task.cancel()
     finally:
+        for key in list(bar_runtime_subscribers):
+            _unsubscribe_bar_key(key)
         try:
             await websocket.close()
         except Exception:
