@@ -26,6 +26,7 @@ from packages.infra.providers.trading.adapters.base import (
     QuoteSnapshot,
 )
 from packages.infra.redis.client import get_sync_redis_client
+from packages.infra.redis.locks.sandbox_account_lock import sandbox_account_runtime_lock
 
 _CRYPTO_QUOTES = ("USDT", "USDC", "USD", "BTC", "ETH", "EUR")
 _ASSET_CLASSES = ("us_equity", "crypto", "forex", "futures")
@@ -311,115 +312,28 @@ class SandboxTradingAdapter(BrokerAdapter):
             return _to_decimal(latest_bar.close, default="0"), latest_bar.timestamp
         return Decimal("0"), datetime.now(UTC)
 
-    async def fetch_account_state(self) -> AccountState:
-        state = await self._load_state()
-        cash = _to_decimal(state.get("cash"), default=str(self._starting_cash))
-        positions_map = state.get("positions")
-        positions_map = positions_map if isinstance(positions_map, dict) else {}
+    async def _acquire_account_lock(self):
+        for _ in range(5):
+            lease = await sandbox_account_runtime_lock.acquire(self._account_uid)
+            if lease is not None:
+                return lease
+            await asyncio.sleep(0.05)
+        raise RuntimeError("Sandbox account is busy. Retry later.")
 
-        net_position_value = Decimal("0")
-        unrealized = Decimal("0")
-        for raw_symbol, raw_position in positions_map.items():
-            if not isinstance(raw_position, dict):
-                continue
-            symbol = _normalize_symbol(str(raw_symbol))
-            qty_signed = _to_decimal(raw_position.get("qty"), default="0")
-            if qty_signed == 0:
-                continue
-            avg_entry = _to_decimal(raw_position.get("avg_entry_price"), default="0")
-            mark = _to_decimal(raw_position.get("mark_price"), default="0")
-            quote = await self.fetch_latest_quote(symbol)
-            if quote is not None and quote.last is not None:
-                mark = _to_decimal(quote.last, default=str(mark))
-            if mark <= 0:
-                mark = avg_entry
-            raw_position["mark_price"] = str(mark)
-            net_position_value += qty_signed * mark
-            if qty_signed > 0:
-                unrealized += (mark - avg_entry) * qty_signed
-            else:
-                unrealized += (avg_entry - mark) * abs(qty_signed)
-
-        equity = cash + net_position_value
-        buying_power = max(cash, Decimal("0"))
-        state["updated_at"] = datetime.now(UTC).isoformat()
-        await self._save_state(state)
-        return AccountState(
-            cash=cash,
-            equity=equity,
-            buying_power=buying_power,
-            margin_used=Decimal("0"),
-            raw={"account_uid": self._account_uid, "unrealized_pnl": str(unrealized)},
-        )
-
-    async def fetch_positions(self) -> list[PositionRecord]:
-        state = await self._load_state()
-        positions_map = state.get("positions")
-        positions_map = positions_map if isinstance(positions_map, dict) else {}
-        rows: list[PositionRecord] = []
-        dirty = False
-        for raw_symbol, raw_position in positions_map.items():
-            if not isinstance(raw_position, dict):
-                continue
-            symbol = _normalize_symbol(str(raw_symbol))
-            qty_signed = _to_decimal(raw_position.get("qty"), default="0")
-            if qty_signed == 0:
-                continue
-            avg_entry = _to_decimal(raw_position.get("avg_entry_price"), default="0")
-            mark_price = _to_decimal(raw_position.get("mark_price"), default="0")
-            quote = await self.fetch_latest_quote(symbol)
-            if quote is not None and quote.last is not None:
-                resolved_mark = _to_decimal(quote.last, default=str(mark_price))
-                if resolved_mark > 0 and resolved_mark != mark_price:
-                    mark_price = resolved_mark
-                    raw_position["mark_price"] = str(mark_price)
-                    dirty = True
-            if mark_price <= 0:
-                mark_price = avg_entry
-            side = "long" if qty_signed > 0 else "short"
-            qty = abs(qty_signed)
-            realized = _to_decimal(raw_position.get("realized_pnl"), default="0")
-            if side == "long":
-                unrealized = (mark_price - avg_entry) * qty
-            else:
-                unrealized = (avg_entry - mark_price) * qty
-            rows.append(
-                PositionRecord(
-                    symbol=symbol,
-                    side=side,
-                    qty=qty,
-                    avg_entry_price=avg_entry,
-                    mark_price=mark_price,
-                    unrealized_pnl=unrealized,
-                    realized_pnl=realized,
-                    raw=dict(raw_position),
-                )
-            )
-        if dirty:
-            state["updated_at"] = datetime.now(UTC).isoformat()
-            await self._save_state(state)
-        return rows
-
-    async def submit_order(self, intent: OrderIntent) -> OrderState:
-        symbol = _normalize_symbol(intent.symbol)
-        side = str(intent.side).strip().lower()
-        qty = _to_decimal(intent.qty, default="0")
-        if qty <= 0:
-            raise RuntimeError("Sandbox order qty must be > 0.")
-        metadata = intent.metadata if isinstance(intent.metadata, dict) else {}
-        market_hint = metadata.get("market")
-        market_hint_text = str(market_hint).strip().lower() if market_hint is not None else ""
-        asset_class = _infer_asset_class(symbol, market_hint=market_hint_text)
-        slippage_bps = self._resolve_slippage_bps(asset_class)
-        fee_bps = self._resolve_fee_bps(asset_class)
-        fill_price, submitted_at = await self._resolve_fill_price(
-            symbol=symbol,
-            side=side,
-            slippage_bps=slippage_bps,
-        )
-        if fill_price <= 0:
-            raise RuntimeError("Sandbox fill price unavailable from market data.")
-
+    async def _submit_order_locked(
+        self,
+        *,
+        intent: OrderIntent,
+        symbol: str,
+        side: str,
+        qty: Decimal,
+        metadata: dict[str, Any],
+        asset_class: str,
+        slippage_bps: Decimal,
+        fee_bps: Decimal,
+        fill_price: Decimal,
+        submitted_at: datetime,
+    ) -> OrderState:
         state = await self._load_state()
         cash = _to_decimal(state.get("cash"), default=str(self._starting_cash))
         positions_map = state.get("positions")
@@ -438,7 +352,62 @@ class SandboxTradingAdapter(BrokerAdapter):
         fee = (notional * fee_bps) / Decimal("10000")
 
         if side == "buy":
-            cash -= notional + fee
+            required_cash = notional + fee
+            if cash < required_cash:
+                provider_order_id = f"sandbox-{uuid4().hex[:24]}"
+                order_payload = {
+                    "provider_order_id": provider_order_id,
+                    "client_order_id": intent.client_order_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "order_type": intent.order_type,
+                    "qty": str(qty),
+                    "filled_qty": "0",
+                    "status": "rejected",
+                    "submitted_at": submitted_at.isoformat(),
+                    "avg_fill_price": None,
+                    "reject_reason": "insufficient_cash",
+                    "provider_updated_at": submitted_at.isoformat(),
+                    "raw": {
+                        "provider": "sandbox",
+                        "account_uid": self._account_uid,
+                        "simulated": True,
+                        "asset_class": asset_class,
+                        "slippage_bps": str(slippage_bps),
+                        "fee_bps": str(fee_bps),
+                        "fee": str(fee),
+                        "reject_reason": "insufficient_cash",
+                        "required_cash": str(required_cash),
+                        "available_cash": str(cash),
+                    },
+                }
+                await self._save_order(order_payload)
+                return OrderState(
+                    provider_order_id=provider_order_id,
+                    client_order_id=intent.client_order_id,
+                    symbol=symbol,
+                    side=side,
+                    order_type=intent.order_type,
+                    qty=qty,
+                    filled_qty=Decimal("0"),
+                    status="rejected",
+                    submitted_at=submitted_at,
+                    avg_fill_price=None,
+                    reject_reason="insufficient_cash",
+                    provider_updated_at=submitted_at,
+                    raw={
+                        "provider": "sandbox",
+                        "account_uid": self._account_uid,
+                        "asset_class": asset_class,
+                        "slippage_bps": str(slippage_bps),
+                        "fee_bps": str(fee_bps),
+                        "fee": str(fee),
+                        "reject_reason": "insufficient_cash",
+                        "required_cash": str(required_cash),
+                        "available_cash": str(cash),
+                    },
+                )
+            cash -= required_cash
             if current_qty >= 0:
                 new_qty = current_qty + qty
                 if new_qty > 0:
@@ -577,6 +546,136 @@ class SandboxTradingAdapter(BrokerAdapter):
             },
         )
 
+    async def fetch_account_state(self) -> AccountState:
+        state = await self._load_state()
+        cash = _to_decimal(state.get("cash"), default=str(self._starting_cash))
+        positions_map = state.get("positions")
+        positions_map = positions_map if isinstance(positions_map, dict) else {}
+
+        net_position_value = Decimal("0")
+        unrealized = Decimal("0")
+        for raw_symbol, raw_position in positions_map.items():
+            if not isinstance(raw_position, dict):
+                continue
+            symbol = _normalize_symbol(str(raw_symbol))
+            qty_signed = _to_decimal(raw_position.get("qty"), default="0")
+            if qty_signed == 0:
+                continue
+            avg_entry = _to_decimal(raw_position.get("avg_entry_price"), default="0")
+            mark = _to_decimal(raw_position.get("mark_price"), default="0")
+            quote = await self.fetch_latest_quote(symbol)
+            if quote is not None and quote.last is not None:
+                mark = _to_decimal(quote.last, default=str(mark))
+            if mark <= 0:
+                mark = avg_entry
+            raw_position["mark_price"] = str(mark)
+            net_position_value += qty_signed * mark
+            if qty_signed > 0:
+                unrealized += (mark - avg_entry) * qty_signed
+            else:
+                unrealized += (avg_entry - mark) * abs(qty_signed)
+
+        equity = cash + net_position_value
+        buying_power = max(cash, Decimal("0"))
+        state["updated_at"] = datetime.now(UTC).isoformat()
+        await self._save_state(state)
+        return AccountState(
+            cash=cash,
+            equity=equity,
+            buying_power=buying_power,
+            margin_used=Decimal("0"),
+            raw={"account_uid": self._account_uid, "unrealized_pnl": str(unrealized)},
+        )
+
+    async def fetch_positions(self) -> list[PositionRecord]:
+        state = await self._load_state()
+        positions_map = state.get("positions")
+        positions_map = positions_map if isinstance(positions_map, dict) else {}
+        rows: list[PositionRecord] = []
+        dirty = False
+        for raw_symbol, raw_position in positions_map.items():
+            if not isinstance(raw_position, dict):
+                continue
+            symbol = _normalize_symbol(str(raw_symbol))
+            qty_signed = _to_decimal(raw_position.get("qty"), default="0")
+            if qty_signed == 0:
+                continue
+            avg_entry = _to_decimal(raw_position.get("avg_entry_price"), default="0")
+            mark_price = _to_decimal(raw_position.get("mark_price"), default="0")
+            quote = await self.fetch_latest_quote(symbol)
+            if quote is not None and quote.last is not None:
+                resolved_mark = _to_decimal(quote.last, default=str(mark_price))
+                if resolved_mark > 0 and resolved_mark != mark_price:
+                    mark_price = resolved_mark
+                    raw_position["mark_price"] = str(mark_price)
+                    dirty = True
+            if mark_price <= 0:
+                mark_price = avg_entry
+            side = "long" if qty_signed > 0 else "short"
+            qty = abs(qty_signed)
+            realized = _to_decimal(raw_position.get("realized_pnl"), default="0")
+            if side == "long":
+                unrealized = (mark_price - avg_entry) * qty
+            else:
+                unrealized = (avg_entry - mark_price) * qty
+            rows.append(
+                PositionRecord(
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    avg_entry_price=avg_entry,
+                    mark_price=mark_price,
+                    unrealized_pnl=unrealized,
+                    realized_pnl=realized,
+                    raw=dict(raw_position),
+                )
+            )
+        if dirty:
+            state["updated_at"] = datetime.now(UTC).isoformat()
+            await self._save_state(state)
+        return rows
+
+    async def submit_order(self, intent: OrderIntent) -> OrderState:
+        symbol = _normalize_symbol(intent.symbol)
+        side = str(intent.side).strip().lower()
+        qty = _to_decimal(intent.qty, default="0")
+        if qty <= 0:
+            raise RuntimeError("Sandbox order qty must be > 0.")
+        metadata = intent.metadata if isinstance(intent.metadata, dict) else {}
+        market_hint = metadata.get("market")
+        market_hint_text = str(market_hint).strip().lower() if market_hint is not None else ""
+        asset_class = _infer_asset_class(symbol, market_hint=market_hint_text)
+        slippage_bps = self._resolve_slippage_bps(asset_class)
+        fee_bps = self._resolve_fee_bps(asset_class)
+        fill_price, submitted_at = await self._resolve_fill_price(
+            symbol=symbol,
+            side=side,
+            slippage_bps=slippage_bps,
+        )
+        if fill_price <= 0:
+            raise RuntimeError("Sandbox fill price unavailable from market data.")
+        lease = await self._acquire_account_lock()
+        try:
+            return await self._submit_order_locked(
+                intent=intent,
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                metadata=metadata,
+                asset_class=asset_class,
+                slippage_bps=slippage_bps,
+                fee_bps=fee_bps,
+                fill_price=fill_price,
+                submitted_at=submitted_at,
+            )
+        finally:
+            released = await sandbox_account_runtime_lock.release(lease)
+            if not released:
+                logger.warning(
+                    "[sandbox-lock] failed to release account lock account_uid=%s",
+                    self._account_uid,
+                )
+
     async def cancel_order(self, order_id: str) -> bool:
         order = await self.fetch_order(order_id)
         if order is None:
@@ -601,7 +700,13 @@ class SandboxTradingAdapter(BrokerAdapter):
         await asyncio.to_thread(redis.hset, self._orders_key, order_id, json.dumps(payload, separators=(",", ":")))
         return True
 
-    async def fetch_order(self, order_id: str) -> OrderState | None:
+    async def fetch_order(
+        self,
+        order_id: str,
+        *,
+        symbol: str | None = None,
+    ) -> OrderState | None:
+        del symbol
         redis = get_sync_redis_client()
         raw = await asyncio.to_thread(redis.hget, self._orders_key, order_id)
         if not isinstance(raw, str) or not raw.strip():
@@ -616,6 +721,11 @@ class SandboxTradingAdapter(BrokerAdapter):
         provider_updated_at = payload.get("provider_updated_at")
         avg_fill_raw = payload.get("avg_fill_price")
         avg_fill_price = _to_decimal(avg_fill_raw, default="0") if avg_fill_raw is not None else None
+        reject_reason = payload.get("reject_reason")
+        if reject_reason is None:
+            raw_block = payload.get("raw")
+            if isinstance(raw_block, dict):
+                reject_reason = raw_block.get("reject_reason")
         return OrderState(
             provider_order_id=str(payload.get("provider_order_id", order_id)),
             client_order_id=str(payload.get("client_order_id", "")),
@@ -631,7 +741,7 @@ class SandboxTradingAdapter(BrokerAdapter):
                 else None
             ),
             avg_fill_price=avg_fill_price,
-            reject_reason=None,
+            reject_reason=str(reject_reason).strip() or None if reject_reason is not None else None,
             provider_updated_at=(
                 datetime.fromisoformat(provider_updated_at).astimezone(UTC)
                 if isinstance(provider_updated_at, str)

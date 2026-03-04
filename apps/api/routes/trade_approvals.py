@@ -15,6 +15,9 @@ from apps.api.dependencies import get_db
 from packages.infra.db.models.trade_approval_request import TradeApprovalRequest
 from packages.infra.db.models.user import User
 from packages.domain.trading.services.trade_approval_service import TradeApprovalService
+from packages.domain.trading.services.trading_event_outbox_service import (
+    append_trading_event_snapshot,
+)
 from apps.api.services.trading_queue_service import enqueue_execute_approved_open
 
 router = APIRouter(prefix="/trade-approvals", tags=["trade_approvals"])
@@ -133,6 +136,7 @@ async def approve_trade_approval(
         if task_id:
             await service.append_execution_task_id(request_id=row.id, task_id=task_id)
     await db.commit()
+    await append_trading_event_snapshot(db, deployment_id=row.deployment_id)
     return _serialize_trade_approval(row)
 
 
@@ -158,4 +162,5 @@ async def reject_trade_approval(
             detail={"code": "TRADE_APPROVAL_NOT_FOUND", "message": "Approval request not found."},
         )
     await db.commit()
+    await append_trading_event_snapshot(db, deployment_id=row.deployment_id)
     return _serialize_trade_approval(row)

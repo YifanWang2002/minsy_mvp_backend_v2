@@ -10,7 +10,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.domain.trading.runtime.order_state_machine import apply_order_status_transition
+from packages.domain.trading.runtime.order_state_machine import (
+    apply_order_status_transition,
+)
 from packages.infra.providers.trading.adapters.base import BrokerAdapter, OrderIntent
 from packages.infra.db.models.order import Order
 from packages.infra.db.models.order_state_transition import OrderStateTransition
@@ -37,6 +39,10 @@ def _normalize_status(status: str) -> str:
         return normalized
     if normalized in {"cancelled"}:
         return "canceled"
+    if normalized in {"open"}:
+        return "accepted"
+    if normalized in {"closed"}:
+        return "filled"
     if normalized in {"pending"}:
         return "pending_new"
     if normalized in {"done_for_day"}:
@@ -44,9 +50,20 @@ def _normalize_status(status: str) -> str:
     return "new"
 
 
-def _provider_status_metadata(metadata: dict[str, Any], provider_status: str) -> dict[str, Any]:
+def _provider_status_metadata(
+    metadata: dict[str, Any],
+    provider_status: str,
+    *,
+    normalized_status: str | None = None,
+) -> dict[str, Any]:
     payload = dict(metadata) if isinstance(metadata, dict) else {}
-    payload["provider_status"] = provider_status
+    raw_status = str(provider_status).strip().lower()
+    payload["provider_status_raw"] = raw_status
+    payload["provider_status"] = (
+        str(normalized_status).strip().lower()
+        if normalized_status is not None and str(normalized_status).strip()
+        else _normalize_status(raw_status)
+    )
     payload["provider_status_updated_at"] = datetime.now(UTC).isoformat()
     return payload
 
@@ -65,6 +82,11 @@ def _merge_provider_snapshot_metadata(
         ("slippage_bps", "provider_slippage_bps"),
         ("fee_bps", "provider_fee_bps"),
         ("fee", "provider_fee"),
+        ("requested_qty", "provider_requested_qty"),
+        ("submitted_qty", "provider_submitted_qty"),
+        ("qty_normalization", "provider_qty_normalization"),
+        ("requested_time_in_force", "provider_requested_time_in_force"),
+        ("submitted_time_in_force", "provider_submitted_time_in_force"),
     ):
         value = state_raw.get(raw_key)
         if value is None:
@@ -100,13 +122,19 @@ class OrderManager:
         intent: OrderIntent,
         adapter: BrokerAdapter | None = None,
     ) -> OrderSubmitResult:
-        existing = await db.scalar(select(Order).where(Order.client_order_id == intent.client_order_id))
+        existing = await db.scalar(
+            select(Order).where(Order.client_order_id == intent.client_order_id)
+        )
         if existing is not None:
             return OrderSubmitResult(order=existing, idempotent_hit=True)
 
         if adapter is None:
             now = datetime.now(UTC)
-            metadata = _provider_status_metadata(intent.metadata, "accepted")
+            metadata = _provider_status_metadata(
+                intent.metadata,
+                "accepted",
+                normalized_status="accepted",
+            )
             order = Order(
                 deployment_id=deployment_id,
                 provider_order_id=f"paper-{intent.client_order_id}",
@@ -147,8 +175,13 @@ class OrderManager:
         target_status = _normalize_status(state.status)
         now = datetime.now(UTC)
         provider_status = str(state.status).strip().lower() or target_status
-        metadata = _provider_status_metadata(intent.metadata, provider_status)
+        metadata = _provider_status_metadata(
+            intent.metadata,
+            provider_status,
+            normalized_status=target_status,
+        )
         metadata = _merge_provider_snapshot_metadata(metadata, state.raw)
+        accepted_qty = state.qty if Decimal(str(state.qty)) > 0 else intent.qty
         order = Order(
             deployment_id=deployment_id,
             provider_order_id=state.provider_order_id,
@@ -156,7 +189,7 @@ class OrderManager:
             symbol=intent.symbol,
             side=intent.side,
             type=intent.order_type,
-            qty=intent.qty,
+            qty=accepted_qty,
             price=intent.limit_price,
             status="new",
             submitted_at=state.submitted_at or datetime.now(UTC),

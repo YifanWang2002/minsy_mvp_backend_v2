@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
 import httpx
@@ -68,6 +69,50 @@ class AlpacaTradingAdapter(BrokerAdapter):
             "APCA-API-KEY-ID": self.api_key,
             "APCA-API-SECRET-KEY": self.api_secret,
         }
+
+    def _resolve_asset_class(self, intent: OrderIntent) -> str:
+        metadata = intent.metadata if isinstance(intent.metadata, dict) else {}
+        market = str(metadata.get("market") or "").strip().lower()
+        if market in {"stock", "stocks", "equity", "equities"}:
+            return "stocks"
+        if market in {"crypto", "cryptos"}:
+            return "crypto"
+
+        normalized_symbol = str(intent.symbol).strip().upper().replace("/", "")
+        if normalized_symbol.endswith(("USD", "USDT", "USDC")):
+            return "crypto"
+        return "stocks"
+
+    def _normalize_order_intent(self, intent: OrderIntent) -> OrderIntent:
+        if self._resolve_asset_class(intent) != "stocks":
+            return intent
+
+        requested_qty = _to_decimal(intent.qty, default="0")
+        if requested_qty <= 0:
+            return intent
+
+        integral_qty = requested_qty.to_integral_value(rounding=ROUND_DOWN)
+        if integral_qty == requested_qty:
+            return intent
+
+        metadata = dict(intent.metadata) if isinstance(intent.metadata, dict) else {}
+        metadata["alpaca_original_qty"] = str(requested_qty)
+        metadata["alpaca_original_time_in_force"] = str(intent.time_in_force)
+
+        if integral_qty >= Decimal("1"):
+            metadata["alpaca_qty_normalized"] = "rounded_down_to_whole_share"
+            return replace(
+                intent,
+                qty=integral_qty,
+                metadata=metadata,
+            )
+
+        metadata["alpaca_qty_normalized"] = "fractional_day_order"
+        return replace(
+            intent,
+            time_in_force="day",
+            metadata=metadata,
+        )
 
     async def _request(
         self,
@@ -143,26 +188,44 @@ class AlpacaTradingAdapter(BrokerAdapter):
         return positions
 
     async def submit_order(self, intent: OrderIntent) -> OrderState:
+        normalized_intent = self._normalize_order_intent(intent)
         payload: dict[str, Any] = {
-            "symbol": intent.symbol,
-            "qty": str(intent.qty),
-            "side": intent.side,
-            "type": intent.order_type,
-            "time_in_force": intent.time_in_force,
-            "client_order_id": intent.client_order_id,
+            "symbol": normalized_intent.symbol,
+            "qty": str(normalized_intent.qty),
+            "side": normalized_intent.side,
+            "type": normalized_intent.order_type,
+            "time_in_force": normalized_intent.time_in_force,
+            "client_order_id": normalized_intent.client_order_id,
         }
-        if intent.limit_price is not None:
-            payload["limit_price"] = str(intent.limit_price)
-        if intent.stop_price is not None:
-            payload["stop_price"] = str(intent.stop_price)
+        if normalized_intent.limit_price is not None:
+            payload["limit_price"] = str(normalized_intent.limit_price)
+        if normalized_intent.stop_price is not None:
+            payload["stop_price"] = str(normalized_intent.stop_price)
         raw = await self._request("POST", "/v2/orders", json_body=payload)
+        if isinstance(raw, dict):
+            raw = dict(raw)
+            if normalized_intent.qty != intent.qty:
+                raw["requested_qty"] = str(intent.qty)
+                raw["submitted_qty"] = str(normalized_intent.qty)
+                raw["qty_normalization"] = str(
+                    normalized_intent.metadata.get("alpaca_qty_normalized") or "none"
+                )
+            if normalized_intent.time_in_force != intent.time_in_force:
+                raw["requested_time_in_force"] = str(intent.time_in_force)
+                raw["submitted_time_in_force"] = str(normalized_intent.time_in_force)
         return self._map_order(raw)
 
     async def cancel_order(self, order_id: str) -> bool:
         await self._request("DELETE", f"/v2/orders/{order_id}")
         return True
 
-    async def fetch_order(self, order_id: str) -> OrderState | None:
+    async def fetch_order(
+        self,
+        order_id: str,
+        *,
+        symbol: str | None = None,
+    ) -> OrderState | None:
+        del symbol
         try:
             raw = await self._request("GET", f"/v2/orders/{order_id}")
         except AdapterError as exc:

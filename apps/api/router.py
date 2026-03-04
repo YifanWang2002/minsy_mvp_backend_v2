@@ -20,6 +20,7 @@ from apps.api.routes.strategies import router as strategies_router
 from apps.api.routes.trade_approvals import router as trade_approvals_router
 from apps.api.routes.trading_preferences import router as trading_preferences_router
 from apps.api.routes.trading_stream import router as trading_stream_router
+from apps.api.routes.trading_ws import router as trading_ws_router
 
 api_router = APIRouter()
 api_router.include_router(health_router)
@@ -38,3 +39,4 @@ api_router.include_router(deployments_router)
 api_router.include_router(market_data_router)
 api_router.include_router(portfolio_router)
 api_router.include_router(trading_stream_router)
+api_router.include_router(trading_ws_router)

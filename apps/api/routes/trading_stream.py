@@ -12,10 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from apps.api.middleware.auth import get_current_user
 from apps.api.dependencies import get_db
-from packages.domain.trading.pnl.service import PnlService
+from packages.domain.trading.runtime.runtime_service import refresh_portfolio_snapshot_for_poll
 from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.deployment_run import DeploymentRun
 from packages.infra.db.models.fill import Fill
@@ -106,7 +107,13 @@ async def _load_owned_deployment(
     user_id: str,
 ) -> Deployment:
     deployment = await db.scalar(
-        select(Deployment).where(Deployment.id == deployment_id, Deployment.user_id == user_id)
+        select(Deployment)
+        .options(
+            selectinload(Deployment.strategy),
+            selectinload(Deployment.deployment_runs),
+            selectinload(Deployment.positions),
+        )
+        .where(Deployment.id == deployment_id, Deployment.user_id == user_id)
     )
     if deployment is None:
         raise HTTPException(
@@ -121,10 +128,16 @@ async def _build_snapshot_payload(
     *,
     deployment: Deployment,
 ) -> dict[str, object]:
-    pnl_service = PnlService()
-    snapshot = await pnl_service.build_snapshot(db, deployment_id=deployment.id)
+    snapshot, broker_payload = await refresh_portfolio_snapshot_for_poll(
+        db,
+        deployment=deployment,
+    )
     positions = (
-        await db.scalars(select(Position).where(Position.deployment_id == deployment.id))
+        await db.scalars(
+            select(Position)
+            .where(Position.deployment_id == deployment.id)
+            .order_by(Position.updated_at.desc())
+        )
     ).all()
     orders = (
         await db.scalars(
@@ -159,7 +172,11 @@ async def _build_snapshot_payload(
     )
     runtime_state = run.runtime_state if run is not None and isinstance(run.runtime_state, dict) else {}
     scheduler = runtime_state.get("scheduler") if isinstance(runtime_state.get("scheduler"), dict) else {}
-    broker_account = _extract_broker_account_payload(runtime_state)
+    broker_account = (
+        _extract_broker_account_payload({"broker_account": broker_payload})
+        if isinstance(broker_payload, dict)
+        else _extract_broker_account_payload(runtime_state)
+    )
     return {
         "deployment_id": str(deployment.id),
         "status": deployment.status,
@@ -446,9 +463,12 @@ async def stream_deployment(
                 deployment_id=deployment_id,
                 user_id=user_id,
             )
-            deployment_pk = deployment.id
             deployment_status = deployment.status
-            heartbeat_payload = await _append_outbox_snapshot(db, deployment=deployment)
+            deployment_updated_at = (
+                deployment.updated_at.astimezone(UTC).isoformat()
+                if deployment.updated_at is not None
+                else datetime.now(UTC).isoformat()
+            )
             rows = await _poll_outbox_events(
                 db,
                 deployment_id=deployment_id,
@@ -485,27 +505,13 @@ async def stream_deployment(
             if not serialized_rows:
                 now_monotonic = time.monotonic()
                 if now_monotonic - last_heartbeat_at >= heartbeat_seconds:
-                    heartbeat = dict(heartbeat_payload)
-                    heartbeat["cursor"] = next_cursor
-                    if max_events is None:
-                        yield f"event: heartbeat\ndata: {json.dumps(heartbeat, ensure_ascii=True)}\n\n"
-                    else:
-                        heartbeat_row = await _append_heartbeat_outbox_event(
-                            db,
-                            deployment_id=deployment_pk,
-                            deployment_status=deployment_status,
-                            cursor=next_cursor,
-                            updated_at=str(heartbeat.get("updated_at", datetime.now(UTC).isoformat())),
-                        )
-                        heartbeat_event_seq = int(heartbeat_row.event_seq)
-                        await db.rollback()
-                        heartbeat["event_seq"] = heartbeat_event_seq
-                        yield (
-                            f"id: {heartbeat_event_seq}\n"
-                            "event: heartbeat\n"
-                            f"data: {json.dumps(heartbeat, ensure_ascii=True)}\n\n"
-                        )
-                        next_cursor = max(next_cursor, heartbeat_event_seq)
+                    heartbeat = {
+                        "deployment_id": deployment_id,
+                        "status": deployment_status,
+                        "cursor": next_cursor,
+                        "updated_at": deployment_updated_at,
+                    }
+                    yield f"event: heartbeat\ndata: {json.dumps(heartbeat, ensure_ascii=True)}\n\n"
                     last_heartbeat_at = now_monotonic
                     emitted += 1
                     if max_events is not None and emitted >= max_events:

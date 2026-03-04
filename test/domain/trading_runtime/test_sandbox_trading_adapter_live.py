@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 import packages.infra.providers.trading.adapters.sandbox_trading as sandbox_module
 from packages.infra.providers.trading.adapters.base import (
@@ -253,6 +254,91 @@ async def test_020_accessibility_sandbox_fee_and_slippage_profiles(monkeypatch) 
     assert len(ledger_events) >= 2
     assert ledger_events[0]["asset_class"] == "crypto"
     assert ledger_events[1]["asset_class"] == "us_equity"
+    await adapter.aclose()
+
+
+async def test_025_accessibility_sandbox_rejects_buy_when_cash_is_insufficient(monkeypatch) -> None:
+    fake_redis = _FakeRedis()
+    fake_market_data = _FakeMarketDataProvider()
+    monkeypatch.setattr(sandbox_module, "get_sync_redis_client", lambda: fake_redis)
+
+    adapter = SandboxTradingAdapter(
+        account_uid="sandbox-test-025",
+        starting_cash=Decimal("100"),
+        slippage_bps=Decimal("0"),
+        fee_bps=Decimal("0"),
+        market_data_provider=fake_market_data,
+    )
+
+    rejected = await adapter.submit_order(
+        OrderIntent(
+            client_order_id="sandbox-reject-1",
+            symbol="BTC/USD",
+            side="buy",
+            qty=Decimal("2"),
+            order_type="market",
+        )
+    )
+    assert rejected.status == "rejected"
+    assert rejected.filled_qty == Decimal("0")
+    assert rejected.reject_reason == "insufficient_cash"
+    assert rejected.avg_fill_price is None
+
+    fetched = await adapter.fetch_order(rejected.provider_order_id)
+    assert fetched is not None
+    assert fetched.status == "rejected"
+    assert fetched.reject_reason == "insufficient_cash"
+
+    account = await adapter.fetch_account_state()
+    assert account.cash == Decimal("100")
+
+    positions = await adapter.fetch_positions()
+    assert positions == []
+
+    fills = await adapter.fetch_recent_fills()
+    assert fills == []
+    await adapter.aclose()
+
+
+async def test_027_accessibility_sandbox_submit_order_uses_account_lock(monkeypatch) -> None:
+    fake_redis = _FakeRedis()
+    fake_market_data = _FakeMarketDataProvider()
+    monkeypatch.setattr(sandbox_module, "get_sync_redis_client", lambda: fake_redis)
+
+    calls: list[tuple[str, str]] = []
+
+    async def _fake_acquire(account_uid: str):
+        calls.append(("acquire", account_uid))
+        return SimpleNamespace(key=f"lock:{account_uid}", token="tok", via_fallback=True)
+
+    async def _fake_release(lease) -> bool:
+        calls.append(("release", lease.key))
+        return True
+
+    monkeypatch.setattr(sandbox_module.sandbox_account_runtime_lock, "acquire", _fake_acquire)
+    monkeypatch.setattr(sandbox_module.sandbox_account_runtime_lock, "release", _fake_release)
+
+    adapter = SandboxTradingAdapter(
+        account_uid="sandbox-test-027",
+        starting_cash=Decimal("1000"),
+        slippage_bps=Decimal("0"),
+        fee_bps=Decimal("0"),
+        market_data_provider=fake_market_data,
+    )
+
+    state = await adapter.submit_order(
+        OrderIntent(
+            client_order_id="sandbox-lock-buy-1",
+            symbol="BTC/USD",
+            side="buy",
+            qty=Decimal("1"),
+            order_type="market",
+        )
+    )
+
+    assert state.status == "filled"
+    assert calls[0] == ("acquire", "sandbox-test-027")
+    assert calls[1] == ("release", "lock:sandbox-test-027")
     await adapter.aclose()
 
 

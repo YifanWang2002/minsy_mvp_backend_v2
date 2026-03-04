@@ -9,6 +9,9 @@ from uuid import UUID
 
 from packages.shared_settings.schema.settings import settings
 from packages.domain.trading.runtime.runtime_service import execute_manual_trade_action
+from packages.domain.trading.services.trading_event_outbox_service import (
+    append_trading_event_snapshot,
+)
 from packages.infra.db import session as db_module
 from packages.infra.db.models.manual_trade_action import ManualTradeAction
 from packages.domain.trading.services.trade_approval_service import TradeApprovalService
@@ -62,6 +65,7 @@ async def _run_execute_approved_open(request_id: UUID) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 await service.mark_failed(request_id=request.id, error=f"execution_exception:{type(exc).__name__}")
                 await session.commit()
+                await append_trading_event_snapshot(session, deployment_id=request.deployment_id)
                 return {
                     "request_id": str(request.id),
                     "status": "failed",
@@ -74,6 +78,7 @@ async def _run_execute_approved_open(request_id: UUID) -> dict[str, Any]:
                     order_id=result.order_id,
                 )
                 await session.commit()
+                await append_trading_event_snapshot(session, deployment_id=request.deployment_id)
                 return {
                     "request_id": str(request.id),
                     "status": "executed",
@@ -81,8 +86,21 @@ async def _run_execute_approved_open(request_id: UUID) -> dict[str, Any]:
                     "manual_action_id": str(action.id),
                 }
 
+            if result.status == "accepted":
+                request.execution_order_id = result.order_id
+                request.execution_error = None
+                await session.commit()
+                await append_trading_event_snapshot(session, deployment_id=request.deployment_id)
+                return {
+                    "request_id": str(request.id),
+                    "status": "executing",
+                    "order_id": str(result.order_id) if result.order_id is not None else None,
+                    "manual_action_id": str(action.id),
+                }
+
             await service.mark_failed(request_id=request.id, error=result.reason)
             await session.commit()
+            await append_trading_event_snapshot(session, deployment_id=request.deployment_id)
             return {
                 "request_id": str(request.id),
                 "status": "failed",

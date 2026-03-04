@@ -6,10 +6,31 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
-    "new": {"pending_new", "accepted", "partially_filled", "filled", "canceled", "rejected", "expired"},
-    "pending_new": {"accepted", "partially_filled", "filled", "canceled", "rejected", "expired"},
+    "new": {
+        "pending_new",
+        "accepted",
+        "partially_filled",
+        "filled",
+        "canceled",
+        "rejected",
+        "expired",
+    },
+    "pending_new": {
+        "accepted",
+        "partially_filled",
+        "filled",
+        "canceled",
+        "rejected",
+        "expired",
+    },
     "accepted": {"partially_filled", "filled", "canceled", "rejected", "expired"},
-    "partially_filled": {"partially_filled", "filled", "canceled", "rejected", "expired"},
+    "partially_filled": {
+        "partially_filled",
+        "filled",
+        "canceled",
+        "rejected",
+        "expired",
+    },
     "filled": set(),
     "canceled": set(),
     "rejected": set(),
@@ -26,6 +47,10 @@ def normalize_order_status(status: str) -> str:
     value = status.strip().lower()
     if value == "cancelled":
         return "canceled"
+    if value == "open":
+        return "accepted"
+    if value == "closed":
+        return "filled"
     if value in {"pending", "pending_new"}:
         return "pending_new"
     if value in {"done_for_day", "expired"}:
@@ -65,9 +90,7 @@ def apply_order_status_transition(
         "reason": reason,
         "ts": datetime.now(UTC).isoformat(),
     }
-    transition_rows.append(
-        transition_record
-    )
+    transition_rows.append(transition_record)
     metadata["state_transitions"] = transition_rows[-100:]
     metadata["last_state_reason"] = reason
     metadata["last_state_updated_at"] = datetime.now(UTC).isoformat()

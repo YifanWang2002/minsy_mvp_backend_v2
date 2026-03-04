@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from packages.domain.trading.runtime.timeframe_scheduler import (
+    SUPPORTED_RUNTIME_TIMEFRAMES,
     compute_time_bucket,
+    is_supported_runtime_timeframe,
+    normalize_runtime_timeframe,
     should_trigger_cycle,
     timeframe_to_seconds,
 )
@@ -18,6 +21,24 @@ def test_000_accessibility_timeframe_to_seconds() -> None:
 def test_010_timeframe_to_seconds_fallback_for_invalid_input() -> None:
     assert timeframe_to_seconds("bad", default_seconds=75) == 75
     assert timeframe_to_seconds("0x", default_seconds=42) == 42
+    assert timeframe_to_seconds("7m", default_seconds=99) == 99
+
+
+def test_015_runtime_timeframe_support_matches_dsl_enum() -> None:
+    assert SUPPORTED_RUNTIME_TIMEFRAMES == (
+        "1m",
+        "2m",
+        "5m",
+        "15m",
+        "30m",
+        "1h",
+        "2h",
+        "4h",
+        "1d",
+    )
+    assert is_supported_runtime_timeframe("4H") is True
+    assert is_supported_runtime_timeframe("7m") is False
+    assert normalize_runtime_timeframe("7m") == "1m"
 
 
 def test_020_should_trigger_cycle_bucket_progression() -> None:

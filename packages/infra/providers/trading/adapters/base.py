@@ -144,7 +144,12 @@ class BrokerAdapter(ABC):
         """Cancel one provider order id."""
 
     @abstractmethod
-    async def fetch_order(self, order_id: str) -> OrderState | None:
+    async def fetch_order(
+        self,
+        order_id: str,
+        *,
+        symbol: str | None = None,
+    ) -> OrderState | None:
         """Fetch one order by provider order id."""
 
     @abstractmethod

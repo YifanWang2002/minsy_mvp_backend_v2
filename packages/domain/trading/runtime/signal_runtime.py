@@ -14,6 +14,16 @@ from packages.domain.market_data.runtime import RuntimeBar
 from packages.domain.strategy.pipeline import parse_strategy_payload
 
 SignalType = Literal["OPEN_LONG", "OPEN_SHORT", "CLOSE", "NOOP"]
+_LOOKBACK_KEYS = {
+    "period",
+    "length",
+    "fast",
+    "slow",
+    "signal",
+    "k_period",
+    "k_smooth",
+    "d_period",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +46,24 @@ def _extract_condition(node: dict[str, Any] | None) -> dict[str, Any] | None:
 class LiveSignalRuntime:
     """Evaluate strategy DSL against latest bar-close frame."""
 
+    def required_bars(self, *, strategy_payload: dict[str, Any]) -> int:
+        max_lookback = 1
+        factors = strategy_payload.get("factors")
+        if isinstance(factors, dict):
+            for raw_factor in factors.values():
+                if not isinstance(raw_factor, dict):
+                    continue
+                params = raw_factor.get("params")
+                if not isinstance(params, dict):
+                    continue
+                for key, value in params.items():
+                    if key not in _LOOKBACK_KEYS:
+                        continue
+                    if isinstance(value, bool) or not isinstance(value, int | float):
+                        continue
+                    max_lookback = max(max_lookback, int(value))
+        return max(2, max_lookback + 2)
+
     def evaluate(
         self,
         *,
@@ -43,11 +71,16 @@ class LiveSignalRuntime:
         bars: list[RuntimeBar],
         current_position_side: str = "flat",
     ) -> SignalDecision:
-        if len(bars) < 2:
+        required_bars = self.required_bars(strategy_payload=strategy_payload)
+        if len(bars) < required_bars:
             return SignalDecision(
                 signal="NOOP",
                 reason="insufficient_bars",
                 bar_time=bars[-1].timestamp if bars else None,
+                metadata={
+                    "required_bars": required_bars,
+                    "available_bars": len(bars),
+                },
             )
 
         parsed = parse_strategy_payload(strategy_payload)

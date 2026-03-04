@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from packages.infra.providers.trading.adapters.base import OrderIntent
@@ -17,6 +19,7 @@ def _install_fake_ccxt(monkeypatch) -> None:
             self.has: dict[str, Any] = {"fetchCurrencies": True}
             self.markets: dict[str, dict[str, Any]] = {"BTC/USDT": {}}
             self.last_create_order: dict[str, Any] | None = None
+            self.last_fetch_order: dict[str, Any] | None = None
             self.sandbox_mode: bool = False
 
         def set_sandbox_mode(self, enabled: bool) -> None:
@@ -53,6 +56,25 @@ def _install_fake_ccxt(monkeypatch) -> None:
                 "filled": amount,
                 "status": "closed",
                 "average": price or 1.0,
+                "timestamp": int(datetime.now(UTC).timestamp() * 1000),
+            }
+
+        async def fetch_order(
+            self,
+            order_id: str,
+            symbol: str | None = None,
+        ) -> dict[str, Any]:
+            self.last_fetch_order = {"order_id": order_id, "symbol": symbol}
+            return {
+                "id": order_id,
+                "clientOrderId": "client-fetch-1",
+                "symbol": symbol or "BTC/USDT",
+                "side": "buy",
+                "type": "market",
+                "amount": 1,
+                "filled": 1,
+                "status": "closed",
+                "average": 1.0,
                 "timestamp": int(datetime.now(UTC).timestamp() * 1000),
             }
 
@@ -95,6 +117,7 @@ def test_000_accessibility_okx_sandbox_sets_demo_headers(monkeypatch) -> None:
     assert exchange.urls["api"]["rest"] == "https://us.okx.com"
     assert exchange.headers.get("x-simulated-trading") == "1"
     assert exchange.has.get("fetchCurrencies") is False
+    asyncio.run(adapter.aclose())
 
 
 async def test_010_accessibility_okx_submit_order_adds_td_mode(monkeypatch) -> None:
@@ -135,3 +158,75 @@ def test_020_accessibility_non_okx_not_forced_with_okx_headers(monkeypatch) -> N
     exchange = adapter._exchange
     assert exchange.urls["api"]["rest"] == "https://api.binance.com"
     assert exchange.headers.get("x-simulated-trading") is None
+    asyncio.run(adapter.aclose())
+
+
+async def test_030_accessibility_okx_account_state_prefers_info_equity_fields(
+    monkeypatch,
+) -> None:
+    _install_fake_ccxt(monkeypatch)
+
+    adapter = CcxtTradingAdapter(
+        exchange_id="okx",
+        api_key="k",
+        api_secret="s",
+        password="p",
+        sandbox=True,
+    )
+
+    async def _fake_fetch_balance() -> dict[str, Any]:
+        return {
+            "free": {"USDT": "4999178.417952595"},
+            "used": {"USDT": "0"},
+            "total": {"USDT": "4999178.417952595"},
+            "info": {
+                "data": [
+                    {
+                        "totalEq": "5000.0",
+                        "availEq": "4999.17",
+                        "details": [
+                            {
+                                "ccy": "USDT",
+                                "availEq": "4999.17",
+                                "eqUsd": "4999.17",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+
+    adapter._exchange.fetch_balance = _fake_fetch_balance
+    try:
+        state = await adapter.fetch_account_state()
+
+        assert state.equity == Decimal("5000")
+        assert state.cash == Decimal("4999.17")
+        assert state.buying_power == Decimal("4999.17")
+    finally:
+        await adapter.aclose()
+
+
+async def test_040_accessibility_okx_fetch_order_passes_symbol_when_provided(
+    monkeypatch,
+) -> None:
+    _install_fake_ccxt(monkeypatch)
+
+    adapter = CcxtTradingAdapter(
+        exchange_id="okx",
+        api_key="k",
+        api_secret="s",
+        password="p",
+        sandbox=True,
+    )
+
+    try:
+        state = await adapter.fetch_order("ord-1", symbol="BTCUSD")
+
+        assert state is not None
+        assert adapter._exchange.last_fetch_order == {
+            "order_id": "ord-1",
+            "symbol": "BTC/USDT",
+        }
+    finally:
+        await adapter.aclose()

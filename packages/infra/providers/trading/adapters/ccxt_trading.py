@@ -27,6 +27,16 @@ def _to_decimal(value: Any, *, default: str = "0") -> Decimal:
     return Decimal(str(value))
 
 
+def _positive_decimal_or_none(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return None
+    return parsed if parsed > 0 else None
+
+
 def _parse_timestamp_ms(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -51,6 +61,57 @@ def _normalize_symbol(symbol: str) -> str:
             normalized_quote = "USDT" if quote == "USD" else quote
             return f"{base}/{normalized_quote}"
     return f"{compact}/USDT"
+
+
+def _extract_okx_info_account(raw: dict[str, Any]) -> dict[str, Any] | None:
+    info = raw.get("info")
+    if not isinstance(info, dict):
+        return None
+    data = info.get("data")
+    if not isinstance(data, list) or not data:
+        return None
+    account = data[0]
+    return account if isinstance(account, dict) else None
+
+
+def _extract_okx_equity(raw: dict[str, Any]) -> Decimal | None:
+    account = _extract_okx_info_account(raw)
+    if not isinstance(account, dict):
+        return None
+    for key in ("totalEq", "adjEq", "eqUsd"):
+        parsed = _positive_decimal_or_none(account.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _extract_okx_cash(raw: dict[str, Any]) -> Decimal | None:
+    account = _extract_okx_info_account(raw)
+    if not isinstance(account, dict):
+        return None
+
+    for key in ("availEq", "cashBal"):
+        parsed = _positive_decimal_or_none(account.get(key))
+        if parsed is not None:
+            return parsed
+
+    details = account.get("details")
+    if not isinstance(details, list):
+        return None
+
+    stable_total = Decimal("0")
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        currency = str(item.get("ccy") or "").strip().upper()
+        if currency not in {"USD", "USDT", "USDC"}:
+            continue
+        for key in ("availEq", "eqUsd", "availBal", "cashBal"):
+            parsed = _positive_decimal_or_none(item.get(key))
+            if parsed is not None:
+                stable_total += parsed
+                break
+    return stable_total if stable_total > 0 else None
 
 
 class CcxtTradingAdapter(BrokerAdapter):
@@ -180,6 +241,15 @@ class CcxtTradingAdapter(BrokerAdapter):
         cash = _to_decimal(free.get(quote), default="0")
         if cash <= 0:
             cash = _to_decimal(free.get("USD"), default="0")
+        if self._exchange_id == "okx" and isinstance(raw, dict):
+            normalized_equity = _extract_okx_equity(raw)
+            if normalized_equity is not None:
+                equity = normalized_equity
+            normalized_cash = _extract_okx_cash(raw)
+            if normalized_cash is not None:
+                cash = normalized_cash
+            if cash > 0 and equity > 0 and cash > (equity * Decimal("5")):
+                cash = equity
         buying_power = cash if cash > 0 else equity
         return AccountState(
             cash=cash,
@@ -243,9 +313,18 @@ class CcxtTradingAdapter(BrokerAdapter):
         await self._exchange.cancel_order(order_id)
         return True
 
-    async def fetch_order(self, order_id: str) -> OrderState | None:
+    async def fetch_order(
+        self,
+        order_id: str,
+        *,
+        symbol: str | None = None,
+    ) -> OrderState | None:
         try:
-            raw = await self._exchange.fetch_order(order_id)
+            resolved_symbol = await self._resolve_symbol(symbol) if symbol else None
+            if resolved_symbol:
+                raw = await self._exchange.fetch_order(order_id, symbol=resolved_symbol)
+            else:
+                raw = await self._exchange.fetch_order(order_id)
         except Exception as exc:  # noqa: BLE001
             text = str(exc).lower()
             if "not found" in text or "does not exist" in text:
