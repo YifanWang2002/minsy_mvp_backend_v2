@@ -1010,8 +1010,10 @@ class DeploymentHandler:
             amount = Decimal(text)
         except (InvalidOperation, ValueError):
             return None
-        if amount <= 0:
+        if amount < 0:
             return None
+        if amount == 0:
+            return "0"
         return format(amount.normalize(), "f")
 
     def _ensure_profile_defaults(self, profile: dict[str, Any]) -> dict[str, Any]:
@@ -1025,7 +1027,7 @@ class DeploymentHandler:
         normalized["deployment_confirmation_status"] = self._normalize_confirmation_status(
             normalized.get("deployment_confirmation_status")
         )
-        normalized.setdefault("planned_capital_allocated", "10000")
+        normalized.setdefault("planned_capital_allocated", "0")
         normalized.setdefault("planned_auto_start", True)
         if not isinstance(normalized.get("planned_risk_limits"), dict):
             normalized["planned_risk_limits"] = {}
@@ -1036,7 +1038,7 @@ class DeploymentHandler:
         normalized.setdefault("deployment_status", "blocked")
         normalized.setdefault("broker_readiness_status", "unknown")
         normalized.setdefault("deployment_confirmation_status", "pending")
-        normalized.setdefault("planned_capital_allocated", "10000")
+        normalized.setdefault("planned_capital_allocated", "0")
         normalized.setdefault("planned_auto_start", True)
         normalized.setdefault("planned_risk_limits", {})
         normalized.setdefault("deployment_summary_snapshot", {})

@@ -174,6 +174,25 @@ class BrokerAccountCredentialsUpdateRequest(BaseModel):
         return value
 
 
+class BuiltinSandboxBrokerAccountRequest(BaseModel):
+    """Optional built-in sandbox account configuration patch."""
+
+    starting_cash: Decimal | None = Field(default=None, gt=0)
+    slippage_bps: Decimal | None = Field(default=None, ge=0)
+    fee_bps: Decimal | None = Field(default=None, ge=0)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def to_metadata_patch(self) -> dict[str, Any]:
+        patch = dict(self.metadata)
+        if self.starting_cash is not None:
+            patch["starting_cash"] = str(self.starting_cash)
+        if self.slippage_bps is not None:
+            patch["slippage_bps"] = str(self.slippage_bps)
+        if self.fee_bps is not None:
+            patch["fee_bps"] = str(self.fee_bps)
+        return patch
+
+
 class IssueReportCreateRequest(BaseModel):
     """Upload one user-reported issue bundle with screenshot and context."""
 

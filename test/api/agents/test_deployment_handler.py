@@ -446,3 +446,13 @@ async def test_deployment_handler_parameter_change_resets_confirmation() -> None
     assert updated["profile"]["deployment_confirmation_status"] == "pending"
     assert updated["runtime"]["auto_execute_pending"] is False
     assert result.missing_fields == ["deployment_confirmation_status"]
+
+
+def test_deployment_handler_defaults_capital_to_auto_resolution() -> None:
+    handler = DeploymentHandler()
+
+    artifacts = handler.init_artifacts()
+
+    assert artifacts["profile"]["planned_capital_allocated"] == "0"
+    assert artifacts["runtime"]["planned_capital_allocated"] == "0"
+    assert handler._normalize_capital_value("0") == "0"

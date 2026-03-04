@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -180,3 +181,117 @@ async def test_trading_create_builtin_sandbox_returns_structured_broker_summary(
     assert payload["ok"] is True
     assert payload["broker_account"]["broker_account_id"] == str(sandbox.id)
     assert payload["broker_account"]["label"] == "Built-in Sandbox"
+
+
+async def test_trading_create_paper_deployment_defaults_capital_to_auto_resolution(
+    monkeypatch,
+) -> None:
+    claims = SimpleNamespace(user_id=uuid4(), session_id=uuid4())
+    captured: dict[str, Decimal] = {}
+    strategy_id = uuid4()
+    broker_account_id = uuid4()
+    deployment_id = uuid4()
+
+    monkeypatch.setattr(trading_tools, "_resolve_context_claims", lambda ctx: claims)
+    monkeypatch.setattr(trading_tools, "_new_db_session", _fake_new_db_session)
+
+    async def _fake_resolve_strategy_id_for_context(
+        *,
+        db,
+        user_id,
+        session_id,
+        strategy_id,
+    ):
+        del db, user_id, session_id, strategy_id
+        return (claims.session_id, None)
+
+    async def _fake_resolve_broker_account_id_for_context(
+        *,
+        db,
+        user_id,
+        broker_account_id,
+    ):
+        del db, user_id, broker_account_id
+        return (claims.user_id, None)
+
+    async def _fake_create_deployment(
+        *,
+        db,
+        strategy_id,
+        broker_account_id,
+        user_id,
+        mode,
+        capital_allocated,
+        risk_limits,
+        runtime_state,
+    ):
+        del db, strategy_id, broker_account_id, user_id, mode, risk_limits, runtime_state
+        captured["capital_allocated"] = capital_allocated
+        return SimpleNamespace(id=deployment_id)
+
+    monkeypatch.setattr(
+        trading_tools,
+        "_resolve_strategy_id_for_context",
+        _fake_resolve_strategy_id_for_context,
+    )
+    monkeypatch.setattr(
+        trading_tools,
+        "_resolve_broker_account_id_for_context",
+        _fake_resolve_broker_account_id_for_context,
+    )
+    monkeypatch.setattr(trading_tools.deployment_ops, "create_deployment", _fake_create_deployment)
+    monkeypatch.setattr(
+        trading_tools.deployment_ops,
+        "serialize_deployment",
+        lambda deployment: {"deployment_id": str(deployment.id)},
+    )
+
+    result = await trading_tools.trading_create_paper_deployment(ctx=object())
+    payload = json.loads(result)
+
+    assert payload["ok"] is True
+    assert payload["resolved_strategy_id"] == str(claims.session_id)
+    assert payload["resolved_broker_account_id"] == str(claims.user_id)
+    assert captured["capital_allocated"] == Decimal("0")
+
+
+async def test_trading_create_builtin_sandbox_accepts_account_config_patch(
+    monkeypatch,
+) -> None:
+    claims = SimpleNamespace(user_id=uuid4(), session_id=uuid4())
+    sandbox = _fake_broker_account(
+        provider="sandbox",
+        supported_markets=["us_stocks", "crypto"],
+        is_default=True,
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(trading_tools, "_resolve_context_claims", lambda ctx: claims)
+    monkeypatch.setattr(trading_tools, "_new_db_session", _fake_new_db_session)
+
+    async def _fake_ensure_builtin_sandbox_account(db, *, user_id, metadata=None):
+        del db, user_id
+        captured["metadata"] = metadata
+        sandbox.metadata_ = metadata or {}
+        return sandbox
+
+    monkeypatch.setattr(
+        trading_tools,
+        "ensure_builtin_sandbox_account",
+        _fake_ensure_builtin_sandbox_account,
+    )
+
+    result = await trading_tools.trading_create_builtin_sandbox_broker_account(
+        starting_cash="25000",
+        fee_bps="3",
+        slippage_bps="1.5",
+        ctx=object(),
+    )
+    payload = json.loads(result)
+
+    assert payload["ok"] is True
+    assert captured["metadata"] == {
+        "starting_cash": "25000",
+        "fee_bps": "3",
+        "slippage_bps": "1.5",
+    }

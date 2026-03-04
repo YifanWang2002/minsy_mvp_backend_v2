@@ -186,7 +186,7 @@ def _normalize_optional_dict(value: Any, *, field_name: str) -> tuple[dict[str, 
 
 def _normalize_capital_allocated(value: Any) -> tuple[Decimal, str | None]:
     if value is None:
-        return Decimal("10000"), None
+        return Decimal("0"), None
     try:
         capital = Decimal(str(value))
     except Exception:  # noqa: BLE001
@@ -194,6 +194,27 @@ def _normalize_capital_allocated(value: Any) -> tuple[Decimal, str | None]:
     if capital < 0:
         return Decimal("0"), "capital_allocated must be >= 0."
     return capital, None
+
+
+def _normalize_optional_decimal_text(
+    value: Any,
+    *,
+    field_name: str,
+    allow_zero: bool,
+) -> tuple[str | None, str | None]:
+    if value is None:
+        return None, None
+    text = str(value).strip()
+    if not text:
+        return None, None
+    try:
+        parsed = Decimal(text)
+    except Exception:  # noqa: BLE001
+        return None, f"{field_name} must be a valid decimal number."
+    if parsed < 0 or (parsed == 0 and not allow_zero):
+        comparator = ">= 0" if allow_zero else "> 0"
+        return None, f"{field_name} must be {comparator}."
+    return format(parsed.normalize(), "f"), None
 
 
 def _serialize_broker_account_summary(account: BrokerAccount) -> dict[str, Any]:
@@ -616,7 +637,7 @@ async def trading_check_deployment_readiness(
 async def trading_create_paper_deployment(
     strategy_id: str = "",
     broker_account_id: str = "",
-    capital_allocated: str = "10000",
+    capital_allocated: str = "0",
     risk_limits: dict[str, Any] | None = None,
     runtime_state: dict[str, Any] | None = None,
     auto_start: bool = False,
@@ -776,6 +797,9 @@ async def trading_create_paper_deployment(
 
 
 async def trading_create_builtin_sandbox_broker_account(
+    starting_cash: str = "",
+    slippage_bps: str = "",
+    fee_bps: str = "",
     ctx: Context | None = None,
 ) -> str:
     """Create or reactivate the current user's built-in sandbox broker account."""
@@ -791,6 +815,49 @@ async def trading_create_builtin_sandbox_broker_account(
             error_code="MISSING_CONTEXT",
             error_message="Missing user context.",
         )
+    normalized_starting_cash, starting_cash_error = _normalize_optional_decimal_text(
+        starting_cash,
+        field_name="starting_cash",
+        allow_zero=False,
+    )
+    if starting_cash_error is not None:
+        return _payload(
+            tool="trading_create_builtin_sandbox_broker_account",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=starting_cash_error,
+        )
+    normalized_slippage_bps, slippage_error = _normalize_optional_decimal_text(
+        slippage_bps,
+        field_name="slippage_bps",
+        allow_zero=True,
+    )
+    if slippage_error is not None:
+        return _payload(
+            tool="trading_create_builtin_sandbox_broker_account",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=slippage_error,
+        )
+    normalized_fee_bps, fee_error = _normalize_optional_decimal_text(
+        fee_bps,
+        field_name="fee_bps",
+        allow_zero=True,
+    )
+    if fee_error is not None:
+        return _payload(
+            tool="trading_create_builtin_sandbox_broker_account",
+            ok=False,
+            error_code="INVALID_INPUT",
+            error_message=fee_error,
+        )
+    metadata_patch: dict[str, Any] = {}
+    if normalized_starting_cash is not None:
+        metadata_patch["starting_cash"] = normalized_starting_cash
+    if normalized_slippage_bps is not None:
+        metadata_patch["slippage_bps"] = normalized_slippage_bps
+    if normalized_fee_bps is not None:
+        metadata_patch["fee_bps"] = normalized_fee_bps
 
     try:
         async with await _new_db_session() as db:
@@ -806,6 +873,7 @@ async def trading_create_builtin_sandbox_broker_account(
             account = await ensure_builtin_sandbox_account(
                 db,
                 user_id=user.id,
+                **({"metadata": metadata_patch} if metadata_patch else {}),
             )
     except (HTTPException, DomainError) as exc:
         code, message = _http_error_code_message(exc)

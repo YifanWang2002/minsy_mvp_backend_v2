@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -16,7 +17,10 @@ from packages.domain.exceptions import DomainError
 from packages.domain.notification.services.notification_outbox_service import (
     NotificationOutboxService,
 )
-from packages.domain.trading.runtime.timeframe_scheduler import timeframe_to_seconds
+from packages.domain.trading.runtime.timeframe_scheduler import (
+    SUPPORTED_RUNTIME_TIMEFRAMES,
+    timeframe_to_seconds,
+)
 from packages.domain.trading.services.broker_provider_service import (
     BrokerProviderService,
 )
@@ -44,6 +48,23 @@ _VALID_PHASE_TRANSITIONS: dict[str, set[str]] = {
     "error": {"kyc", "pre_strategy", "strategy"},
     "completed": set(),
 }
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentRuntimeCompatibility:
+    """Deploy-time compatibility snapshot for the current paper runtime."""
+
+    status: str
+    blockers: tuple[str, ...]
+    blocker_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentCapitalResolution:
+    """Resolved deployment capital amount plus provenance."""
+
+    amount: Decimal
+    source: str
 
 
 def _raise_error(*, status_code: int, code: str, message: str) -> None:
@@ -102,22 +123,50 @@ def _resolve_capital_from_validation_metadata(account: BrokerAccount) -> Decimal
     return None
 
 
+def _resolve_capital_from_account_metadata(account: BrokerAccount) -> Decimal | None:
+    metadata = account.metadata_ if isinstance(account.metadata_, dict) else {}
+    for key in ("starting_cash", "capital_allocated", "equity", "cash", "buying_power"):
+        capital = _positive_decimal_or_none(metadata.get(key))
+        if capital is not None:
+            return capital
+    return None
+
+
 async def _resolve_deployment_capital_allocated(
     *,
     requested_capital: Decimal,
     account: BrokerAccount,
 ) -> Decimal:
+    resolution = await resolve_deployment_capital(
+        requested_capital=requested_capital,
+        account=account,
+    )
+    return resolution.amount
+
+
+async def resolve_deployment_capital(
+    *,
+    requested_capital: Decimal,
+    account: BrokerAccount,
+) -> DeploymentCapitalResolution:
     if requested_capital > 0:
-        return requested_capital.quantize(Decimal("0.01"))
+        return DeploymentCapitalResolution(
+            amount=requested_capital.quantize(Decimal("0.01")),
+            source="requested",
+        )
 
     from_probe = _resolve_capital_from_validation_metadata(account)
     if from_probe is not None:
-        return from_probe
+        return DeploymentCapitalResolution(amount=from_probe, source="validation_metadata")
+
+    from_account_metadata = _resolve_capital_from_account_metadata(account)
+    if from_account_metadata is not None:
+        return DeploymentCapitalResolution(amount=from_account_metadata, source="account_metadata")
 
     binding = _broker_provider_service.build_adapter_binding_from_account(account)
     adapter = binding.adapter
     if adapter is None:
-        return Decimal("10000.00")
+        return DeploymentCapitalResolution(amount=Decimal("10000.00"), source="fallback_default")
 
     try:
         state = await adapter.fetch_account_state()
@@ -128,15 +177,15 @@ async def _resolve_deployment_capital_allocated(
             binding.provider,
             type(exc).__name__,
         )
-        return Decimal("10000.00")
+        return DeploymentCapitalResolution(amount=Decimal("10000.00"), source="fallback_default")
     finally:
         await adapter.aclose()
 
     for candidate in (state.equity, state.cash, state.buying_power):
         capital = _positive_decimal_or_none(candidate)
         if capital is not None:
-            return capital
-    return Decimal("10000.00")
+            return DeploymentCapitalResolution(amount=capital, source="adapter_fetch")
+    return DeploymentCapitalResolution(amount=Decimal("10000.00"), source="fallback_default")
 
 
 async def _resolve_broker_provider_for_run(db: AsyncSession, *, run: DeploymentRun) -> str:
@@ -145,6 +194,88 @@ async def _resolve_broker_provider_for_run(db: AsyncSession, *, run: DeploymentR
         return "unknown"
     provider = str(account.provider).strip().lower()
     return provider or "unknown"
+
+
+def assess_strategy_runtime_compatibility(
+    strategy_payload: dict[str, Any] | None,
+    *,
+    fallback_timeframe: str | None = None,
+) -> DeploymentRuntimeCompatibility:
+    payload = strategy_payload if isinstance(strategy_payload, dict) else {}
+    blockers: list[str] = []
+    blocker_codes: list[str] = []
+    timeframe = str(payload.get("timeframe") or fallback_timeframe or "").strip().lower()
+    if timeframe and timeframe not in SUPPORTED_RUNTIME_TIMEFRAMES:
+        blocker_codes.append("DEPLOYMENT_RUNTIME_UNSUPPORTED_TIMEFRAME")
+        blockers.append(
+            "Paper trading timeframe must match DSL-supported values: "
+            f"{', '.join(SUPPORTED_RUNTIME_TIMEFRAMES)}."
+        )
+
+    universe = payload.get("universe") if isinstance(payload.get("universe"), dict) else {}
+    raw_tickers = universe.get("tickers")
+    tickers = raw_tickers if isinstance(raw_tickers, list) else []
+    normalized_tickers = [str(item).strip() for item in tickers if str(item).strip()]
+    if len(normalized_tickers) > 1:
+        blocker_codes.append("DEPLOYMENT_RUNTIME_UNSUPPORTED_MULTI_SYMBOL")
+        blockers.append(
+            "Paper trading currently supports only one symbol per deployment."
+        )
+
+    trade = payload.get("trade") if isinstance(payload.get("trade"), dict) else {}
+    unsupported_exit_types: set[str] = set()
+    for side_name in ("long", "short"):
+        side = trade.get(side_name) if isinstance(trade.get(side_name), dict) else {}
+        exits = side.get("exits")
+        if not isinstance(exits, list):
+            continue
+        for rule in exits:
+            if not isinstance(rule, dict):
+                continue
+            exit_type = str(rule.get("type", "")).strip().lower()
+            if exit_type and exit_type != "signal_exit":
+                unsupported_exit_types.add(exit_type)
+    if unsupported_exit_types:
+        blocker_codes.append("DEPLOYMENT_RUNTIME_UNSUPPORTED_EXIT_RULE")
+        blockers.append(
+            "Paper trading currently supports only signal_exit exits; "
+            f"found unsupported exits: {', '.join(sorted(unsupported_exit_types))}."
+        )
+
+    return DeploymentRuntimeCompatibility(
+        status="blocked" if blockers else "ok",
+        blockers=tuple(blockers),
+        blocker_codes=tuple(blocker_codes),
+    )
+
+
+def build_runtime_compatibility_error(
+    compatibility: DeploymentRuntimeCompatibility,
+) -> tuple[str, str]:
+    if compatibility.status != "blocked":
+        return ("", "")
+    codes = set(compatibility.blocker_codes)
+    if codes == {"DEPLOYMENT_RUNTIME_UNSUPPORTED_MULTI_SYMBOL"}:
+        return (
+            "DEPLOYMENT_RUNTIME_UNSUPPORTED_MULTI_SYMBOL",
+            compatibility.blockers[0],
+        )
+    if codes == {"DEPLOYMENT_RUNTIME_UNSUPPORTED_EXIT_RULE"}:
+        return (
+            "DEPLOYMENT_RUNTIME_UNSUPPORTED_EXIT_RULE",
+            compatibility.blockers[0],
+        )
+    if codes == {"DEPLOYMENT_RUNTIME_UNSUPPORTED_TIMEFRAME"}:
+        return (
+            "DEPLOYMENT_RUNTIME_UNSUPPORTED_TIMEFRAME",
+            compatibility.blockers[0],
+        )
+    return (
+        "DEPLOYMENT_RUNTIME_UNSUPPORTED",
+        compatibility.blockers[0]
+        if compatibility.blockers
+        else "Strategy is not compatible with the current paper runtime.",
+    )
 
 
 def _latest_run(deployment: Deployment) -> DeploymentRun | None:
@@ -420,6 +551,17 @@ async def create_deployment(
             code="STRATEGY_NOT_DEPLOYABLE",
             message="Strategy is not ready for deployment.",
         )
+    compatibility = assess_strategy_runtime_compatibility(
+        strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {},
+        fallback_timeframe=strategy.timeframe,
+    )
+    if compatibility.status == "blocked":
+        error_code, message = build_runtime_compatibility_error(compatibility)
+        _raise_error(
+            status_code=422,
+            code=error_code,
+            message=message,
+        )
 
     account = await db.scalar(
         select(BrokerAccount).where(
@@ -446,10 +588,17 @@ async def create_deployment(
             message="Broker account mode does not match deployment mode.",
         )
 
-    resolved_capital_allocated = await _resolve_deployment_capital_allocated(
+    capital_resolution = await resolve_deployment_capital(
         requested_capital=capital_allocated,
         account=account,
     )
+    resolved_capital_allocated = capital_resolution.amount
+    resolved_runtime_state = dict(runtime_state) if isinstance(runtime_state, dict) else {}
+    resolved_runtime_state["capital_resolution"] = {
+        "source": capital_resolution.source,
+        "resolved_amount": format(resolved_capital_allocated, "f"),
+        "requested_amount": format(capital_allocated.quantize(Decimal("0.01")), "f"),
+    }
 
     deployment = Deployment(
         strategy_id=strategy_id,
@@ -467,7 +616,7 @@ async def create_deployment(
         strategy_id=deployment.strategy_id,
         broker_account_id=broker_account_id,
         status="stopped",
-        runtime_state=runtime_state,
+        runtime_state=resolved_runtime_state,
     )
     db.add(run)
     await db.commit()
@@ -547,6 +696,19 @@ async def apply_status_transition(
     execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     execution = dict(execution)
     if target_status == "active":
+        compatibility = assess_strategy_runtime_compatibility(
+            deployment.strategy.dsl_payload
+            if deployment.strategy is not None and isinstance(deployment.strategy.dsl_payload, dict)
+            else {},
+            fallback_timeframe=deployment.strategy.timeframe if deployment.strategy is not None else None,
+        )
+        if compatibility.status == "blocked":
+            error_code, message = build_runtime_compatibility_error(compatibility)
+            _raise_error(
+                status_code=422,
+                code=error_code,
+                message=message,
+            )
         if not settings.paper_trading_enabled and deployment.mode == "paper":
             _raise_error(
                 status_code=409,

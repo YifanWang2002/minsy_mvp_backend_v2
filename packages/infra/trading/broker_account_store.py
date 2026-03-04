@@ -96,6 +96,7 @@ async def ensure_builtin_sandbox_account(
     *,
     user_id: UUID,
     source: str = "builtin_sandbox",
+    metadata: dict[str, Any] | None = None,
 ) -> BrokerAccount:
     existing = await find_builtin_sandbox_account(
         db,
@@ -112,6 +113,18 @@ async def ensure_builtin_sandbox_account(
         exchange_id="sandbox",
         is_sandbox=True,
     )
+    metadata_patch = metadata if isinstance(metadata, dict) else {}
+    existing_metadata = (
+        dict(existing.metadata_)
+        if existing is not None and isinstance(existing.metadata_, dict)
+        else {}
+    )
+    merged_metadata = dict(existing_metadata)
+    merged_metadata["source"] = source
+    for key, value in metadata_patch.items():
+        if value is None:
+            continue
+        merged_metadata[str(key)] = value
 
     if existing is None:
         account = BrokerAccount(
@@ -131,7 +144,7 @@ async def ensure_builtin_sandbox_account(
             last_validation_error_code=None,
             capabilities=capabilities,
             validation_metadata=dict(_SANDBOX_VALIDATION_METADATA),
-            metadata_={"source": source},
+            metadata_=merged_metadata,
             status="active",
             last_error=None,
         )
@@ -151,7 +164,7 @@ async def ensure_builtin_sandbox_account(
         account.last_validation_error_code = None
         account.capabilities = capabilities
         account.validation_metadata = dict(_SANDBOX_VALIDATION_METADATA)
-        account.metadata_ = {"source": source}
+        account.metadata_ = merged_metadata
         account.status = "active"
         account.last_error = None
         action = "update"

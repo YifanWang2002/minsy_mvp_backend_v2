@@ -27,18 +27,24 @@ from apps.api.schemas.events import (
     SignalResponse,
 )
 from apps.api.schemas.requests import DeploymentCreateRequest, ManualTradeActionRequest
+from apps.worker.io.tasks.manual_trade_action import enqueue_execute_manual_trade_action
 from apps.api.services.trading_queue_service import enqueue_paper_trading_runtime
 from packages.core.events.notification_events import EVENT_DEPLOYMENT_STARTED
 from packages.domain.notification.services.notification_outbox_service import (
     NotificationOutboxService,
 )
+from packages.domain.trading import deployment_ops as deployment_ops_domain
 from packages.domain.trading.runtime.runtime_service import (
     execute_manual_trade_action,
     process_deployment_signal_cycle,
+    reconcile_manual_action_terminal_state,
 )
 from packages.domain.trading.runtime.timeframe_scheduler import timeframe_to_seconds
 from packages.domain.trading.services.broker_provider_service import (
     BrokerProviderService,
+)
+from packages.domain.trading.services.trading_event_outbox_service import (
+    append_trading_event_snapshot,
 )
 from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.deployment import Deployment
@@ -60,6 +66,15 @@ router = APIRouter(prefix="/deployments", tags=["deployments"])
 
 _DEPLOYABLE_STRATEGY_STATUSES = {"validated", "backtested", "deployed"}
 _broker_provider_service = BrokerProviderService()
+
+
+def _deployment_query_options() -> tuple[object, ...]:
+    return (
+        selectinload(Deployment.deployment_runs).selectinload(
+            DeploymentRun.broker_account
+        ),
+        selectinload(Deployment.strategy),
+    )
 
 
 def _decimal_to_float(value: Decimal | None) -> float | None:
@@ -106,8 +121,28 @@ def _positive_decimal_or_none(value: Any) -> Decimal | None:
 
 
 def _resolve_capital_from_validation_metadata(account: BrokerAccount) -> Decimal | None:
-    metadata = account.validation_metadata if isinstance(account.validation_metadata, dict) else {}
-    for key in ("paper_equity", "paper_cash", "paper_buying_power", "equity", "cash", "buying_power"):
+    metadata = (
+        account.validation_metadata
+        if isinstance(account.validation_metadata, dict)
+        else {}
+    )
+    for key in (
+        "paper_equity",
+        "paper_cash",
+        "paper_buying_power",
+        "equity",
+        "cash",
+        "buying_power",
+    ):
+        capital = _positive_decimal_or_none(metadata.get(key))
+        if capital is not None:
+            return capital
+    return None
+
+
+def _resolve_capital_from_account_metadata(account: BrokerAccount) -> Decimal | None:
+    metadata = account.metadata_ if isinstance(account.metadata_, dict) else {}
+    for key in ("starting_cash", "capital_allocated", "equity", "cash", "buying_power"):
         capital = _positive_decimal_or_none(metadata.get(key))
         if capital is not None:
             return capital
@@ -125,6 +160,10 @@ async def _resolve_deployment_capital_allocated(
     from_probe = _resolve_capital_from_validation_metadata(account)
     if from_probe is not None:
         return from_probe
+
+    from_account_metadata = _resolve_capital_from_account_metadata(account)
+    if from_account_metadata is not None:
+        return from_account_metadata
 
     binding = _broker_provider_service.build_adapter_binding_from_account(account)
     adapter = binding.adapter
@@ -151,8 +190,12 @@ async def _resolve_deployment_capital_allocated(
     return Decimal("10000.00")
 
 
-async def _resolve_broker_provider_for_run(db: AsyncSession, *, run: DeploymentRun) -> str:
-    account = await db.scalar(select(BrokerAccount).where(BrokerAccount.id == run.broker_account_id))
+async def _resolve_broker_provider_for_run(
+    db: AsyncSession, *, run: DeploymentRun
+) -> str:
+    account = await db.scalar(
+        select(BrokerAccount).where(BrokerAccount.id == run.broker_account_id)
+    )
     if account is None:
         return "unknown"
     provider = str(account.provider).strip().lower()
@@ -163,7 +206,9 @@ def _serialize_run(run: DeploymentRun | None) -> DeploymentRunResponse | None:
     if run is None:
         return None
     state = run.runtime_state if isinstance(run.runtime_state, dict) else {}
-    scheduler = state.get("scheduler") if isinstance(state.get("scheduler"), dict) else {}
+    scheduler = (
+        state.get("scheduler") if isinstance(state.get("scheduler"), dict) else {}
+    )
     return DeploymentRunResponse(
         deployment_run_id=run.id,
         deployment_id=run.deployment_id,
@@ -192,26 +237,49 @@ def _latest_run(deployment: Deployment) -> DeploymentRun | None:
 
 def _serialize_deployment(deployment: Deployment) -> DeploymentResponse:
     run = _latest_run(deployment)
+    broker_provider = None
+    if run is not None and run.broker_account is not None:
+        provider = str(run.broker_account.provider).strip().lower()
+        broker_provider = provider or None
+    strategy_name = None
+    if deployment.strategy is not None:
+        raw_strategy_name = str(deployment.strategy.name).strip()
+        strategy_name = raw_strategy_name or None
     strategy_payload = (
         deployment.strategy.dsl_payload
-        if deployment.strategy is not None and isinstance(deployment.strategy.dsl_payload, dict)
+        if deployment.strategy is not None
+        and isinstance(deployment.strategy.dsl_payload, dict)
         else {}
     )
-    universe = strategy_payload.get("universe", {}) if isinstance(strategy_payload.get("universe"), dict) else {}
-    symbols = universe.get("tickers") if isinstance(universe.get("tickers"), list) else []
+    universe = (
+        strategy_payload.get("universe", {})
+        if isinstance(strategy_payload.get("universe"), dict)
+        else {}
+    )
+    symbols = (
+        universe.get("tickers") if isinstance(universe.get("tickers"), list) else []
+    )
     market = universe.get("market") if isinstance(universe.get("market"), str) else None
-    timeframe = strategy_payload.get("timeframe") if isinstance(strategy_payload.get("timeframe"), str) else None
+    timeframe = (
+        strategy_payload.get("timeframe")
+        if isinstance(strategy_payload.get("timeframe"), str)
+        else None
+    )
     return DeploymentResponse(
         deployment_id=deployment.id,
         strategy_id=deployment.strategy_id,
+        strategy_name=strategy_name,
         user_id=deployment.user_id,
+        broker_provider=broker_provider,
         mode=deployment.mode,
         status=deployment.status,
         market=market,
         symbols=[str(symbol) for symbol in symbols],
         timeframe=timeframe,
         capital_allocated=float(deployment.capital_allocated),
-        risk_limits=deployment.risk_limits if isinstance(deployment.risk_limits, dict) else {},
+        risk_limits=deployment.risk_limits
+        if isinstance(deployment.risk_limits, dict)
+        else {},
         deployed_at=deployment.deployed_at,
         stopped_at=deployment.stopped_at,
         created_at=deployment.created_at,
@@ -225,6 +293,17 @@ def _serialize_order(order: Order) -> OrderResponse:
     provider_status = metadata.get("provider_status")
     if not isinstance(provider_status, str) or not provider_status.strip():
         provider_status = order.status
+    display_price = _decimal_to_float(order.price)
+    if display_price is None:
+        submitted_mark_price = metadata.get("submitted_mark_price")
+        try:
+            display_price = (
+                float(submitted_mark_price)
+                if submitted_mark_price is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            display_price = None
     return OrderResponse(
         order_id=order.id,
         deployment_id=order.deployment_id,
@@ -234,7 +313,7 @@ def _serialize_order(order: Order) -> OrderResponse:
         side=order.side,
         type=order.type,
         qty=float(order.qty),
-        price=_decimal_to_float(order.price),
+        price=display_price,
         status=order.status,
         provider_status=str(provider_status),
         reject_reason=order.reject_reason,
@@ -421,7 +500,7 @@ async def _load_owned_deployment(
 ) -> Deployment:
     deployment = await db.scalar(
         select(Deployment)
-        .options(selectinload(Deployment.deployment_runs), selectinload(Deployment.strategy))
+        .options(*_deployment_query_options())
         .where(
             Deployment.id == deployment_id,
             Deployment.user_id == user_id,
@@ -472,6 +551,22 @@ async def create_deployment(
                 "message": "Strategy is not ready for deployment.",
             },
         )
+    compatibility = deployment_ops_domain.assess_strategy_runtime_compatibility(
+        strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {},
+        fallback_timeframe=strategy.timeframe,
+    )
+    if compatibility.status == "blocked":
+        error_code, message = deployment_ops_domain.build_runtime_compatibility_error(
+            compatibility
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": error_code,
+                "message": message,
+                "blockers": list(compatibility.blockers),
+            },
+        )
 
     account = await db.scalar(
         select(BrokerAccount).where(
@@ -503,11 +598,30 @@ async def create_deployment(
                 "message": "Broker account mode does not match deployment mode.",
             },
         )
+    if str(account.status).strip().lower() != "active":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "BROKER_ACCOUNT_INACTIVE",
+                "message": "Broker account must be active before deployment.",
+            },
+        )
 
-    capital_allocated = await _resolve_deployment_capital_allocated(
+    capital_resolution = await deployment_ops_domain.resolve_deployment_capital(
         requested_capital=payload.capital_allocated,
         account=account,
     )
+    capital_allocated = capital_resolution.amount
+    resolved_runtime_state = (
+        dict(payload.runtime_state) if isinstance(payload.runtime_state, dict) else {}
+    )
+    resolved_runtime_state["capital_resolution"] = {
+        "source": capital_resolution.source,
+        "resolved_amount": format(capital_allocated, "f"),
+        "requested_amount": format(
+            payload.capital_allocated.quantize(Decimal("0.01")), "f"
+        ),
+    }
 
     deployment = Deployment(
         strategy_id=payload.strategy_id,
@@ -525,16 +639,17 @@ async def create_deployment(
         strategy_id=deployment.strategy_id,
         broker_account_id=payload.broker_account_id,
         status="stopped",
-        runtime_state=payload.runtime_state,
+        runtime_state=resolved_runtime_state,
     )
     db.add(run)
     await db.commit()
     deployment = await db.scalar(
         select(Deployment)
-        .options(selectinload(Deployment.deployment_runs), selectinload(Deployment.strategy))
+        .options(*_deployment_query_options())
         .where(Deployment.id == deployment.id)
     )
     assert deployment is not None
+    await append_trading_event_snapshot(db, deployment_id=deployment.id)
     return _serialize_deployment(deployment)
 
 
@@ -546,7 +661,7 @@ async def list_deployments(
     rows = (
         await db.scalars(
             select(Deployment)
-            .options(selectinload(Deployment.deployment_runs), selectinload(Deployment.strategy))
+            .options(*_deployment_query_options())
             .where(Deployment.user_id == user.id)
             .order_by(Deployment.created_at.desc()),
         )
@@ -587,22 +702,69 @@ async def _apply_status_transition(
     now = datetime.now(UTC)
     timeframe_raw = (
         deployment.strategy.dsl_payload.get("timeframe")
-        if deployment.strategy is not None and isinstance(deployment.strategy.dsl_payload, dict)
-        else deployment.strategy.timeframe if deployment.strategy is not None else "1m"
+        if deployment.strategy is not None
+        and isinstance(deployment.strategy.dsl_payload, dict)
+        else deployment.strategy.timeframe
+        if deployment.strategy is not None
+        else "1m"
     )
-    timeframe_seconds = timeframe_to_seconds(str(timeframe_raw or "1m"), default_seconds=60)
+    timeframe_seconds = timeframe_to_seconds(
+        str(timeframe_raw or "1m"), default_seconds=60
+    )
     state = dict(run.runtime_state) if isinstance(run.runtime_state, dict) else {}
-    scheduler = state.get("scheduler") if isinstance(state.get("scheduler"), dict) else {}
+    scheduler = (
+        state.get("scheduler") if isinstance(state.get("scheduler"), dict) else {}
+    )
     scheduler = dict(scheduler)
-    execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
+    execution = (
+        state.get("execution") if isinstance(state.get("execution"), dict) else {}
+    )
     execution = dict(execution)
     if target_status == "active":
+        compatibility = deployment_ops_domain.assess_strategy_runtime_compatibility(
+            deployment.strategy.dsl_payload
+            if deployment.strategy is not None
+            and isinstance(deployment.strategy.dsl_payload, dict)
+            else {},
+            fallback_timeframe=deployment.strategy.timeframe
+            if deployment.strategy is not None
+            else None,
+        )
+        if compatibility.status == "blocked":
+            error_code, message = (
+                deployment_ops_domain.build_runtime_compatibility_error(compatibility)
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": error_code,
+                    "message": message,
+                    "blockers": list(compatibility.blockers),
+                },
+            )
         if not settings.paper_trading_enabled and deployment.mode == "paper":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
                     "code": "PAPER_TRADING_DISABLED",
                     "message": "Paper trading is currently disabled.",
+                },
+            )
+        broker_account = run.broker_account
+        if broker_account is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "BROKER_ACCOUNT_NOT_FOUND",
+                    "message": "Broker account is missing for this deployment run.",
+                },
+            )
+        if str(broker_account.status).strip().lower() != "active":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "BROKER_ACCOUNT_INACTIVE",
+                    "message": "Broker account must be active before starting deployment.",
                 },
             )
         deployment.status = "active"
@@ -623,7 +785,9 @@ async def _apply_status_transition(
         broker_provider = await _resolve_broker_provider_for_run(db, run=run)
         execution.update(
             {
-                "order_execution_mode": "broker" if settings.paper_trading_execute_orders else "simulated",
+                "order_execution_mode": "broker"
+                if settings.paper_trading_execute_orders
+                else "simulated",
                 "market_data_source": f"{broker_provider}_rest",
                 "broker_provider": broker_provider,
                 "updated_at": now.isoformat(),
@@ -663,9 +827,10 @@ async def _apply_status_transition(
 
     await db.commit()
     await runtime_state_store.upsert(deployment.id, state)
+    await append_trading_event_snapshot(db, deployment_id=deployment.id)
     reloaded = await db.scalar(
         select(Deployment)
-        .options(selectinload(Deployment.deployment_runs), selectinload(Deployment.strategy))
+        .options(*_deployment_query_options())
         .where(Deployment.id == deployment.id)
     )
     if reloaded is None:
@@ -690,12 +855,23 @@ async def _enqueue_deployment_started_notification(
 
     strategy_payload = (
         deployment.strategy.dsl_payload
-        if deployment.strategy is not None and isinstance(deployment.strategy.dsl_payload, dict)
+        if deployment.strategy is not None
+        and isinstance(deployment.strategy.dsl_payload, dict)
         else {}
     )
-    universe = strategy_payload.get("universe") if isinstance(strategy_payload.get("universe"), dict) else {}
-    symbols = universe.get("tickers") if isinstance(universe.get("tickers"), list) else []
-    timeframe = strategy_payload.get("timeframe") if isinstance(strategy_payload.get("timeframe"), str) else None
+    universe = (
+        strategy_payload.get("universe")
+        if isinstance(strategy_payload.get("universe"), dict)
+        else {}
+    )
+    symbols = (
+        universe.get("tickers") if isinstance(universe.get("tickers"), list) else []
+    )
+    timeframe = (
+        strategy_payload.get("timeframe")
+        if isinstance(strategy_payload.get("timeframe"), str)
+        else None
+    )
 
     payload = {
         "deployment_id": str(deployment.id),
@@ -720,8 +896,12 @@ async def start_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentActionResponse:
-    deployment = await _load_owned_deployment(db, deployment_id=deployment_id, user_id=user.id)
-    deployment = await _apply_status_transition(db, deployment=deployment, target_status="active")
+    deployment = await _load_owned_deployment(
+        db, deployment_id=deployment_id, user_id=user.id
+    )
+    deployment = await _apply_status_transition(
+        db, deployment=deployment, target_status="active"
+    )
 
     task_id: str | None = None
     if settings.paper_trading_enqueue_on_start:
@@ -738,8 +918,12 @@ async def pause_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentActionResponse:
-    deployment = await _load_owned_deployment(db, deployment_id=deployment_id, user_id=user.id)
-    deployment = await _apply_status_transition(db, deployment=deployment, target_status="paused")
+    deployment = await _load_owned_deployment(
+        db, deployment_id=deployment_id, user_id=user.id
+    )
+    deployment = await _apply_status_transition(
+        db, deployment=deployment, target_status="paused"
+    )
     return DeploymentActionResponse(deployment=_serialize_deployment(deployment))
 
 
@@ -749,8 +933,12 @@ async def stop_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentActionResponse:
-    deployment = await _load_owned_deployment(db, deployment_id=deployment_id, user_id=user.id)
-    deployment = await _apply_status_transition(db, deployment=deployment, target_status="stopped")
+    deployment = await _load_owned_deployment(
+        db, deployment_id=deployment_id, user_id=user.id
+    )
+    deployment = await _apply_status_transition(
+        db, deployment=deployment, target_status="stopped"
+    )
     return DeploymentActionResponse(deployment=_serialize_deployment(deployment))
 
 
@@ -807,14 +995,18 @@ async def list_deployment_pnl(
 
 
 @router.post("/{deployment_id}/manual-action", response_model=ManualTradeActionResponse)
-@router.post("/{deployment_id}/manual-actions", response_model=ManualTradeActionResponse)
+@router.post(
+    "/{deployment_id}/manual-actions", response_model=ManualTradeActionResponse
+)
 async def create_manual_action(
     deployment_id: UUID,
     payload: ManualTradeActionRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ManualTradeActionResponse:
-    await _load_owned_deployment(db, deployment_id=deployment_id, user_id=user.id)
+    deployment = await _load_owned_deployment(
+        db, deployment_id=deployment_id, user_id=user.id
+    )
     action = ManualTradeAction(
         user_id=user.id,
         deployment_id=deployment_id,
@@ -825,12 +1017,125 @@ async def create_manual_action(
     db.add(action)
     await db.commit()
     await db.refresh(action)
-    await execute_manual_trade_action(
+    action_name = str(payload.action).strip().lower()
+    requires_active_deployment = action_name not in {"stop", "close", "reduce"}
+    if requires_active_deployment and deployment.status != "active":
+        action.status = "rejected"
+        action.payload = {
+            **(action.payload if isinstance(action.payload, dict) else {}),
+            "_execution": {
+                "status": "rejected",
+                "reason": f"deployment_{deployment.status}",
+            },
+        }
+        await db.commit()
+        await db.refresh(action)
+        return _serialize_manual_action(action)
+    task_id = enqueue_execute_manual_trade_action(action.id)
+    if task_id is not None:
+        await db.refresh(action)
+        if action.status == "pending":
+            payload_dict = action.payload if isinstance(action.payload, dict) else {}
+            execution = (
+                payload_dict.get("_execution")
+                if isinstance(payload_dict.get("_execution"), dict)
+                else {}
+            )
+            action.status = "executing"
+            action.payload = {
+                **payload_dict,
+                "_execution": {
+                    **execution,
+                    "status": "executing",
+                    "reason": "queued",
+                    "task_id": task_id,
+                },
+            }
+            await db.commit()
+            await db.refresh(action)
+        return _serialize_manual_action(action)
+    result = await execute_manual_trade_action(
         db,
         deployment_id=deployment_id,
         action=action,
     )
+    if result.status == "deferred" and result.reason == "deployment_locked":
+        retry_after_seconds_raw = result.metadata.get("retry_after_seconds")
+        try:
+            retry_after_seconds = max(1, int(retry_after_seconds_raw))
+        except (TypeError, ValueError):
+            retry_after_seconds = 1
+        retry_task_id = enqueue_execute_manual_trade_action(
+            action.id,
+            countdown_seconds=retry_after_seconds,
+        )
+        if retry_task_id is not None:
+            payload_dict = action.payload if isinstance(action.payload, dict) else {}
+            execution = (
+                payload_dict.get("_execution")
+                if isinstance(payload_dict.get("_execution"), dict)
+                else {}
+            )
+            action.status = "executing"
+            action.payload = {
+                **payload_dict,
+                "_execution": {
+                    **execution,
+                    "status": "executing",
+                    "reason": "waiting_for_runtime_lock",
+                    "task_id": retry_task_id,
+                },
+            }
+            await db.commit()
+        else:
+            payload_dict = action.payload if isinstance(action.payload, dict) else {}
+            execution = (
+                payload_dict.get("_execution")
+                if isinstance(payload_dict.get("_execution"), dict)
+                else {}
+            )
+            action.status = "failed"
+            action.payload = {
+                **payload_dict,
+                "_execution": {
+                    **execution,
+                    "status": "failed",
+                    "reason": "lock_retry_enqueue_failed",
+                },
+            }
+            await db.commit()
     await db.refresh(action)
+    return _serialize_manual_action(action)
+
+
+@router.get(
+    "/{deployment_id}/manual-actions/latest",
+    response_model=ManualTradeActionResponse,
+)
+async def get_latest_manual_action(
+    deployment_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ManualTradeActionResponse:
+    await _load_owned_deployment(db, deployment_id=deployment_id, user_id=user.id)
+    action = await db.scalar(
+        select(ManualTradeAction)
+        .where(
+            ManualTradeAction.deployment_id == deployment_id,
+            ManualTradeAction.user_id == user.id,
+        )
+        .order_by(ManualTradeAction.created_at.desc(), ManualTradeAction.id.desc())
+        .limit(1)
+    )
+    if action is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "MANUAL_ACTION_NOT_FOUND",
+                "message": "No manual action found for deployment.",
+            },
+        )
+    await reconcile_manual_action_terminal_state(db, action=action)
     return _serialize_manual_action(action)
 
 
@@ -858,7 +1163,10 @@ async def list_deployment_signals(
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"code": "SIGNAL_CURSOR_INVALID", "message": "Cursor must be a valid UUID."},
+                detail={
+                    "code": "SIGNAL_CURSOR_INVALID",
+                    "message": "Cursor must be a valid UUID.",
+                },
             ) from exc
 
         cursor_row = await db.scalar(
@@ -870,7 +1178,10 @@ async def list_deployment_signals(
         if cursor_row is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"code": "SIGNAL_CURSOR_NOT_FOUND", "message": "Cursor event not found."},
+                detail={
+                    "code": "SIGNAL_CURSOR_NOT_FOUND",
+                    "message": "Cursor event not found.",
+                },
             )
         stmt = stmt.where(
             or_(
@@ -886,7 +1197,9 @@ async def list_deployment_signals(
     return [_serialize_signal(record) for record in rows]
 
 
-@router.post("/{deployment_id}/process-now", response_model=DeploymentSignalProcessResponse)
+@router.post(
+    "/{deployment_id}/process-now", response_model=DeploymentSignalProcessResponse
+)
 async def process_deployment_now(
     deployment_id: UUID,
     user: User = Depends(get_current_user),

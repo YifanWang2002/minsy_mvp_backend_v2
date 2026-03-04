@@ -17,6 +17,7 @@ from apps.api.schemas.events import BrokerAccountResponse, CcxtExchangeInfo
 from apps.api.schemas.requests import (
     BrokerAccountCreateRequest,
     BrokerAccountCredentialsUpdateRequest,
+    BuiltinSandboxBrokerAccountRequest,
 )
 from packages.domain.trading.services.broker_validation_service import (
     BrokerCredentialValidationResult,
@@ -520,12 +521,14 @@ async def create_broker_account(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_builtin_sandbox_broker_account(
+    payload: BuiltinSandboxBrokerAccountRequest | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BrokerAccountResponse:
     account = await store_ensure_builtin_sandbox_account(
         db,
         user_id=user.id,
+        metadata=payload.to_metadata_patch() if payload is not None else None,
     )
     return _to_response(account)
 

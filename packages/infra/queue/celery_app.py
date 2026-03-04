@@ -35,6 +35,7 @@ _INCLUDES_CPU: tuple[str, ...] = (
     "apps.worker.cpu.tasks.stress",
 )
 _INCLUDES_IO: tuple[str, ...] = (
+    "apps.worker.io.tasks.manual_trade_action",
     "apps.worker.io.tasks.market_data",
     "apps.worker.io.tasks.maintenance",
     "apps.worker.io.tasks.notification",

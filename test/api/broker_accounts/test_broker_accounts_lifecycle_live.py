@@ -76,6 +76,11 @@ def test_020_builtin_sandbox_create_deactivate_and_reactivate(
     created = api_test_client.post(
         "/api/v1/broker-accounts/builtin-sandbox",
         headers=auth_headers,
+        json={
+            "starting_cash": "25000",
+            "fee_bps": "3",
+            "metadata": {"tag": "keep-me"},
+        },
     )
     assert created.status_code == 201, created.text
     created_payload = created.json()
@@ -83,6 +88,9 @@ def test_020_builtin_sandbox_create_deactivate_and_reactivate(
     assert created_payload["provider"] == "sandbox"
     assert created_payload["mode"] == "paper"
     assert created_payload["status"] == "active"
+    assert created_payload["metadata"]["starting_cash"] == "25000"
+    assert created_payload["metadata"]["fee_bps"] == "3"
+    assert created_payload["metadata"]["tag"] == "keep-me"
 
     deactivated = api_test_client.post(
         "/api/v1/broker-accounts/builtin-sandbox/deactivate",
@@ -101,3 +109,18 @@ def test_020_builtin_sandbox_create_deactivate_and_reactivate(
     reactivated_payload = reactivated.json()
     assert str(reactivated_payload["broker_account_id"]) == broker_account_id
     assert reactivated_payload["status"] == "active"
+    assert reactivated_payload["metadata"]["starting_cash"] == "25000"
+    assert reactivated_payload["metadata"]["fee_bps"] == "3"
+    assert reactivated_payload["metadata"]["tag"] == "keep-me"
+
+    updated = api_test_client.post(
+        "/api/v1/broker-accounts/builtin-sandbox",
+        headers=auth_headers,
+        json={"starting_cash": "50000"},
+    )
+    assert updated.status_code == 201, updated.text
+    updated_payload = updated.json()
+    assert str(updated_payload["broker_account_id"]) == broker_account_id
+    assert updated_payload["metadata"]["starting_cash"] == "50000"
+    assert updated_payload["metadata"]["fee_bps"] == "3"
+    assert updated_payload["metadata"]["tag"] == "keep-me"
