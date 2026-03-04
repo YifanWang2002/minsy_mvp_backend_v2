@@ -10,11 +10,17 @@ from telegram import Bot, InlineKeyboardMarkup, Update
 from telegram.error import TelegramError
 
 from packages.shared_settings.schema.settings import settings
-from packages.domain.user.services.social_connector_service import SocialConnectorService
-from packages.domain.trading.services.telegram_approval_codec import TelegramApprovalCodec
+from packages.domain.user.services.social_connector_service import (
+    SocialConnectorService,
+)
+from packages.domain.trading.services.telegram_approval_codec import (
+    TelegramApprovalCodec,
+)
 from packages.domain.user.services.telegram_test_batches import TelegramTestBatchService
 from packages.domain.trading.services.trade_approval_service import TradeApprovalService
-from packages.domain.trading.services.trading_queue_service import enqueue_execute_approved_open
+from packages.domain.trading.services.trading_queue_service import (
+    enqueue_execute_approved_open,
+)
 from packages.infra.observability.logger import logger
 
 
@@ -26,30 +32,32 @@ class TelegramService:
         self.social_service = SocialConnectorService(db)
         self._bot: Bot | None = None
 
-    async def handle_webhook_update(self, payload: dict[str, Any]) -> None:
+    async def handle_webhook_update(self, payload: dict[str, Any]) -> bool:
         if not settings.telegram_enabled:
-            return
+            return False
 
         bot = self._bot_client()
         try:
             update = Update.de_json(payload, bot)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to parse Telegram update payload: %s", exc)
-            return
+            return False
 
         if update is None:
-            return
+            return False
         if update.inline_query is not None:
             await self._handle_inline_query(update)
-            return
+            return True
         if update.callback_query is not None:
             await self._handle_callback_query(update)
-            return
+            return True
         if update.message is not None and update.message.web_app_data is not None:
             await self._handle_web_app_data(update)
-            return
+            return True
         if update.message is not None and isinstance(update.message.text, str):
             await self._handle_text_message(update)
+            return True
+        return False
 
     async def _handle_text_message(self, update: Update) -> None:
         message = update.message
@@ -116,12 +124,16 @@ class TelegramService:
             )
             return
 
-        locale = self.social_service.normalize_locale((intent.metadata_ or {}).get("locale"))
+        locale = self.social_service.normalize_locale(
+            (intent.metadata_ or {}).get("locale")
+        )
         try:
             binding = await self.social_service.upsert_telegram_binding(
                 user_id=intent.user_id,
                 telegram_chat_id=chat_id,
-                telegram_user_id=str(from_user.id) if from_user is not None else chat_id,
+                telegram_user_id=str(from_user.id)
+                if from_user is not None
+                else chat_id,
                 telegram_username=from_user.username if from_user is not None else None,
                 locale=locale,
             )
@@ -195,10 +207,16 @@ class TelegramService:
                 ("en", "cat"): "You picked Cat.",
                 ("en", "dog"): "You picked Dog.",
             }.get((locale, value), "Saved.")
-            await self._safe_answer_callback(callback_query_id=callback.id, text=ack_text)
+            await self._safe_answer_callback(
+                callback_query_id=callback.id, text=ack_text
+            )
             return
 
-        fallback = "暂不支持该操作。" if locale == "zh" else "This action is not supported yet."
+        fallback = (
+            "暂不支持该操作。"
+            if locale == "zh"
+            else "This action is not supported yet."
+        )
         await self._safe_answer_callback(callback_query_id=callback.id, text=fallback)
 
     async def _handle_trade_approval_callback(
@@ -227,9 +245,17 @@ class TelegramService:
             logger.warning("Telegram approval callback decode failed: %s", error_code)
             return True
 
-        from_user_id = str(callback.from_user.id) if callback.from_user is not None else None
-        bound_external_user_id = str(binding.external_user_id).strip() if binding.external_user_id else None
-        if from_user_id and bound_external_user_id and from_user_id != bound_external_user_id:
+        from_user_id = (
+            str(callback.from_user.id) if callback.from_user is not None else None
+        )
+        bound_external_user_id = (
+            str(binding.external_user_id).strip() if binding.external_user_id else None
+        )
+        if (
+            from_user_id
+            and bound_external_user_id
+            and from_user_id != bound_external_user_id
+        ):
             text = (
                 "该审批按钮不属于当前 Telegram 账号。"
                 if locale == "zh"
@@ -251,7 +277,11 @@ class TelegramService:
                 actor=from_user_id,
                 note=decision_note,
             )
-            request_metadata = request.metadata_ if request is not None and isinstance(request.metadata_, dict) else {}
+            request_metadata = (
+                request.metadata_
+                if request is not None and isinstance(request.metadata_, dict)
+                else {}
+            )
             if (
                 request is not None
                 and request.status == "approved"
@@ -259,7 +289,9 @@ class TelegramService:
             ):
                 task_id = enqueue_execute_approved_open(request.id)
                 if task_id:
-                    await service.append_execution_task_id(request_id=request.id, task_id=task_id)
+                    await service.append_execution_task_id(
+                        request_id=request.id, task_id=task_id
+                    )
             choice_value = "approval_approve"
         else:
             request = await service.reject(
@@ -272,7 +304,11 @@ class TelegramService:
             choice_value = "approval_reject"
 
         if request is None:
-            text = "审批请求不存在或已失效。" if locale == "zh" else "Approval request not found."
+            text = (
+                "审批请求不存在或已失效。"
+                if locale == "zh"
+                else "Approval request not found."
+            )
             await self._safe_answer_callback(callback_query_id=callback.id, text=text)
             return True
 
@@ -352,15 +388,21 @@ class TelegramService:
             return
 
         from_user = inline_query.from_user
-        locale = self.social_service.normalize_locale(getattr(from_user, "language_code", "en"))
+        locale = self.social_service.normalize_locale(
+            getattr(from_user, "language_code", "en")
+        )
         if from_user is not None:
             binding = await self.social_service.get_telegram_binding_for_external_user(
                 telegram_user_id=str(from_user.id),
                 require_connected=True,
             )
             if binding is not None:
-                locale = await self._resolve_binding_locale(binding, fallback_locale=locale)
-        await self._test_batch_service().handle_inline_query(update=update, locale=locale)
+                locale = await self._resolve_binding_locale(
+                    binding, fallback_locale=locale
+                )
+        await self._test_batch_service().handle_inline_query(
+            update=update, locale=locale
+        )
 
     async def resolve_test_target_binding(self) -> Any:
         """Resolve configured Telegram test target binding for diagnostics."""
@@ -461,7 +503,9 @@ class TelegramService:
             decided_at=decided_at,
         )
         if current_text:
-            next_text = self._append_decision_line(current_text, decision_line=decision_line)
+            next_text = self._append_decision_line(
+                current_text, decision_line=decision_line
+            )
             if next_text:
                 try:
                     await self._bot_client().edit_message_text(
@@ -564,7 +608,11 @@ class TelegramService:
         *,
         fallback_locale: str | None = None,
     ) -> str:
-        metadata_locale = (binding.metadata_ or {}).get("locale") if hasattr(binding, "metadata_") else None
+        metadata_locale = (
+            (binding.metadata_ or {}).get("locale")
+            if hasattr(binding, "metadata_")
+            else None
+        )
         return await self.social_service.resolve_user_locale(
             user_id=binding.user_id,
             fallback_locale=fallback_locale or metadata_locale,

@@ -19,13 +19,20 @@ from apps.api.schemas.events import (
     TelegramTestSendResponse,
     TelegramTestTargetResponse,
 )
-from apps.api.schemas.requests import TelegramConnectLinkRequest, TelegramTestSendRequest
+from apps.api.schemas.requests import (
+    TelegramConnectLinkRequest,
+    TelegramTestSendRequest,
+)
 from packages.shared_settings.schema.settings import settings
 from apps.api.dependencies import get_db
 from packages.infra.db.models.user import User
-from packages.domain.user.services.social_connector_service import SocialConnectorService
+from packages.domain.user.services.social_connector_service import (
+    SocialConnectorService,
+)
 from apps.api.services.telegram_service import TelegramService
-from packages.domain.user.services.telegram_test_batches import build_telegram_test_chart_html
+from packages.domain.user.services.telegram_test_batches import (
+    build_telegram_test_chart_html,
+)
 from packages.infra.observability.logger import logger
 
 router = APIRouter(prefix="/social", tags=["social_connectors"])
@@ -128,7 +135,7 @@ async def telegram_webhook(
         str | None,
         Header(alias="X-Telegram-Bot-Api-Secret-Token"),
     ] = None,
-) -> dict[str, bool]:
+) -> dict[str, Any]:
     _validate_webhook_secret(x_telegram_bot_api_secret_token)
     try:
         payload: Any = await request.json()
@@ -145,13 +152,17 @@ async def telegram_webhook(
 
     service = TelegramService(db)
     try:
-        await service.handle_webhook_update(payload)
+        processed = await service.handle_webhook_update(payload)
         await db.commit()
     except Exception:  # noqa: BLE001
         await db.rollback()
         logger.exception("Telegram webhook processing failed.")
-        return {"ok": True}
-    return {"ok": True}
+        return {
+            "ok": False,
+            "processed": False,
+            "error": "webhook_processing_failed",
+        }
+    return {"ok": True, "processed": bool(processed)}
 
 
 def _validate_webhook_secret(raw_header: str | None) -> None:
@@ -224,7 +235,9 @@ async def telegram_test_target_status(
         configured_email=configured_email,
         resolved_user_exists=resolved_user_id is not None,
         resolved_binding_connected=binding_connected is not None,
-        resolved_chat_id_masked=_mask_chat_id(binding.external_chat_id if binding is not None else None),
+        resolved_chat_id_masked=_mask_chat_id(
+            binding.external_chat_id if binding is not None else None
+        ),
         resolved_binding_id=binding.id if binding is not None else None,
         resolved_username=binding.external_username if binding is not None else None,
         resolved_user_id=binding.user_id if binding is not None else resolved_user_id,
