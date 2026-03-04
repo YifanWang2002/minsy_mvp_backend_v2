@@ -46,6 +46,20 @@ def _bucket_start_ts_ms(ts_ms: int, timeframe: str, tz: ZoneInfo) -> int:
     return int(bucket_local.astimezone(UTC).timestamp() * 1000)
 
 
+def bucket_start_timestamp(
+    timestamp: datetime,
+    timeframe: str,
+    *,
+    timezone: str = "UTC",
+) -> datetime:
+    """Return the aligned bucket-open timestamp in UTC for one bar timeframe."""
+    normalized = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+    tz = ZoneInfo(timezone)
+    ts_ms = int(normalized.astimezone(UTC).timestamp() * 1000)
+    bucket_ts_ms = _bucket_start_ts_ms(ts_ms, timeframe, tz)
+    return datetime.fromtimestamp(bucket_ts_ms / 1000.0, tz=UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class AggregatedBar:
     """Normalized aggregated OHLCV bar."""

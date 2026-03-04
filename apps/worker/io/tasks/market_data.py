@@ -7,13 +7,12 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from math import ceil
-from threading import Lock
-from time import monotonic, time
 from typing import Any
 from uuid import UUID
 
 import httpx
 
+from packages.domain.market_data.refresh_dedupe import reserve_market_data_refresh_slot
 from packages.shared_settings.schema.settings import settings
 from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
 from packages.domain.market_data.runtime import market_data_runtime
@@ -22,12 +21,8 @@ from packages.domain.market_data.sync_service import (
 )
 from packages.infra.db import session as db_module
 from packages.infra.db.models.market_data_error_event import MarketDataErrorEvent
-from packages.infra.redis.client import get_sync_redis_client
 from packages.infra.observability.logger import logger
 from apps.worker.common.celery_base import celery_app
-
-_REFRESH_DEDUPE_FALLBACK: dict[str, float] = {}
-_REFRESH_DEDUPE_LOCK = Lock()
 
 
 def _normalize_error_info(exc: Exception) -> tuple[str, int | None, str]:
@@ -41,42 +36,6 @@ def _normalize_error_info(exc: Exception) -> tuple[str, int | None, str]:
             return "http_429", status, str(exc)[:500]
         return "http_error", status, str(exc)[:500]
     return type(exc).__name__, None, str(exc)[:500]
-
-
-def _refresh_dedupe_key(market: str, symbol: str) -> str:
-    return f"md:v1:refresh_dedupe:{market.strip().lower()}:{symbol.strip().upper()}"
-
-
-def _refresh_dedupe_ttl_seconds() -> int:
-    interval = max(1, int(settings.market_data_refresh_active_subscriptions_interval_seconds))
-    window = max(1, int(settings.market_data_refresh_dedupe_window_seconds))
-    return max(interval, window)
-
-
-def _reserve_refresh_slot(market: str, symbol: str) -> bool:
-    if not settings.market_data_refresh_dedupe_enabled:
-        return True
-    key = _refresh_dedupe_key(market, symbol)
-    ttl = _refresh_dedupe_ttl_seconds()
-    try:
-        client = get_sync_redis_client()
-        reserved = client.set(key, str(int(time() * 1000)), nx=True, ex=ttl)
-        return bool(reserved)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "[market-data-worker] refresh dedupe redis unavailable, fallback to local lock error=%s",
-            type(exc).__name__,
-        )
-    now = monotonic()
-    with _REFRESH_DEDUPE_LOCK:
-        expired_keys = [item for item, expire_at in _REFRESH_DEDUPE_FALLBACK.items() if expire_at <= now]
-        for item in expired_keys:
-            _REFRESH_DEDUPE_FALLBACK.pop(item, None)
-        current_expire_at = _REFRESH_DEDUPE_FALLBACK.get(key)
-        if current_expire_at is not None and current_expire_at > now:
-            return False
-        _REFRESH_DEDUPE_FALLBACK[key] = now + float(ttl)
-    return True
 
 
 def _normalize_timeframe(value: str | None) -> str | None:
@@ -703,7 +662,7 @@ def refresh_active_subscriptions_task() -> dict[str, int]:
     scheduled = 0
     deduped = 0
     for market, symbol in subscriptions:
-        if not _reserve_refresh_slot(market, symbol):
+        if not reserve_market_data_refresh_slot(market, symbol):
             deduped += 1
             continue
         refresh_symbol_task.apply_async(args=(market, symbol), queue="market_data")

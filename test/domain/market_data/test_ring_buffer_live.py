@@ -29,3 +29,33 @@ def test_020_ring_buffer_non_positive_latest_returns_empty() -> None:
     ring = OhlcvRing.create(2)
     latest = ring.latest(0)
     assert latest["ts"].tolist() == []
+
+
+def test_030_ring_buffer_append_or_replace_is_idempotent_for_latest_bar() -> None:
+    ring = OhlcvRing.create(3)
+    ring.append(ts_ms=1, open_=1.0, high=2.0, low=0.5, close=1.5, volume=10.0)
+
+    replaced = ring.append_or_replace(
+        ts_ms=1,
+        open_=1.0,
+        high=3.0,
+        low=0.25,
+        close=2.5,
+        volume=12.0,
+    )
+    ignored = ring.append_or_replace(
+        ts_ms=0,
+        open_=9.0,
+        high=9.0,
+        low=9.0,
+        close=9.0,
+        volume=9.0,
+    )
+
+    latest = ring.latest(3)
+    assert replaced == "replaced"
+    assert ignored == "ignored"
+    assert latest["ts"].tolist() == [1]
+    assert latest["high"].tolist() == [3.0]
+    assert latest["low"].tolist() == [0.25]
+    assert latest["close"].tolist() == [2.5]

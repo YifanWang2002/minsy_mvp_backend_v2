@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -18,10 +19,14 @@ from apps.api.schemas.events import (
 from apps.api.schemas.requests import MarketDataSubscriptionRequest
 from apps.api.dependencies import get_db
 from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
-from packages.domain.market_data.runtime import market_data_runtime
+from packages.domain.market_data.refresh_dedupe import reserve_market_data_refresh_slot
+from packages.domain.market_data.aggregator import bucket_start_timestamp
+from packages.domain.market_data.runtime import RuntimeBar, market_data_runtime
 from packages.infra.db.models.market_data_error_event import MarketDataErrorEvent
+from packages.infra.providers.trading.adapters.base import QuoteSnapshot
 from packages.infra.db.models.user import User
 from apps.api.services.trading_queue_service import enqueue_market_data_refresh
+from packages.shared_settings.schema.settings import settings
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
 
@@ -86,6 +91,114 @@ def _bars_are_stale(
         return False
     max_lag = max(step * 3, timedelta(minutes=20))
     return latest.astimezone(UTC) < (datetime.now(UTC) - max_lag)
+
+
+def _quote_is_stale(quote: object, *, max_age_seconds: int = 20) -> bool:
+    timestamp = getattr(quote, "timestamp", None)
+    if not isinstance(timestamp, datetime):
+        return True
+    age_seconds = (datetime.now(UTC) - timestamp.astimezone(UTC)).total_seconds()
+    return age_seconds > max(1, int(max_age_seconds))
+
+
+def _timeframe_minutes(value: str) -> int | None:
+    step = _timeframe_step(value)
+    if step is None:
+        return None
+    minutes = int(step.total_seconds() // 60)
+    return minutes if minutes > 0 else None
+
+
+def _merge_live_bar(
+    *,
+    bars: list[RuntimeBar],
+    live_bar: RuntimeBar | None,
+    limit: int,
+) -> list[RuntimeBar]:
+    if live_bar is None:
+        return bars
+    merged = list(bars)
+    if merged and merged[-1].timestamp == live_bar.timestamp:
+        merged[-1] = live_bar
+    elif not merged or live_bar.timestamp > merged[-1].timestamp:
+        merged.append(live_bar)
+    if len(merged) <= limit:
+        return merged
+    return merged[-limit:]
+
+
+async def _resolve_live_quote(
+    *,
+    market: str,
+    symbol: str,
+) -> QuoteSnapshot | None:
+    quote = market_data_runtime.get_latest_quote(market=market, symbol=symbol)
+    if quote is not None and not _quote_is_stale(quote):
+        return quote
+    return None
+
+
+async def _build_live_bar(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    historical_bars: list[RuntimeBar],
+) -> RuntimeBar | None:
+    quote = await _resolve_live_quote(market=market, symbol=symbol)
+    if quote is None or quote.last is None:
+        return None
+
+    last_price = Decimal(str(quote.last))
+    if last_price <= 0:
+        return None
+    quote_timestamp = quote.timestamp if isinstance(quote.timestamp, datetime) else None
+    if quote_timestamp is None:
+        return None
+
+    try:
+        bucket_start = bucket_start_timestamp(
+            quote_timestamp,
+            timeframe,
+            timezone=settings.market_data_aggregate_timezone,
+        )
+    except ValueError:
+        return None
+    bucket_minutes = _timeframe_minutes(timeframe) or 1
+    base_bars = market_data_runtime.get_recent_bars(
+        market=market,
+        symbol=symbol,
+        timeframe="1m",
+        limit=min(5000, max(bucket_minutes + 2, 2)),
+    )
+    bucket_components = [
+        bar for bar in base_bars if bar.timestamp >= bucket_start
+    ]
+
+    if bucket_components:
+        open_price = bucket_components[0].open
+        high_price = max(bar.high for bar in bucket_components)
+        low_price = min(bar.low for bar in bucket_components)
+        close_price = bucket_components[-1].close
+        volume = sum(bar.volume for bar in bucket_components)
+    else:
+        previous_close = historical_bars[-1].close if historical_bars else float(last_price)
+        seed_price = previous_close if previous_close > 0 else float(last_price)
+        open_price = seed_price
+        high_price = seed_price
+        low_price = seed_price
+        close_price = seed_price
+        volume = 0.0
+
+    live_price = float(last_price)
+    return RuntimeBar(
+        timestamp=bucket_start,
+        open=open_price,
+        high=max(high_price, live_price),
+        low=min(low_price, live_price),
+        close=live_price,
+        volume=volume,
+    )
 
 
 @router.get("/quote", response_model=MarketDataQuoteResponse)
@@ -161,18 +274,30 @@ async def get_recent_bars(
         )
     )
     if should_enqueue_refresh:
-        enqueue_market_data_refresh(
-            market=normalized_market,
-            symbol=normalized_symbol,
-            requested_timeframe=normalized_timeframe,
-            min_bars=limit,
-        )
+        if reserve_market_data_refresh_slot(normalized_market, normalized_symbol):
+            enqueue_market_data_refresh(
+                market=normalized_market,
+                symbol=normalized_symbol,
+                requested_timeframe=normalized_timeframe,
+                min_bars=limit,
+            )
         bars = market_data_runtime.get_recent_bars(
             market=normalized_market,
             symbol=normalized_symbol,
             timeframe=normalized_timeframe,
             limit=limit,
         )
+    live_bar = await _build_live_bar(
+        market=normalized_market,
+        symbol=normalized_symbol,
+        timeframe=normalized_timeframe,
+        historical_bars=bars,
+    )
+    bars = _merge_live_bar(
+        bars=bars,
+        live_bar=live_bar,
+        limit=limit,
+    )
 
     return MarketDataBarsResponse(
         market=normalized_market,
