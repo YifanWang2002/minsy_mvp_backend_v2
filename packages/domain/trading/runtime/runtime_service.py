@@ -208,6 +208,171 @@ def _resolve_position_qty(positions: list[Position], symbol: str) -> float:
     return 0.0
 
 
+def _resolve_position_row(
+    positions: list[Position],
+    symbol: str,
+) -> Position | None:
+    for position in positions:
+        if _symbols_match(position.symbol, symbol):
+            return position
+    return None
+
+
+def _resolve_position_entry_price(
+    positions: list[Position],
+    symbol: str,
+) -> float | None:
+    position = _resolve_position_row(positions, symbol)
+    if position is None:
+        return None
+    entry_price = float(position.avg_entry_price)
+    return entry_price if entry_price > 0 else None
+
+
+def _runtime_positive_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _resolve_managed_exit_prices(
+    *,
+    run: DeploymentRun | None,
+    symbol: str,
+    current_position_side: str,
+) -> tuple[float | None, float | None]:
+    if run is None:
+        return None, None
+    if current_position_side not in {"long", "short"}:
+        return None, None
+    state = run.runtime_state if isinstance(run.runtime_state, dict) else {}
+    managed_exit = (
+        state.get("managed_exit")
+        if isinstance(state.get("managed_exit"), dict)
+        else {}
+    )
+    managed_symbol = str(managed_exit.get("symbol") or "").strip().upper()
+    if managed_symbol and not _symbols_match(managed_symbol, symbol):
+        return None, None
+    managed_side = str(managed_exit.get("side") or "").strip().lower()
+    if managed_side and managed_side != current_position_side:
+        return None, None
+    return (
+        _runtime_positive_float(managed_exit.get("stop_price")),
+        _runtime_positive_float(managed_exit.get("take_price")),
+    )
+
+
+def _set_managed_exit_state(
+    *,
+    run: DeploymentRun | None,
+    symbol: str,
+    side: str,
+    targets: dict[str, Any],
+) -> None:
+    if run is None:
+        return
+    state = dict(run.runtime_state) if isinstance(run.runtime_state, dict) else {}
+    payload = dict(targets)
+    payload["symbol"] = symbol.strip().upper()
+    payload["side"] = side.strip().lower()
+    state["managed_exit"] = payload
+    run.runtime_state = state
+
+
+def _clear_managed_exit_state(
+    *,
+    run: DeploymentRun | None,
+) -> None:
+    if run is None or not isinstance(run.runtime_state, dict):
+        return
+    state = dict(run.runtime_state)
+    state.pop("managed_exit", None)
+    run.runtime_state = state
+
+
+def _sync_managed_exit_state_from_position(
+    *,
+    run: DeploymentRun | None,
+    deployment: Deployment,
+    symbol: str,
+    bars: list[RuntimeBar] | None,
+    position: Position | None,
+) -> None:
+    if run is None:
+        return
+    if position is None:
+        _clear_managed_exit_state(run=run)
+        return
+    qty = Decimal(str(position.qty))
+    side = str(position.side).strip().lower()
+    if qty <= 0 or side not in {"long", "short"}:
+        _clear_managed_exit_state(run=run)
+        return
+    if not bars:
+        return
+
+    strategy_payload = (
+        deployment.strategy.dsl_payload
+        if deployment.strategy is not None
+        and isinstance(deployment.strategy.dsl_payload, dict)
+        else {}
+    )
+    entry_signal = "OPEN_SHORT" if side == "short" else "OPEN_LONG"
+    entry_price = _runtime_positive_float(position.avg_entry_price)
+    if entry_price is None:
+        return
+    targets = LiveSignalRuntime().build_managed_exit_targets(
+        strategy_payload=strategy_payload,
+        bars=bars,
+        signal=entry_signal,
+        entry_price=entry_price,
+    )
+    if not targets:
+        _clear_managed_exit_state(run=run)
+        return
+    _set_managed_exit_state(
+        run=run,
+        symbol=symbol,
+        side=side,
+        targets=targets,
+    )
+
+
+def _load_cached_bars_for_managed_exits(
+    *,
+    deployment: Deployment,
+    market: str,
+    symbol: str,
+    timeframe: str,
+) -> list[RuntimeBar]:
+    strategy_payload = (
+        deployment.strategy.dsl_payload
+        if deployment.strategy is not None
+        and isinstance(deployment.strategy.dsl_payload, dict)
+        else {}
+    )
+    signal_runtime = LiveSignalRuntime()
+    required_signal_bars = signal_runtime.required_bars(
+        strategy_payload=strategy_payload,
+    )
+    market_data_limit = max(500, int(required_signal_bars))
+    market_data_limit = min(
+        market_data_limit,
+        max(500, int(settings.market_data_ring_capacity_1m)),
+    )
+    return market_data_runtime.get_recent_bars(
+        market=market,
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=market_data_limit,
+    )
+
+
 def _resolve_provider_position_qty(
     positions: list[PositionRecord], symbol: str
 ) -> Decimal:
@@ -2028,10 +2193,39 @@ async def process_deployment_signal_cycle(
         )
 
         position_side = _resolve_position_side(runtime_positions, symbol)
+        if position_side == "flat":
+            _clear_managed_exit_state(run=run)
+        position_row = _resolve_position_row(runtime_positions, symbol)
+        position_entry_price = _resolve_position_entry_price(runtime_positions, symbol)
+        managed_stop_price, managed_take_price = _resolve_managed_exit_prices(
+            run=run,
+            symbol=symbol,
+            current_position_side=position_side,
+        )
+        if (
+            position_side in {"long", "short"}
+            and managed_stop_price is None
+            and managed_take_price is None
+        ):
+            _sync_managed_exit_state_from_position(
+                run=run,
+                deployment=deployment,
+                symbol=symbol,
+                bars=bars,
+                position=position_row,
+            )
+            managed_stop_price, managed_take_price = _resolve_managed_exit_prices(
+                run=run,
+                symbol=symbol,
+                current_position_side=position_side,
+            )
         decision = signal_runtime.evaluate(
             strategy_payload=deployment.strategy.dsl_payload,
             bars=bars,
             current_position_side=position_side,
+            current_position_entry_price=position_entry_price,
+            current_position_stop_price=managed_stop_price,
+            current_position_take_price=managed_take_price,
         )
         decision_metadata = _combine_cycle_metadata(decision.metadata)
         bar_time = decision.bar_time
@@ -2457,7 +2651,12 @@ async def process_deployment_signal_cycle(
                 ),
             )
 
-        fill_price = Decimal(str(last_close))
+        decision_exit_price = (
+            _to_decimal_or_none(decision.metadata.get("exit_price"))
+            if isinstance(decision.metadata, dict)
+            else None
+        )
+        fill_price = decision_exit_price or Decimal(str(last_close))
         if (
             submit_result.order.price is not None
             and Decimal(str(submit_result.order.price)) > 0
@@ -2518,6 +2717,13 @@ async def process_deployment_signal_cycle(
                 Position.deployment_id == deployment.id,
                 Position.symbol == symbol,
             )
+        )
+        _sync_managed_exit_state_from_position(
+            run=run,
+            deployment=deployment,
+            symbol=symbol,
+            bars=bars,
+            position=updated_position,
         )
         remaining_qty = (
             Decimal(str(updated_position.qty)) if updated_position is not None else None
@@ -3221,6 +3427,19 @@ async def execute_manual_trade_action(
                     Position.deployment_id == deployment.id,
                     Position.symbol == symbol,
                 )
+            )
+            managed_exit_bars = _load_cached_bars_for_managed_exits(
+                deployment=deployment,
+                market=market,
+                symbol=symbol,
+                timeframe=timeframe,
+            )
+            _sync_managed_exit_state_from_position(
+                run=run,
+                deployment=deployment,
+                symbol=symbol,
+                bars=managed_exit_bars,
+                position=updated_position,
             )
             remaining_qty = (
                 Decimal(str(updated_position.qty))

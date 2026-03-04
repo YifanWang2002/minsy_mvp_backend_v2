@@ -61,7 +61,7 @@ def test_020_accessibility_runtime_compatibility_blocks_multi_symbol() -> None:
     assert "DEPLOYMENT_RUNTIME_UNSUPPORTED_MULTI_SYMBOL" in compatibility.blocker_codes
 
 
-def test_030_accessibility_runtime_compatibility_blocks_non_signal_exit_rules() -> None:
+def test_030_accessibility_runtime_compatibility_allows_dsl_exit_rules() -> None:
     compatibility = deployment_ops.assess_strategy_runtime_compatibility(
         {
             "universe": {"tickers": ["BTCUSD"]},
@@ -76,8 +76,8 @@ def test_030_accessibility_runtime_compatibility_blocks_non_signal_exit_rules() 
         }
     )
 
-    assert compatibility.status == "blocked"
-    assert "DEPLOYMENT_RUNTIME_UNSUPPORTED_EXIT_RULE" in compatibility.blocker_codes
+    assert compatibility.status == "ok"
+    assert "DEPLOYMENT_RUNTIME_UNSUPPORTED_EXIT_RULE" not in compatibility.blocker_codes
 
 
 def test_040_accessibility_runtime_compatibility_blocks_unsupported_timeframe() -> None:

@@ -222,26 +222,6 @@ def assess_strategy_runtime_compatibility(
             "Paper trading currently supports only one symbol per deployment."
         )
 
-    trade = payload.get("trade") if isinstance(payload.get("trade"), dict) else {}
-    unsupported_exit_types: set[str] = set()
-    for side_name in ("long", "short"):
-        side = trade.get(side_name) if isinstance(trade.get(side_name), dict) else {}
-        exits = side.get("exits")
-        if not isinstance(exits, list):
-            continue
-        for rule in exits:
-            if not isinstance(rule, dict):
-                continue
-            exit_type = str(rule.get("type", "")).strip().lower()
-            if exit_type and exit_type != "signal_exit":
-                unsupported_exit_types.add(exit_type)
-    if unsupported_exit_types:
-        blocker_codes.append("DEPLOYMENT_RUNTIME_UNSUPPORTED_EXIT_RULE")
-        blockers.append(
-            "Paper trading currently supports only signal_exit exits; "
-            f"found unsupported exits: {', '.join(sorted(unsupported_exit_types))}."
-        )
-
     return DeploymentRuntimeCompatibility(
         status="blocked" if blockers else "ok",
         blockers=tuple(blockers),

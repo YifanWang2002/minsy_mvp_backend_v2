@@ -66,7 +66,13 @@ def _build_deployable_dsl() -> dict[str, object]:
                                 "b": {"ref": "ema_21"},
                             }
                         },
-                    }
+                    },
+                    {
+                        "type": "bracket_rr",
+                        "name": "protective_bracket",
+                        "stop": {"kind": "pct", "value": 0.01},
+                        "risk_reward": 2.0,
+                    },
                 ],
             }
         },
