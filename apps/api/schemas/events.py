@@ -145,6 +145,35 @@ class StrategyDetailResponse(BaseModel):
     metadata: dict[str, Any]
 
 
+class StrategyDeleteBlockingPositionResponse(BaseModel):
+    """One non-flat position blocking strategy deletion."""
+
+    symbol: str
+    side: str
+    qty: float
+
+
+class StrategyDeleteBlockingDeploymentResponse(BaseModel):
+    """One deployment that must be flattened/stopped before delete."""
+
+    deployment_id: UUID
+    status: str
+    requires_stop: bool
+    non_flat_positions: list[StrategyDeleteBlockingPositionResponse] = Field(
+        default_factory=list
+    )
+
+
+class StrategyDeleteReadinessResponse(BaseModel):
+    """Readiness check payload for guarded strategy deletion."""
+
+    strategy_id: UUID
+    ready_to_delete: bool
+    blocking_deployments: list[StrategyDeleteBlockingDeploymentResponse] = Field(
+        default_factory=list
+    )
+
+
 class StrategyDraftDetailResponse(BaseModel):
     """Temporary strategy draft payload for pre-confirmation rendering."""
 
@@ -341,7 +370,9 @@ class DeploymentResponse(BaseModel):
 
     deployment_id: UUID
     strategy_id: UUID
+    strategy_name: str | None = None
     user_id: UUID
+    broker_provider: str | None = None
     mode: str
     status: str
     market: str | None = None

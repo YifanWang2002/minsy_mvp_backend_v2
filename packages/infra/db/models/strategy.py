@@ -104,10 +104,20 @@ class Strategy(Base):
 
     user: Mapped[User] = relationship(back_populates="strategies")
     session: Mapped[Session] = relationship(back_populates="strategies")
-    backtest_jobs: Mapped[list[BacktestJob]] = relationship(back_populates="strategy")
-    stress_jobs: Mapped[list[StressJob]] = relationship(back_populates="strategy")
-    deployments: Mapped[list[Deployment]] = relationship(back_populates="strategy")
+    backtest_jobs: Mapped[list[BacktestJob]] = relationship(
+        back_populates="strategy",
+        passive_deletes=True,
+    )
+    stress_jobs: Mapped[list[StressJob]] = relationship(
+        back_populates="strategy",
+        passive_deletes=True,
+    )
+    deployments: Mapped[list[Deployment]] = relationship(
+        back_populates="strategy",
+        passive_deletes=True,
+    )
     revisions: Mapped[list[StrategyRevision]] = relationship(
         back_populates="strategy",
         cascade="all, delete-orphan",
+        passive_deletes=True,
     )

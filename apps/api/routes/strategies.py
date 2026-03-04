@@ -10,8 +10,10 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete as sql_delete
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from apps.api.orchestration import ChatOrchestrator
 from apps.api.agents.phases import Phase, can_transition
@@ -19,6 +21,9 @@ from apps.api.middleware.auth import get_current_user
 from apps.api.schemas.events import (
     StrategyBacktestSummary,
     StrategyConfirmResponse,
+    StrategyDeleteBlockingDeploymentResponse,
+    StrategyDeleteBlockingPositionResponse,
+    StrategyDeleteReadinessResponse,
     StrategyDetailResponse,
     StrategyDraftDetailResponse,
     StrategyListItemResponse,
@@ -39,6 +44,7 @@ from packages.domain.strategy import (
     upsert_strategy_dsl,
 )
 from packages.infra.db.models.backtest import BacktestJob
+from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.phase_transition import PhaseTransition
 from packages.infra.db.models.session import Session
 from packages.infra.db.models.strategy import Strategy
@@ -55,6 +61,7 @@ _BACKTEST_STATUS_TO_EXTERNAL: dict[str, str] = {
     "failed": "failed",
     "cancelled": "failed",
 }
+_STRATEGY_DELETE_RUNNING_DEPLOYMENT_STATUSES = {"pending", "active", "paused", "error"}
 
 
 @router.get("/drafts/{strategy_draft_id}", response_model=StrategyDraftDetailResponse)
@@ -281,6 +288,51 @@ async def get_strategy_detail(
         dsl_json=dsl_payload,
         metadata=_strategy_metadata(strategy),
     )
+
+
+@router.get(
+    "/{strategy_id}/delete-readiness",
+    response_model=StrategyDeleteReadinessResponse,
+)
+async def get_strategy_delete_readiness(
+    strategy_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StrategyDeleteReadinessResponse:
+    strategy = await _resolve_owned_strategy_or_404(
+        db=db,
+        strategy_id=strategy_id,
+        user_id=user.id,
+    )
+    return await _build_strategy_delete_readiness(db=db, strategy=strategy)
+
+
+@router.delete("/{strategy_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_strategy(
+    strategy_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    strategy = await _resolve_owned_strategy_or_404(
+        db=db,
+        strategy_id=strategy_id,
+        user_id=user.id,
+    )
+    readiness = await _build_strategy_delete_readiness(db=db, strategy=strategy)
+    if not readiness.ready_to_delete:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "STRATEGY_DELETE_BLOCKED",
+                "message": "Stop deployments and close open positions before deleting this strategy.",
+                "metadata": readiness.model_dump(mode="json"),
+            },
+        )
+    db.expunge_all()
+    await db.execute(
+        sql_delete(Strategy.__table__).where(Strategy.__table__.c.id == strategy.id)
+    )
+    await db.commit()
 
 
 @router.post("/confirm", response_model=StrategyConfirmResponse)
@@ -630,6 +682,57 @@ def _parse_sse_payload(chunk: str) -> dict[str, Any] | None:
     return parsed
 
 
+async def _build_strategy_delete_readiness(
+    *,
+    db: AsyncSession,
+    strategy: Strategy,
+) -> StrategyDeleteReadinessResponse:
+    deployments = (
+        await db.scalars(
+            select(Deployment)
+            .options(selectinload(Deployment.positions))
+            .where(Deployment.strategy_id == strategy.id)
+            .order_by(Deployment.created_at.desc(), Deployment.id.desc())
+        )
+    ).all()
+
+    blocking: list[StrategyDeleteBlockingDeploymentResponse] = []
+    for deployment in deployments:
+        non_flat_positions: list[StrategyDeleteBlockingPositionResponse] = []
+        for position in deployment.positions:
+            side = str(position.side).strip().lower()
+            qty = _safe_float(position.qty) or 0.0
+            if side == "flat" or qty <= 0:
+                continue
+            non_flat_positions.append(
+                StrategyDeleteBlockingPositionResponse(
+                    symbol=str(position.symbol).strip().upper(),
+                    side=side,
+                    qty=qty,
+                )
+            )
+
+        status_text = str(deployment.status).strip().lower()
+        requires_stop = status_text in _STRATEGY_DELETE_RUNNING_DEPLOYMENT_STATUSES
+        if not requires_stop and not non_flat_positions:
+            continue
+
+        blocking.append(
+            StrategyDeleteBlockingDeploymentResponse(
+                deployment_id=deployment.id,
+                status=deployment.status,
+                requires_stop=requires_stop,
+                non_flat_positions=non_flat_positions,
+            )
+        )
+
+    return StrategyDeleteReadinessResponse(
+        strategy_id=strategy.id,
+        ready_to_delete=not blocking,
+        blocking_deployments=blocking,
+    )
+
+
 async def _resolve_owned_strategy_or_404(
     *,
     db: AsyncSession,
@@ -656,6 +759,15 @@ async def _resolve_owned_strategy_or_404(
             },
         )
     return strategy
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _strategy_metadata(strategy: Strategy) -> dict[str, Any]:
