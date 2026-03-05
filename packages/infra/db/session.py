@@ -41,6 +41,11 @@ def _quote_identifier(identifier: str) -> str:
 def _import_all_models() -> None:
     """Import models so SQLAlchemy metadata knows all tables."""
     import packages.infra.db.models.backtest  # noqa: F401
+    import packages.infra.db.models.billing_customer  # noqa: F401
+    import packages.infra.db.models.billing_subscription  # noqa: F401
+    import packages.infra.db.models.billing_usage_event  # noqa: F401
+    import packages.infra.db.models.billing_usage_monthly  # noqa: F401
+    import packages.infra.db.models.billing_webhook_event  # noqa: F401
     import packages.infra.db.models.broker_account  # noqa: F401
     import packages.infra.db.models.broker_account_audit_log  # noqa: F401
     import packages.infra.db.models.deployment  # noqa: F401
@@ -413,6 +418,34 @@ async def _ensure_broker_account_audit_log_constraint() -> None:
         )
 
 
+async def _ensure_user_billing_columns() -> None:
+    """Ensure users table has tier column and matching check constraint."""
+    assert engine is not None
+    tier_constraint_sql = "current_tier IN ('free', 'plus', 'pro')"
+    async with engine.begin() as connection:
+        await connection.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_tier VARCHAR(20)"),
+        )
+        await connection.execute(
+            text("UPDATE users SET current_tier = COALESCE(NULLIF(current_tier, ''), 'free')"),
+        )
+        await connection.execute(
+            text("ALTER TABLE users ALTER COLUMN current_tier SET DEFAULT 'free'"),
+        )
+        await connection.execute(
+            text("ALTER TABLE users ALTER COLUMN current_tier SET NOT NULL"),
+        )
+        await connection.execute(
+            text("ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_current_tier"),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE users "
+                f"ADD CONSTRAINT ck_users_current_tier CHECK ({tier_constraint_sql})",
+            ),
+        )
+
+
 def _ensure_engine() -> None:
     global engine, AsyncSessionLocal, session_factory
     if engine is None:
@@ -475,6 +508,7 @@ async def init_postgres(*, ensure_schema: bool = True) -> None:
             await connection.run_sync(Base.metadata.create_all)
         await _ensure_broker_account_schema()
         await _ensure_broker_account_audit_log_constraint()
+        await _ensure_user_billing_columns()
         await _ensure_sessions_phase_constraint()
         await _ensure_sessions_archival_columns()
         await _ensure_trading_runtime_columns()
@@ -511,6 +545,7 @@ async def init_db(drop_existing: bool = False) -> None:
         await connection.run_sync(Base.metadata.create_all)
     await _ensure_broker_account_schema()
     await _ensure_broker_account_audit_log_constraint()
+    await _ensure_user_billing_columns()
     await _ensure_sessions_phase_constraint()
     await _ensure_sessions_archival_columns()
     await _ensure_trading_runtime_columns()

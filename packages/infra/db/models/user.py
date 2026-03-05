@@ -12,6 +12,11 @@ from packages.infra.db.models.base import Base
 
 if TYPE_CHECKING:
     from packages.infra.db.models.backtest import BacktestJob
+    from packages.infra.db.models.billing_customer import BillingCustomer
+    from packages.infra.db.models.billing_subscription import BillingSubscription
+    from packages.infra.db.models.billing_usage_event import BillingUsageEvent
+    from packages.infra.db.models.billing_usage_monthly import BillingUsageMonthly
+    from packages.infra.db.models.billing_webhook_event import BillingWebhookEvent
     from packages.infra.db.models.broker_account import BrokerAccount
     from packages.infra.db.models.deployment import Deployment
     from packages.infra.db.models.manual_trade_action import ManualTradeAction
@@ -35,10 +40,22 @@ class User(Base):
     """Application user."""
 
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "current_tier IN ('free', 'plus', 'pro')",
+            name="ck_users_current_tier",
+        ),
+    )
 
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    current_tier: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="free",
+        server_default="free",
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -116,6 +133,26 @@ class User(Base):
     trade_approval_requests: Mapped[list[TradeApprovalRequest]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
+    )
+    billing_customer: Mapped[BillingCustomer | None] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    billing_subscriptions: Mapped[list[BillingSubscription]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    billing_usage_events: Mapped[list[BillingUsageEvent]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    billing_usage_monthly: Mapped[list[BillingUsageMonthly]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    billing_webhook_events: Mapped[list[BillingWebhookEvent]] = relationship(
+        back_populates="user",
     )
 
 

@@ -6,6 +6,7 @@ import json
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote_plus
 
 from pydantic import Field, field_validator, model_validator
@@ -87,6 +88,40 @@ class Settings(BaseSettings):
     openai_pricing_json: dict[str, dict[str, float]] = Field(
         default_factory=dict,
         alias="OPENAI_PRICING_JSON",
+    )
+    stripe_publishable_key: str = Field(default="", alias="STRIPE_PUBLISHABLE_KEY")
+    stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
+    stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
+    stripe_price_plus_monthly: str = Field(default="", alias="STRIPE_PRICE_PLUS_MONTHLY")
+    stripe_price_pro_monthly: str = Field(default="", alias="STRIPE_PRICE_PRO_MONTHLY")
+    billing_checkout_success_url: str = Field(
+        default="",
+        alias="BILLING_CHECKOUT_SUCCESS_URL",
+    )
+    billing_checkout_cancel_url: str = Field(
+        default="",
+        alias="BILLING_CHECKOUT_CANCEL_URL",
+    )
+    billing_portal_return_url: str = Field(
+        default="",
+        alias="BILLING_PORTAL_RETURN_URL",
+    )
+    billing_frontend_base_url: str = Field(
+        default="",
+        alias="BILLING_FRONTEND_BASE_URL",
+    )
+    billing_pricing_json: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="BILLING_PRICING_JSON",
+    )
+    # Legacy split config fields (kept as backward-compatible fallback).
+    billing_config_json: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="BILLING_CONFIG_JSON",
+    )
+    billing_cost_model_json: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="BILLING_COST_MODEL_JSON",
     )
     jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
     access_token_expire_minutes: int = Field(
@@ -671,6 +706,26 @@ class Settings(BaseSettings):
             return json.loads(normalized)
         return {}
 
+    @field_validator(
+        "billing_pricing_json",
+        "billing_config_json",
+        "billing_cost_model_json",
+        mode="before",
+    )
+    @classmethod
+    def _parse_billing_json_config(
+        cls,
+        value: object,
+    ) -> object:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return {}
+            return json.loads(normalized)
+        return {}
+
     @field_validator("sentry_traces_sample_rate", "sentry_profiles_sample_rate")
     @classmethod
     def _validate_sentry_sample_rate(cls, value: float) -> float:
@@ -1078,6 +1133,37 @@ class Settings(BaseSettings):
             return ""
         return f"{base}{self.api_v1_prefix}/social/webhooks/telegram"
 
+    def _resolve_billing_return_base_url(self) -> str:
+        base = self.api_public_base_url.strip().rstrip("/")
+        if base:
+            return base
+        return f"http://127.0.0.1:{self.port}"
+
+    def _default_billing_return_url(self, *, billing: str) -> str:
+        base = self._resolve_billing_return_base_url()
+        return f"{base}{self.api_v1_prefix}/billing/return?billing={billing}"
+
+    @property
+    def effective_billing_checkout_success_url(self) -> str:
+        explicit = self.billing_checkout_success_url.strip()
+        if explicit:
+            return explicit
+        return self._default_billing_return_url(billing="success")
+
+    @property
+    def effective_billing_checkout_cancel_url(self) -> str:
+        explicit = self.billing_checkout_cancel_url.strip()
+        if explicit:
+            return explicit
+        return self._default_billing_return_url(billing="cancel")
+
+    @property
+    def effective_billing_portal_return_url(self) -> str:
+        explicit = self.billing_portal_return_url.strip()
+        if explicit:
+            return explicit
+        return self._default_billing_return_url(billing="portal")
+
     @property
     def runtime_env(self) -> str:
         """Normalized runtime environment key for cross-cutting feature switches."""
@@ -1191,6 +1277,141 @@ class Settings(BaseSettings):
         ):
             return self.trading_credentials_secret.strip()
         return self.secret_key
+
+    @property
+    def stripe_price_to_tier_map(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        plus = self.stripe_price_plus_monthly.strip()
+        pro = self.stripe_price_pro_monthly.strip()
+        if plus:
+            mapping[plus] = "plus"
+        if pro:
+            mapping[pro] = "pro"
+        return mapping
+
+    @property
+    def openai_pricing(self) -> dict[str, dict[str, float]]:
+        unified = (
+            self.billing_pricing_json.get("openai_pricing")
+            if isinstance(self.billing_pricing_json, dict)
+            else None
+        )
+        source = unified if isinstance(unified, dict) else self.openai_pricing_json
+        if not isinstance(source, dict):
+            return {}
+
+        normalized: dict[str, dict[str, float]] = {}
+        for model, values in source.items():
+            if not isinstance(model, str) or not isinstance(values, dict):
+                continue
+            parsed_row: dict[str, float] = {}
+            for key, value in values.items():
+                if not isinstance(key, str):
+                    continue
+                try:
+                    parsed = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed < 0:
+                    continue
+                parsed_row[key] = parsed
+            normalized[model] = parsed_row
+        return normalized
+
+    @property
+    def billing_tier_limits(self) -> dict[str, dict[str, int]]:
+        default_limits: dict[str, dict[str, int]] = {
+            "free": {
+                "ai_tokens_monthly_total": 100_000,
+                "cpu_tokens_monthly_total": 20,
+                "strategies_current_count": 5,
+                "deployments_running_count": 1,
+            },
+            "plus": {
+                "ai_tokens_monthly_total": 1_000_000,
+                "cpu_tokens_monthly_total": 200,
+                "strategies_current_count": 30,
+                "deployments_running_count": 5,
+            },
+            "pro": {
+                "ai_tokens_monthly_total": 3_000_000,
+                "cpu_tokens_monthly_total": 600,
+                "strategies_current_count": 100,
+                "deployments_running_count": 20,
+            },
+        }
+        unified_tier_limits = (
+            self.billing_pricing_json.get("tier_limits")
+            if isinstance(self.billing_pricing_json, dict)
+            else None
+        )
+        raw = (
+            unified_tier_limits
+            if isinstance(unified_tier_limits, dict)
+            else self.billing_config_json.get("tier_limits")
+            if isinstance(self.billing_config_json, dict)
+            else None
+        )
+        if not isinstance(raw, dict):
+            return default_limits
+
+        merged: dict[str, dict[str, int]] = {tier: dict(values) for tier, values in default_limits.items()}
+        for tier, values in raw.items():
+            if not isinstance(tier, str) or tier not in merged or not isinstance(values, dict):
+                continue
+            for key, value in values.items():
+                if not isinstance(key, str):
+                    continue
+                normalized_key = (
+                    "cpu_tokens_monthly_total"
+                    if key == "cpu_jobs_monthly_total"
+                    else key
+                )
+                try:
+                    parsed = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if parsed < 0:
+                    continue
+                merged[tier][normalized_key] = parsed
+        return merged
+
+    @property
+    def billing_cost_model(self) -> dict[str, float]:
+        defaults: dict[str, float] = {
+            "token_cost_per_1k_usd": 0.01,
+            "ai_usage_unit_usd": 0.00001,
+            "cpu_job_cost_usd": 0.20,
+            "cpu_bars_per_token": 52_560.0,
+            "target_profit_margin": 0.50,
+            "plus_price_usd": 20.0,
+            "pro_price_usd": 60.0,
+        }
+        unified_cost_model = (
+            self.billing_pricing_json.get("cost_model")
+            if isinstance(self.billing_pricing_json, dict)
+            else None
+        )
+        raw = (
+            unified_cost_model
+            if isinstance(unified_cost_model, dict)
+            else self.billing_cost_model_json
+            if isinstance(self.billing_cost_model_json, dict)
+            else {}
+        )
+        merged = dict(defaults)
+        for key in defaults:
+            value = raw.get(key)
+            if value is None:
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed < 0:
+                continue
+            merged[key] = parsed
+        return merged
 
 
 @lru_cache

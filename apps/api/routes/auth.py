@@ -46,6 +46,13 @@ def _resolve_kyc_status(user: User) -> str:
     return "incomplete"
 
 
+def _resolve_user_tier(user: User) -> str:
+    normalized = str(user.current_tier or "").strip().lower()
+    if normalized in {"free", "plus", "pro"}:
+        return normalized
+    return "free"
+
+
 def _build_preferences_response(setting: UserSetting | None) -> UserPreferencesResponse:
     if setting is None:
         return UserPreferencesResponse(
@@ -80,7 +87,7 @@ async def register(
         access_token=token_pair.access_token,
         refresh_token=token_pair.refresh_token,
         expires_in=token_pair.expires_in,
-        user=AuthUser(name=user.name, kyc_status="incomplete"),
+        user=AuthUser(name=user.name, kyc_status="incomplete", tier=_resolve_user_tier(user)),
     )
 
 
@@ -96,7 +103,11 @@ async def login(
         access_token=token_pair.access_token,
         refresh_token=token_pair.refresh_token,
         expires_in=token_pair.expires_in,
-        user=AuthUser(name=user.name, kyc_status=_resolve_kyc_status(user)),
+        user=AuthUser(
+            name=user.name,
+            kyc_status=_resolve_kyc_status(user),
+            tier=_resolve_user_tier(user),
+        ),
     )
 
 
@@ -124,6 +135,7 @@ async def me(
         email=user.email,
         name=user.name,
         kyc_status=_resolve_kyc_status(user),
+        tier=_resolve_user_tier(user),
         created_at=user.created_at,
     )
 

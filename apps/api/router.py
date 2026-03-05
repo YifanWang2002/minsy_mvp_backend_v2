@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from apps.api.routes.auth import router as auth_router
 from apps.api.routes.backtests import router as backtests_router
+from apps.api.routes.billing import router as billing_router
 from apps.api.routes.broker_accounts import router as broker_accounts_router
 from apps.api.routes.chat import router as chat_router
 from apps.api.routes.deployments import router as deployments_router
@@ -30,6 +31,7 @@ api_router.include_router(chat_router)
 api_router.include_router(sessions_router)
 api_router.include_router(strategies_router)
 api_router.include_router(backtests_router)
+api_router.include_router(billing_router)
 api_router.include_router(social_connectors_router)
 api_router.include_router(notification_preferences_router)
 api_router.include_router(trading_preferences_router)

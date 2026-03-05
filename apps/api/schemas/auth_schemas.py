@@ -32,6 +32,7 @@ class ChangePasswordRequest(BaseModel):
 class AuthUser(BaseModel):
     name: str
     kyc_status: str
+    tier: Literal["free", "plus", "pro"] = "free"
 
 
 class AuthResponse(BaseModel):
@@ -53,6 +54,7 @@ class UserResponse(BaseModel):
     email: str
     name: str
     kyc_status: str
+    tier: Literal["free", "plus", "pro"] = "free"
     created_at: datetime
 
 

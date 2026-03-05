@@ -2,6 +2,11 @@
 
 from packages.infra.db.models.backtest import BacktestJob
 from packages.infra.db.models.base import Base
+from packages.infra.db.models.billing_customer import BillingCustomer
+from packages.infra.db.models.billing_subscription import BillingSubscription
+from packages.infra.db.models.billing_usage_event import BillingUsageEvent
+from packages.infra.db.models.billing_usage_monthly import BillingUsageMonthly
+from packages.infra.db.models.billing_webhook_event import BillingWebhookEvent
 from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.broker_account_audit_log import BrokerAccountAuditLog
 from packages.infra.db.models.deployment import Deployment
@@ -46,6 +51,11 @@ from packages.infra.db.models.user_settings import UserSetting
 __all__ = [
     "BacktestJob",
     "Base",
+    "BillingCustomer",
+    "BillingSubscription",
+    "BillingUsageEvent",
+    "BillingUsageMonthly",
+    "BillingWebhookEvent",
     "BrokerAccount",
     "BrokerAccountAuditLog",
     "Deployment",
