@@ -5,20 +5,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.orchestration import ChatOrchestrator
-from apps.api.middleware.auth import get_current_user
-from apps.api.schemas.events import ThreadResponse
-from apps.api.schemas.requests import ChatSendRequest, NewThreadRequest
-from packages.shared_settings.schema.settings import settings
 from apps.api.dependencies import get_db, get_responses_event_streamer
-from packages.infra.db.models.user import User
-from apps.api.orchestration.openai_stream_service import ResponsesEventStreamer
-from packages.domain.session.services.session_title_service import read_session_title_from_metadata
-from packages.infra.observability.logger import logger
+from apps.api.middleware.auth import get_current_user
+from apps.api.orchestration import ChatOrchestrator
 from apps.api.orchestration.chat_debug_trace import (
     CHAT_TRACE_HEADER_ENABLED,
     CHAT_TRACE_HEADER_ID,
@@ -28,6 +21,17 @@ from apps.api.orchestration.chat_debug_trace import (
     reset_chat_debug_trace,
     set_chat_debug_trace,
 )
+from apps.api.orchestration.openai_stream_service import ResponsesEventStreamer
+from apps.api.schemas.events import ThreadResponse
+from apps.api.schemas.requests import ChatSendRequest, NewThreadRequest
+from packages.domain.billing.quota_service import QuotaExceededError, QuotaService
+from packages.domain.billing.usage_service import UsageMetric, UsageService
+from packages.domain.session.services.session_title_service import (
+    read_session_title_from_metadata,
+)
+from packages.infra.db.models.user import User
+from packages.infra.observability.logger import logger
+from packages.shared_settings.schema.settings import settings
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 _CHAT_SSE_HEARTBEAT_SECONDS = 12.0
@@ -45,6 +49,20 @@ async def new_thread(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ThreadResponse:
+    quota_service = QuotaService(UsageService(db))
+    try:
+        await quota_service.assert_quota_available(
+            user_id=user.id,
+            tier=user.current_tier,
+            metric=UsageMetric.AI_TOKENS_MONTHLY_TOTAL,
+            increment=1,
+        )
+    except QuotaExceededError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail,
+        ) from exc
+
     orchestrator = ChatOrchestrator(db)
     session = await orchestrator.create_session(
         user_id=user.id,
@@ -74,6 +92,20 @@ async def send_message_stream(
     language: str = Query("en", description="ISO 639-1 language code from frontend"),
 ) -> StreamingResponse:
     """Stream a chat turn via the OpenAI Responses API (SSE)."""
+    quota_service = QuotaService(UsageService(db))
+    try:
+        await quota_service.assert_quota_available(
+            user_id=user.id,
+            tier=user.current_tier,
+            metric=UsageMetric.AI_TOKENS_MONTHLY_TOTAL,
+            increment=1,
+        )
+    except QuotaExceededError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail,
+        ) from exc
+
     trace = build_chat_debug_trace(
         default_enabled=settings.chat_debug_trace_enabled,
         default_mode=settings.chat_debug_trace_mode,
@@ -126,7 +158,7 @@ async def send_message_stream(
                         producer_queue.get(),
                         timeout=_CHAT_SSE_HEARTBEAT_SECONDS,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     if producer_finished.is_set() and producer_queue.empty():
                         break
                     # SSE comment heartbeat (ignored by client parser, but keeps TCP active).
@@ -154,7 +186,7 @@ async def send_message_stream(
                         asyncio.shield(producer_task),
                         timeout=_CHAT_SSE_HEARTBEAT_SECONDS,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
                 except asyncio.CancelledError:
                     if (

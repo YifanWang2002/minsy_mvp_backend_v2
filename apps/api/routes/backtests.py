@@ -23,6 +23,7 @@ from packages.domain.backtest.analytics import (
     compute_rolling_metrics,
     compute_underwater_curve,
 )
+from packages.domain.billing.quota_service import QuotaExceededError
 from packages.domain.backtest.service import create_backtest_job, execute_backtest_job
 from packages.infra.db.models.backtest import BacktestJob
 from packages.infra.db.models.strategy import Strategy
@@ -175,6 +176,8 @@ async def ensure_demo_backtest_job(
                     return _serialize_demo_job(created_job, source="created")
             last_error = _summarize_backtest_error(view.error)
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, QuotaExceededError):
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
             await db.rollback()
             last_error = f"{type(exc).__name__}: {exc}"
 

@@ -11,19 +11,28 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.domain.ports.queue_ports import get_job_queue_ports
-from packages.shared_settings.schema.settings import settings
+from packages.core.events.notification_events import EVENT_BACKTEST_COMPLETED
 from packages.domain.backtest.analytics import build_compact_performance_payload
 from packages.domain.backtest.engine import EventDrivenBacktestEngine
 from packages.domain.backtest.types import BacktestConfig
+from packages.domain.billing.quota_service import QuotaService
+from packages.domain.billing.usage_service import (
+    UsageMetric,
+    UsageService,
+    compute_cpu_tokens_from_bars,
+)
 from packages.domain.market_data.data import DataLoader
+from packages.domain.notification.services.notification_outbox_service import (
+    NotificationOutboxService,
+)
+from packages.domain.ports.queue_ports import get_job_queue_ports
 from packages.domain.strategy import parse_strategy_payload
 from packages.infra.db import session as db_module
 from packages.infra.db.models.backtest import BacktestJob
 from packages.infra.db.models.strategy import Strategy
-from packages.core.events.notification_events import EVENT_BACKTEST_COMPLETED
-from packages.domain.notification.services.notification_outbox_service import NotificationOutboxService
+from packages.infra.db.models.user import User
 from packages.infra.observability.logger import logger
+from packages.shared_settings.schema.settings import settings
 
 _INTERNAL_TO_EXTERNAL_STATUS: dict[str, str] = {
     "queued": "pending",
@@ -92,6 +101,9 @@ async def create_backtest_job(
     if user_id is not None and strategy.user_id != user_id:
         raise BacktestStrategyNotFoundError(f"Strategy not found: {strategy_id}")
 
+    strategy_owner = await db.scalar(select(User).where(User.id == strategy.user_id))
+    tier = strategy_owner.current_tier if strategy_owner is not None else "free"
+
     initial_capital_value, commission_rate_value, slippage_bps_value = (
         _validated_backtest_config_values(
             initial_capital=initial_capital,
@@ -114,6 +126,17 @@ async def create_backtest_job(
         strategy_payload=strategy.dsl_payload or {},
         config=config,
     )
+    cpu_usage = compute_cpu_tokens_from_bars(
+        estimated_bars=config.get("estimated_bars"),
+        billing_cost_model=settings.billing_cost_model,
+    )
+    quota_service = QuotaService(UsageService(db))
+    await quota_service.assert_quota_available(
+        user_id=strategy.user_id,
+        tier=tier,
+        metric=UsageMetric.CPU_TOKENS_MONTHLY_TOTAL,
+        increment=cpu_usage.token_quantity,
+    )
     job = BacktestJob(
         strategy_id=strategy.id,
         user_id=strategy.user_id,
@@ -127,6 +150,21 @@ async def create_backtest_job(
     )
     db.add(job)
     await db.flush()
+    usage_service = UsageService(db)
+    await usage_service.record_cpu_tokens(
+        user_id=strategy.user_id,
+        quantity=cpu_usage.token_quantity,
+        source="backtest_job_create",
+        reference_type="backtest_job",
+        reference_id=str(job.id),
+        metadata={
+            "strategy_id": str(strategy.id),
+            "session_id": str(strategy.session_id),
+            "estimated_bars": cpu_usage.estimated_bars,
+            "cpu_bars_per_token": cpu_usage.bars_per_token,
+            "cpu_tokens_increment": cpu_usage.token_quantity,
+        },
+    )
 
     if auto_commit:
         await db.commit()

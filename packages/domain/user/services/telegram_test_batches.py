@@ -31,11 +31,13 @@ from telegram import (
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import TelegramError
 
-from packages.shared_settings.schema.settings import settings
+from packages.domain.user.services.social_connector_service import (
+    SocialConnectorService,
+)
 from packages.infra.db.models.social_connector import SocialConnectorBinding
-from packages.infra.observability.openai_cost import build_turn_usage_snapshot
-from packages.domain.user.services.social_connector_service import SocialConnectorService
 from packages.infra.observability.logger import logger
+from packages.infra.observability.openai_cost import build_turn_usage_snapshot
+from packages.shared_settings.schema.settings import settings
 
 _TELEGRAM_TEST_META_KEY = "telegram_test"
 _TRADE_SYMBOL = "NASDAQ:AAPL"
@@ -1510,7 +1512,7 @@ class TelegramTestBatchService:
             model=model,
             response_id=response_id,
             at=datetime.now(UTC),
-            pricing=settings.openai_pricing_json,
+            pricing=settings.openai_pricing,
             cost_tracking_enabled=settings.openai_cost_tracking_enabled,
         )
 

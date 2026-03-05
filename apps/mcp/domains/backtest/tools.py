@@ -26,6 +26,7 @@ from packages.domain.backtest.analytics import (
     compute_rolling_metrics,
     compute_underwater_curve,
 )
+from packages.domain.exceptions import DomainError
 from apps.mcp.auth.context_auth import (
     McpContextClaims,
     decode_mcp_context_token,
@@ -249,6 +250,13 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                 ok=False,
                 error_code="BACKTEST_BAR_LIMIT_EXCEEDED",
                 error_message=str(exc),
+            )
+        except DomainError as exc:
+            return _payload(
+                tool="backtest_create_job",
+                ok=False,
+                error_code=exc.code,
+                error_message=exc.message,
             )
         except Exception as exc:  # noqa: BLE001
             # During incremental refactors, compatibility wrappers can cause

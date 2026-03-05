@@ -20,9 +20,12 @@ from packages.domain.strategy.errors import (
 )
 from packages.domain.strategy.parser import build_parsed_strategy
 from packages.domain.strategy.pipeline import validate_strategy_payload
+from packages.domain.billing.quota_service import QuotaService
+from packages.domain.billing.usage_service import UsageMetric, UsageService
 from packages.infra.db.models.session import Session
 from packages.infra.db.models.strategy import Strategy
 from packages.infra.db.models.strategy_revision import StrategyRevision
+from packages.infra.db.models.user import User
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,6 +398,16 @@ async def upsert_strategy_dsl(
     columns = _derive_strategy_columns(dsl_payload)
 
     if strategy is None:
+        owner = await db.scalar(select(User).where(User.id == session_user_id))
+        tier = owner.current_tier if owner is not None else "free"
+        quota_service = QuotaService(UsageService(db))
+        await quota_service.assert_quota_available(
+            user_id=session_user_id,
+            tier=tier,
+            metric=UsageMetric.STRATEGIES_CURRENT_COUNT,
+            increment=1,
+        )
+
         strategy = Strategy(
             user_id=session_user_id,
             session_id=session_id,

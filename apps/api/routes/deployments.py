@@ -27,9 +27,11 @@ from apps.api.schemas.events import (
     SignalResponse,
 )
 from apps.api.schemas.requests import DeploymentCreateRequest, ManualTradeActionRequest
-from apps.worker.io.tasks.manual_trade_action import enqueue_execute_manual_trade_action
 from apps.api.services.trading_queue_service import enqueue_paper_trading_runtime
+from apps.worker.io.tasks.manual_trade_action import enqueue_execute_manual_trade_action
 from packages.core.events.notification_events import EVENT_DEPLOYMENT_STARTED
+from packages.domain.billing.quota_service import QuotaExceededError, QuotaService
+from packages.domain.billing.usage_service import UsageMetric, UsageService
 from packages.domain.notification.services.notification_outbox_service import (
     NotificationOutboxService,
 )
@@ -607,6 +609,17 @@ async def create_deployment(
             },
         )
 
+    quota_service = QuotaService(UsageService(db))
+    try:
+        await quota_service.assert_quota_available(
+            user_id=user.id,
+            tier=user.current_tier,
+            metric=UsageMetric.DEPLOYMENTS_RUNNING_COUNT,
+            increment=1,
+        )
+    except QuotaExceededError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
     capital_resolution = await deployment_ops_domain.resolve_deployment_capital(
         requested_capital=payload.capital_allocated,
         account=account,
@@ -899,6 +912,21 @@ async def start_deployment(
     deployment = await _load_owned_deployment(
         db, deployment_id=deployment_id, user_id=user.id
     )
+    if str(deployment.status).strip().lower() != "active":
+        quota_service = QuotaService(UsageService(db))
+        try:
+            await quota_service.assert_quota_available(
+                user_id=user.id,
+                tier=user.current_tier,
+                metric=UsageMetric.DEPLOYMENTS_RUNNING_COUNT,
+                increment=1,
+            )
+        except QuotaExceededError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from exc
+
     deployment = await _apply_status_transition(
         db, deployment=deployment, target_status="active"
     )

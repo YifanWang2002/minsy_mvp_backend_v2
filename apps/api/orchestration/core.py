@@ -127,6 +127,20 @@ class OrchestratorCoreMixin:
         6. Delegates post-processing to the handler.
         7. Persists the assistant message and updates session/profile state.
         """
+        quota_service = QuotaService(UsageService(self.db))
+        try:
+            await quota_service.assert_quota_available(
+                user_id=user.id,
+                tier=user.current_tier,
+                metric=UsageMetric.AI_TOKENS_MONTHLY_TOTAL,
+                increment=1,
+            )
+        except QuotaExceededError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from exc
+
         session = await self._resolve_session(
             user_id=user.id, session_id=payload.session_id
         )

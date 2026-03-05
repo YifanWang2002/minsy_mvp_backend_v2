@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from packages.domain.billing.quota_service import QuotaService
+from packages.domain.billing.usage_service import UsageMetric, UsageService
 from packages.shared_settings.schema.settings import settings
 from packages.domain.backtest.engine import EventDrivenBacktestEngine
 from packages.domain.backtest.types import BacktestConfig, BacktestResult
@@ -49,6 +51,7 @@ from packages.infra.db.models.optimization_trial import OptimizationTrial
 from packages.infra.db.models.strategy import Strategy
 from packages.infra.db.models.stress_job import StressJob
 from packages.infra.db.models.stress_job_item import StressJobItem
+from packages.infra.db.models.user import User
 from packages.infra.observability.logger import logger
 
 StressJobType = Literal["black_swan", "monte_carlo", "param_scan", "optimization"]
@@ -156,6 +159,16 @@ async def create_stress_job(
     if user_id is not None and strategy.user_id != user_id:
         raise StressStrategyNotFoundError(f"Strategy not found: {strategy.id}")
 
+    strategy_owner = await db.scalar(select(User).where(User.id == strategy.user_id))
+    tier = strategy_owner.current_tier if strategy_owner is not None else "free"
+    quota_service = QuotaService(UsageService(db))
+    await quota_service.assert_quota_available(
+        user_id=strategy.user_id,
+        tier=tier,
+        metric=UsageMetric.CPU_JOBS_MONTHLY_TOTAL,
+        increment=1,
+    )
+
     normalized_type = _normalize_job_type(job_type)
     normalized_config = _normalize_create_config(job_type=normalized_type, config=config or {})
 
@@ -173,6 +186,17 @@ async def create_stress_job(
     )
     db.add(job)
     await db.flush()
+    usage_service = UsageService(db)
+    await usage_service.record_cpu_job(
+        user_id=strategy.user_id,
+        source=f"stress_job_create:{normalized_type}",
+        reference_type="stress_job",
+        reference_id=str(job.id),
+        metadata={
+            "strategy_id": str(strategy.id),
+            "base_backtest_job_id": str(base_job.id) if base_job is not None else None,
+        },
+    )
 
     if auto_commit:
         await db.commit()

@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from packages.core.events.notification_events import EVENT_DEPLOYMENT_STARTED
+from packages.domain.billing.quota_service import QuotaService
+from packages.domain.billing.usage_service import UsageMetric, UsageService
 from packages.domain.exceptions import DomainError
 from packages.domain.notification.services.notification_outbox_service import (
     NotificationOutboxService,
@@ -32,6 +34,7 @@ from packages.infra.db.models.phase_transition import PhaseTransition
 from packages.infra.db.models.position import Position
 from packages.infra.db.models.session import Session
 from packages.infra.db.models.strategy import Strategy
+from packages.infra.db.models.user import User
 from packages.infra.observability.logger import logger
 from packages.infra.redis.stores.runtime_state_store import runtime_state_store
 from packages.shared_settings.schema.settings import settings
@@ -568,6 +571,16 @@ async def create_deployment(
             message="Broker account mode does not match deployment mode.",
         )
 
+    owner = await db.scalar(select(User).where(User.id == user_id))
+    tier = owner.current_tier if owner is not None else "free"
+    quota_service = QuotaService(UsageService(db))
+    await quota_service.assert_quota_available(
+        user_id=user_id,
+        tier=tier,
+        metric=UsageMetric.DEPLOYMENTS_RUNNING_COUNT,
+        increment=1,
+    )
+
     capital_resolution = await resolve_deployment_capital(
         requested_capital=capital_allocated,
         account=account,
@@ -612,6 +625,26 @@ async def create_deployment(
             message="Deployment not found after creation.",
         )
     return reloaded
+
+
+async def _assert_running_deployment_quota_for_activation(
+    db: AsyncSession,
+    *,
+    user_id: UUID,
+    current_status: str,
+) -> None:
+    if str(current_status).strip().lower() == "active":
+        return
+
+    owner = await db.scalar(select(User).where(User.id == user_id))
+    tier = owner.current_tier if owner is not None else "free"
+    quota_service = QuotaService(UsageService(db))
+    await quota_service.assert_quota_available(
+        user_id=user_id,
+        tier=tier,
+        metric=UsageMetric.DEPLOYMENTS_RUNNING_COUNT,
+        increment=1,
+    )
 
 
 async def _enqueue_deployment_started_notification(
@@ -676,6 +709,11 @@ async def apply_status_transition(
     execution = state.get("execution") if isinstance(state.get("execution"), dict) else {}
     execution = dict(execution)
     if target_status == "active":
+        await _assert_running_deployment_quota_for_activation(
+            db,
+            user_id=deployment.user_id,
+            current_status=str(deployment.status),
+        )
         compatibility = assess_strategy_runtime_compatibility(
             deployment.strategy.dsl_payload
             if deployment.strategy is not None and isinstance(deployment.strategy.dsl_payload, dict)

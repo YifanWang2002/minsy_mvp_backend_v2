@@ -43,6 +43,7 @@ from packages.domain.strategy import (
     list_strategy_versions,
     upsert_strategy_dsl,
 )
+from packages.domain.billing.quota_service import QuotaExceededError
 from packages.infra.db.models.backtest import BacktestJob
 from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.phase_transition import PhaseTransition
@@ -490,6 +491,11 @@ async def _upsert_confirmed_strategy(
                 "code": "STRATEGY_STORAGE_NOT_FOUND",
                 "message": str(exc),
             },
+        ) from exc
+    except QuotaExceededError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail,
         ) from exc
     return persistence.receipt
 

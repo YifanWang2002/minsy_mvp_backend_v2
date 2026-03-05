@@ -15,6 +15,7 @@ import anyio
 from mcp.server.fastmcp import Context, FastMCP
 
 from packages.domain.strategy.feature.indicators import IndicatorCategory, IndicatorRegistry
+from packages.domain.exceptions import DomainError
 from packages.domain.strategy import (
     StrategyDslValidationException,
     StrategyPatchApplyError,
@@ -1096,6 +1097,13 @@ async def strategy_upsert_dsl(
             ok=False,
             error_code="STRATEGY_STORAGE_NOT_FOUND",
             error_message=str(exc),
+        )
+    except DomainError as exc:
+        return _payload(
+            tool="strategy_upsert_dsl",
+            ok=False,
+            error_code=exc.code,
+            error_message=exc.message,
         )
     except Exception as exc:  # noqa: BLE001
         return _payload(

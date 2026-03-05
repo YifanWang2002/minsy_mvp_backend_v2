@@ -228,7 +228,7 @@ class PostProcessorMixin:
             model=stream_state.completed_model or stream_state.request_model,
             response_id=session.previous_response_id,
             at=datetime.now(UTC),
-            pricing=settings.openai_pricing_json,
+            pricing=settings.openai_pricing,
             cost_tracking_enabled=settings.openai_cost_tracking_enabled,
         )
         usage_payload = turn_usage or stream_state.completed_usage or None
@@ -252,6 +252,57 @@ class PostProcessorMixin:
         )
         self.db.add(assistant_message)
         await self.db.flush()
+        try:
+            usage_service = UsageService(self.db)
+            raw_usage = (
+                dict(stream_state.completed_usage)
+                if isinstance(stream_state.completed_usage, dict)
+                else None
+            )
+            if isinstance(raw_usage, dict) and raw_usage:
+                await usage_service.record_ai_tokens_from_openai_usage(
+                    user_id=session.user_id,
+                    raw_usage=raw_usage,
+                    model=stream_state.completed_model or stream_state.request_model,
+                    source="chat_turn",
+                    reference_type="assistant_message",
+                    reference_id=str(assistant_message.id),
+                    metadata={
+                        "session_id": str(session.id),
+                        "phase": preparation.phase_before,
+                        "response_id": session.previous_response_id,
+                    },
+                )
+            elif isinstance(turn_usage, dict):
+                await usage_service.record_ai_tokens_from_openai_usage(
+                    user_id=session.user_id,
+                    raw_usage={
+                        "input_tokens": int(turn_usage.get("input_tokens") or 0),
+                        "output_tokens": int(turn_usage.get("output_tokens") or 0),
+                    },
+                    model=(
+                        str(turn_usage.get("model") or "").strip()
+                        or stream_state.completed_model
+                        or stream_state.request_model
+                    ),
+                    source="chat_turn",
+                    reference_type="assistant_message",
+                    reference_id=str(assistant_message.id),
+                    metadata={
+                        "session_id": str(session.id),
+                        "phase": preparation.phase_before,
+                        "response_id": session.previous_response_id,
+                        "usage_source": "turn_usage_snapshot_fallback",
+                    },
+                )
+        except Exception as exc:  # noqa: BLE001
+            log_agent(
+                "orchestrator",
+                (
+                    f"session={session.id} usage_persist_failed="
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            )
         self._update_stream_recovery(
             session=session,
             turn_id=turn_id,

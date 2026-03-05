@@ -17,6 +17,7 @@ from packages.domain.stress import (
     list_black_swan_windows,
     schedule_stress_job,
 )
+from packages.domain.exceptions import DomainError
 from apps.mcp.common.utils import log_mcp_tool_result, to_json, utc_now_iso
 from apps.mcp.auth.context_auth import (
     McpContextClaims,
@@ -194,6 +195,13 @@ async def _create_job(
             ok=False,
             error_code="INVALID_INPUT",
             error_message=str(exc),
+        )
+    except DomainError as exc:
+        return _payload(
+            tool=tool,
+            ok=False,
+            error_code=exc.code,
+            error_message=exc.message,
         )
     except Exception as exc:  # noqa: BLE001
         return _payload(
