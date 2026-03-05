@@ -173,6 +173,31 @@ docker compose -f compose.dev.yml up -d --build worker-cpu worker-io beat
 POSTGRES_HOST_PORT=5433 REDIS_HOST_PORT=6380 docker compose -f compose.dev.yml up -d --build
 ```
 
+## 5.4.1 本机直跑（`uv` + `uvicorn`，不走 compose 应用编排）
+
+适用场景：你希望快速调试 API/MCP 代码，不在容器里运行 Python 进程。  
+建议先用 compose 起基础设施：
+
+```bash
+cd backend
+docker compose -f compose.dev.yml up -d postgres redis
+```
+
+再分别启动服务进程：
+
+```bash
+# API
+uv run uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
+
+# MCP
+uv run uvicorn apps.mcp.main:app --host 0.0.0.0 --port 8110 --reload
+
+# Worker / Beat（按需）
+uv run celery -A apps.worker.cpu worker --loglevel=info --pool=prefork
+uv run celery -A apps.worker.io worker --loglevel=info --pool=gevent
+uv run celery -A apps.beat beat --loglevel=info
+```
+
 ## 5.5 端口清单（宿主机）
 
 - API：`http://127.0.0.1:8000`
@@ -321,6 +346,7 @@ curl -fsS http://127.0.0.1:8000/api/v1/status
 for d in strategy backtest market stress trading; do curl -sS -o /dev/null -w "mcp:$d -> %{http_code}\n" http://127.0.0.1:8110/$d/mcp; done
 
 uv run pytest -q
+uv run ruff check .
 uv run python scripts/check_import_boundaries.py
 ```
 
@@ -518,6 +544,36 @@ uv run pytest -q \
 | 滑点模型（slippage） | 部分完成 | 已支持 `slippage_bps` 与 `slippage_bps_by_asset_class`；但没有按 symbol/时段/波动率的动态滑点模型，也没有批量配置接口。 |
 | 多 broker 自动主备路由 | 未完成 | 每个 deployment 目前只绑定一个 broker account，未支持同 deployment 的 primary/fallback 自动切换。 |
 | Provider/Exchange 细粒度能力注册表 | 部分完成 | 当前有默认 capabilities 与 CCXT catalog，但没有独立 capability registry + 协商层。 |
+
+---
+
+## 12. 订阅计费与配额能力（更新于 2026-03-06）
+
+### 12.1 API 能力（`/api/v1/billing/*`）
+
+- `GET /billing/plans`：返回 Free/Plus/Pro 套餐与配额上限
+- `POST /billing/checkout-session`：创建 Stripe Checkout Session
+- `POST /billing/portal-session`：创建 Stripe Billing Portal Session
+- `GET /billing/overview`：返回当前 tier、订阅状态、quota 使用量与计费模型
+- `POST /billing/webhooks/stripe`：处理 Stripe webhook（去重 + 同步订阅）
+- `GET /billing/return`：支付返回页（中英文文案 + Telegram 支持入口）
+
+### 12.2 当前配额守卫（按真实代码）
+
+- 聊天：`/chat/new-thread`、`/chat/send-openai-stream` 会检查 `ai_tokens_monthly_total`
+- 策略：首次创建策略时检查 `strategies_current_count`
+- 回测：创建回测任务时按 bars 估算 CPU token 并检查 `cpu_tokens_monthly_total`
+- 部署：创建/启动部署时检查 `deployments_running_count`
+
+### 12.3 关键环境变量（Stripe + Billing）
+
+- Secrets：`STRIPE_PUBLISHABLE_KEY`、`STRIPE_SECRET_KEY`、`STRIPE_WEBHOOK_SECRET`、`STRIPE_PRICE_PLUS_MONTHLY`、`STRIPE_PRICE_PRO_MONTHLY`
+- Common：`BILLING_PRICING_JSON`、`BILLING_FRONTEND_BASE_URL`、`BILLING_CHECKOUT_SUCCESS_URL`、`BILLING_CHECKOUT_CANCEL_URL`、`BILLING_PORTAL_RETURN_URL`
+
+示例见：
+
+- `env/.env.secrets.example`
+- `env/.env.common.example`
 | CCXT 统一约束预检 | 部分完成 | OKX 关键兼容已做；但通用最小下单量/步进/价格精度预检与自动 rounding 仍需补全。 |
 | Broker 级观测与 SLO 分解 | 部分完成 | `/status` 可看 live_trading 总体健康；缺 provider/exchange 维度成功率、延迟、错误率分解。 |
 
