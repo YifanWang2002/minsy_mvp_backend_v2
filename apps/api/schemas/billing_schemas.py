@@ -7,12 +7,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
-TierValue = Literal["free", "plus", "pro"]
+TierValue = Literal["free", "go", "plus", "pro"]
 
 
 class BillingCheckoutSessionRequest(BaseModel):
-    plan: Literal["plus", "pro"]
+    plan: Literal["go", "plus", "pro"]
 
 
 class BillingCheckoutSessionResponse(BaseModel):
@@ -31,6 +30,7 @@ class BillingPlanResponse(BaseModel):
     price_usd_monthly: float
     currency: str = "USD"
     stripe_price_id: str | None = None
+    stripe_product_id: str | None = None
     limits: dict[str, int] = Field(default_factory=dict)
 
 

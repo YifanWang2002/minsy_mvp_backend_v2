@@ -85,6 +85,14 @@ class Settings(BaseSettings):
         default=True,
         alias="OPENAI_COST_TRACKING_ENABLED",
     )
+    billing_usage_persist_silent_failure_limit: int = Field(
+        default=3,
+        alias="BILLING_USAGE_PERSIST_SILENT_FAILURE_LIMIT",
+    )
+    billing_usage_persist_silent_window_seconds: int = Field(
+        default=600,
+        alias="BILLING_USAGE_PERSIST_SILENT_WINDOW_SECONDS",
+    )
     openai_pricing_json: dict[str, dict[str, float]] = Field(
         default_factory=dict,
         alias="OPENAI_PRICING_JSON",
@@ -92,8 +100,16 @@ class Settings(BaseSettings):
     stripe_publishable_key: str = Field(default="", alias="STRIPE_PUBLISHABLE_KEY")
     stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
+    stripe_price_go_monthly: str = Field(
+        default="price_1T7ek0RruOLLmTefTzIHF7Ge",
+        alias="STRIPE_PRICE_GO_MONTHLY",
+    )
     stripe_price_plus_monthly: str = Field(default="", alias="STRIPE_PRICE_PLUS_MONTHLY")
     stripe_price_pro_monthly: str = Field(default="", alias="STRIPE_PRICE_PRO_MONTHLY")
+    stripe_product_go: str = Field(
+        default="prod_U5qQpo2ztIhimg",
+        alias="STRIPE_PRODUCT_GO",
+    )
     billing_checkout_success_url: str = Field(
         default="",
         alias="BILLING_CHECKOUT_SUCCESS_URL",
@@ -260,6 +276,10 @@ class Settings(BaseSettings):
 
     # Trading runtime controls
     paper_trading_enabled: bool = Field(default=True, alias="PAPER_TRADING_ENABLED")
+    paper_trading_manual_action_queue: str = Field(
+        default="paper_trading_manual",
+        alias="PAPER_TRADING_MANUAL_ACTION_QUEUE",
+    )
     paper_trading_enqueue_on_start: bool = Field(
         default=True,
         alias="PAPER_TRADING_ENQUEUE_ON_START",
@@ -749,6 +769,20 @@ class Settings(BaseSettings):
                 "SENTRY_HTTP_STATUS_MIN_CODE must be <= SENTRY_HTTP_STATUS_MAX_CODE."
             )
         return self
+
+    @field_validator("billing_usage_persist_silent_failure_limit")
+    @classmethod
+    def _validate_billing_usage_persist_silent_failure_limit(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("BILLING_USAGE_PERSIST_SILENT_FAILURE_LIMIT must be >= 0.")
+        return value
+
+    @field_validator("billing_usage_persist_silent_window_seconds")
+    @classmethod
+    def _validate_billing_usage_persist_silent_window_seconds(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("BILLING_USAGE_PERSIST_SILENT_WINDOW_SECONDS must be >= 1.")
+        return value
 
     @field_validator("postgres_backup_retention_count")
     @classmethod
@@ -1281,12 +1315,23 @@ class Settings(BaseSettings):
     @property
     def stripe_price_to_tier_map(self) -> dict[str, str]:
         mapping: dict[str, str] = {}
+        go = self.stripe_price_go_monthly.strip()
         plus = self.stripe_price_plus_monthly.strip()
         pro = self.stripe_price_pro_monthly.strip()
+        if go:
+            mapping[go] = "go"
         if plus:
             mapping[plus] = "plus"
         if pro:
             mapping[pro] = "pro"
+        return mapping
+
+    @property
+    def stripe_product_to_tier_map(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        go = self.stripe_product_go.strip()
+        if go:
+            mapping[go] = "go"
         return mapping
 
     @property
@@ -1326,6 +1371,12 @@ class Settings(BaseSettings):
                 "cpu_tokens_monthly_total": 20,
                 "strategies_current_count": 5,
                 "deployments_running_count": 1,
+            },
+            "go": {
+                "ai_tokens_monthly_total": 350_000,
+                "cpu_tokens_monthly_total": 70,
+                "strategies_current_count": 15,
+                "deployments_running_count": 3,
             },
             "plus": {
                 "ai_tokens_monthly_total": 1_000_000,
@@ -1384,6 +1435,7 @@ class Settings(BaseSettings):
             "cpu_job_cost_usd": 0.20,
             "cpu_bars_per_token": 52_560.0,
             "target_profit_margin": 0.50,
+            "go_price_usd": 8.0,
             "plus_price_usd": 20.0,
             "pro_price_usd": 60.0,
         }
