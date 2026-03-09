@@ -15,6 +15,18 @@ def enqueue_paper_trading_runtime(deployment_id: UUID | str) -> str:
     return _enqueue(deployment_id)
 
 
+def enqueue_execute_manual_trade_action(
+    action_id: UUID | str,
+    *,
+    countdown_seconds: int | None = None,
+) -> str | None:
+    from packages.infra.queue.publishers import (
+        enqueue_execute_manual_trade_action as _enqueue,
+    )
+
+    return _enqueue(action_id, countdown_seconds=countdown_seconds)
+
+
 def enqueue_market_data_refresh(
     *,
     market: str,

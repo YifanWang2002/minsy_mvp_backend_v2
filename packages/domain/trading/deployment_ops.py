@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -70,6 +70,24 @@ class DeploymentCapitalResolution:
     source: str
 
 
+@dataclass(frozen=True, slots=True)
+class BrokerCapitalBudget:
+    """Broker capital budget snapshot for deployment allocation checks."""
+
+    total_capital: Decimal
+    reserved_capital: Decimal
+    remaining_capital: Decimal
+    reservation_statuses: tuple[str, ...]
+
+
+_BROKER_CAPITAL_RESERVATION_STATUSES: tuple[str, ...] = (
+    "pending",
+    "active",
+    "paused",
+    "error",
+)
+
+
 def _raise_error(*, status_code: int, code: str, message: str) -> None:
     raise DomainError(status_code=status_code, code=code, message=message)
 
@@ -115,6 +133,115 @@ def _positive_decimal_or_none(value: Any) -> Decimal | None:
     if parsed <= 0:
         return None
     return parsed.quantize(Decimal("0.01"))
+
+
+def _non_negative_decimal(value: Any) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except Exception:  # noqa: BLE001
+        return Decimal("0.00")
+    if parsed <= 0:
+        return Decimal("0.00")
+    return parsed.quantize(Decimal("0.01"))
+
+
+def _normalize_reservation_statuses(
+    statuses: tuple[str, ...] | list[str] | None,
+) -> tuple[str, ...]:
+    if not statuses:
+        return _BROKER_CAPITAL_RESERVATION_STATUSES
+    normalized = tuple(
+        status.strip().lower()
+        for status in statuses
+        if isinstance(status, str) and status.strip()
+    )
+    return normalized or _BROKER_CAPITAL_RESERVATION_STATUSES
+
+
+async def resolve_broker_capital_budget(
+    db: AsyncSession,
+    *,
+    account: BrokerAccount,
+    total_capital: Decimal | None = None,
+    reservation_statuses: tuple[str, ...] | list[str] | None = None,
+) -> BrokerCapitalBudget:
+    normalized_statuses = _normalize_reservation_statuses(reservation_statuses)
+    resolved_total_capital = _non_negative_decimal(total_capital)
+    if resolved_total_capital <= 0:
+        capital_resolution = await resolve_deployment_capital(
+            requested_capital=Decimal("0.00"),
+            account=account,
+        )
+        resolved_total_capital = _non_negative_decimal(capital_resolution.amount)
+
+    reserved_rows_subquery = (
+        select(
+            Deployment.id.label("deployment_id"),
+            Deployment.capital_allocated.label("capital_allocated"),
+        )
+        .join(DeploymentRun, DeploymentRun.deployment_id == Deployment.id)
+        .where(
+            DeploymentRun.broker_account_id == account.id,
+            Deployment.user_id == account.user_id,
+            Deployment.mode == account.mode,
+            Deployment.status.in_(normalized_statuses),
+        )
+        .group_by(Deployment.id, Deployment.capital_allocated)
+        .subquery()
+    )
+    reserved_raw = await db.scalar(
+        select(func.coalesce(func.sum(reserved_rows_subquery.c.capital_allocated), 0))
+    )
+    reserved_capital = _non_negative_decimal(reserved_raw)
+    remaining_capital = resolved_total_capital - reserved_capital
+    if remaining_capital < 0:
+        remaining_capital = Decimal("0.00")
+    remaining_capital = remaining_capital.quantize(Decimal("0.01"))
+
+    return BrokerCapitalBudget(
+        total_capital=resolved_total_capital.quantize(Decimal("0.01")),
+        reserved_capital=reserved_capital,
+        remaining_capital=remaining_capital,
+        reservation_statuses=normalized_statuses,
+    )
+
+
+def resolve_deployment_capital_with_budget(
+    *,
+    requested_capital: Decimal,
+    budget: BrokerCapitalBudget,
+    auto_resolution: DeploymentCapitalResolution,
+) -> DeploymentCapitalResolution:
+    requested = requested_capital.quantize(Decimal("0.01"))
+    remaining = budget.remaining_capital.quantize(Decimal("0.01"))
+    if remaining <= 0:
+        _raise_error(
+            status_code=422,
+            code="DEPLOYMENT_CAPITAL_EXCEEDS_REMAINING_BUDGET",
+            message="No remaining broker capital budget available for this account.",
+        )
+
+    if requested > 0:
+        if requested > remaining:
+            _raise_error(
+                status_code=422,
+                code="DEPLOYMENT_CAPITAL_EXCEEDS_REMAINING_BUDGET",
+                message="Requested capital exceeds remaining broker capital budget.",
+            )
+        return DeploymentCapitalResolution(amount=requested, source="requested")
+
+    resolved_auto = auto_resolution.amount.quantize(Decimal("0.01"))
+    capped = min(resolved_auto, remaining)
+    if capped <= 0:
+        _raise_error(
+            status_code=422,
+            code="DEPLOYMENT_CAPITAL_EXCEEDS_REMAINING_BUDGET",
+            message="No remaining broker capital budget available for this account.",
+        )
+    source = auto_resolution.source
+    if capped < resolved_auto:
+        source = f"{source}:capped_by_remaining_budget"
+    return DeploymentCapitalResolution(amount=capped, source=source)
 
 
 def _resolve_capital_from_validation_metadata(account: BrokerAccount) -> Decimal | None:
@@ -269,6 +396,13 @@ def _latest_run(deployment: Deployment) -> DeploymentRun | None:
         key=lambda item: item.created_at,
         reverse=True,
     )[0]
+
+
+def _deployment_query_options() -> tuple[object, ...]:
+    return (
+        selectinload(Deployment.deployment_runs).selectinload(DeploymentRun.broker_account),
+        selectinload(Deployment.strategy),
+    )
 
 
 def _serialize_run(run: DeploymentRun | None) -> dict[str, Any] | None:
@@ -483,7 +617,7 @@ async def load_owned_deployment(
 ) -> Deployment:
     deployment = await db.scalar(
         select(Deployment)
-        .options(selectinload(Deployment.deployment_runs), selectinload(Deployment.strategy))
+        .options(*_deployment_query_options())
         .where(
             Deployment.id == deployment_id,
             Deployment.user_id == user_id,
@@ -547,10 +681,12 @@ async def create_deployment(
         )
 
     account = await db.scalar(
-        select(BrokerAccount).where(
+        select(BrokerAccount)
+        .where(
             BrokerAccount.id == broker_account_id,
             BrokerAccount.user_id == user_id,
         )
+        .with_for_update()
     )
     if account is None:
         _raise_error(
@@ -570,6 +706,12 @@ async def create_deployment(
             code="BROKER_ACCOUNT_MODE_MISMATCH",
             message="Broker account mode does not match deployment mode.",
         )
+    if str(account.status).strip().lower() != "active":
+        _raise_error(
+            status_code=422,
+            code="BROKER_ACCOUNT_INACTIVE",
+            message="Broker account must be active before deployment.",
+        )
 
     owner = await db.scalar(select(User).where(User.id == user_id))
     tier = owner.current_tier if owner is not None else "free"
@@ -581,9 +723,19 @@ async def create_deployment(
         increment=1,
     )
 
-    capital_resolution = await resolve_deployment_capital(
-        requested_capital=capital_allocated,
+    auto_capital_resolution = await resolve_deployment_capital(
+        requested_capital=Decimal("0.00"),
         account=account,
+    )
+    capital_budget = await resolve_broker_capital_budget(
+        db,
+        account=account,
+        total_capital=auto_capital_resolution.amount,
+    )
+    capital_resolution = resolve_deployment_capital_with_budget(
+        requested_capital=capital_allocated,
+        budget=capital_budget,
+        auto_resolution=auto_capital_resolution,
     )
     resolved_capital_allocated = capital_resolution.amount
     resolved_runtime_state = dict(runtime_state) if isinstance(runtime_state, dict) else {}
@@ -591,6 +743,12 @@ async def create_deployment(
         "source": capital_resolution.source,
         "resolved_amount": format(resolved_capital_allocated, "f"),
         "requested_amount": format(capital_allocated.quantize(Decimal("0.01")), "f"),
+    }
+    resolved_runtime_state["capital_budget"] = {
+        "total_capital": format(capital_budget.total_capital, "f"),
+        "reserved_capital": format(capital_budget.reserved_capital, "f"),
+        "remaining_capital": format(capital_budget.remaining_capital, "f"),
+        "reservation_statuses": list(capital_budget.reservation_statuses),
     }
 
     deployment = Deployment(
@@ -615,7 +773,7 @@ async def create_deployment(
     await db.commit()
     reloaded = await db.scalar(
         select(Deployment)
-        .options(selectinload(Deployment.deployment_runs), selectinload(Deployment.strategy))
+        .options(*_deployment_query_options())
         .where(Deployment.id == deployment.id)
     )
     if reloaded is None:
@@ -633,7 +791,9 @@ async def _assert_running_deployment_quota_for_activation(
     user_id: UUID,
     current_status: str,
 ) -> None:
-    if str(current_status).strip().lower() == "active":
+    normalized_status = str(current_status).strip().lower()
+    # pending/paused/error are already counted by deployments_running_count.
+    if normalized_status in {"active", "pending", "paused", "error"}:
         return
 
     owner = await db.scalar(select(User).where(User.id == user_id))
@@ -733,6 +893,26 @@ async def apply_status_transition(
                 code="PAPER_TRADING_DISABLED",
                 message="Paper trading is currently disabled.",
             )
+        # Use explicit query instead of relationship lazy-loading so async callers
+        # (including MCP tools) do not hit MissingGreenlet when validating status.
+        broker_account = await db.scalar(
+            select(BrokerAccount).where(
+                BrokerAccount.id == run.broker_account_id,
+                BrokerAccount.user_id == deployment.user_id,
+            )
+        )
+        if broker_account is None:
+            _raise_error(
+                status_code=409,
+                code="BROKER_ACCOUNT_NOT_FOUND",
+                message="Broker account is missing for this deployment run.",
+            )
+        if str(broker_account.status).strip().lower() != "active":
+            _raise_error(
+                status_code=422,
+                code="BROKER_ACCOUNT_INACTIVE",
+                message="Broker account must be active before starting deployment.",
+            )
         deployment.status = "active"
         deployment.deployed_at = deployment.deployed_at or now
         deployment.stopped_at = None
@@ -793,7 +973,7 @@ async def apply_status_transition(
     await runtime_state_store.upsert(deployment.id, state)
     reloaded = await db.scalar(
         select(Deployment)
-        .options(selectinload(Deployment.deployment_runs), selectinload(Deployment.strategy))
+        .options(*_deployment_query_options())
         .where(Deployment.id == deployment.id)
     )
     if reloaded is None:

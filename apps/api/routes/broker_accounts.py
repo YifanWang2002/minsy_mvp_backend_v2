@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import get_db
 from apps.api.middleware.auth import get_current_user
-from apps.api.schemas.events import BrokerAccountResponse, CcxtExchangeInfo
+from apps.api.schemas.events import (
+    BrokerAccountCapitalBudgetResponse,
+    BrokerAccountResponse,
+    CcxtExchangeInfo,
+)
 from apps.api.schemas.requests import (
     BrokerAccountCreateRequest,
     BrokerAccountCredentialsUpdateRequest,
@@ -26,6 +30,7 @@ from packages.domain.trading.services.broker_validation_service import (
 from packages.domain.trading.broker_capability_policy import (
     build_broker_capabilities,
 )
+from packages.domain.trading.deployment_ops import resolve_broker_capital_budget
 from packages.domain.trading.services.ccxt_exchange_catalog import (
     list_supported_ccxt_exchanges,
 )
@@ -600,6 +605,44 @@ async def get_broker_account(
             },
         )
     return _to_response(account)
+
+
+@router.get(
+    "/{broker_account_id}/capital-budget",
+    response_model=BrokerAccountCapitalBudgetResponse,
+)
+async def get_broker_account_capital_budget(
+    broker_account_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BrokerAccountCapitalBudgetResponse:
+    account = await db.scalar(
+        select(BrokerAccount).where(
+            BrokerAccount.id == broker_account_id,
+            BrokerAccount.user_id == user.id,
+        )
+    )
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "BROKER_ACCOUNT_NOT_FOUND",
+                "message": "Broker account not found.",
+            },
+        )
+
+    budget = await resolve_broker_capital_budget(
+        db,
+        account=account,
+    )
+    return BrokerAccountCapitalBudgetResponse(
+        broker_account_id=account.id,
+        total_capital=float(budget.total_capital),
+        reserved_capital=float(budget.reserved_capital),
+        remaining_capital=float(budget.remaining_capital),
+        reservation_statuses=list(budget.reservation_statuses),
+        as_of=datetime.now(UTC),
+    )
 
 
 @router.patch("/{broker_account_id}/credentials", response_model=BrokerAccountResponse)

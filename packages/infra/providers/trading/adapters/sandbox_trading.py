@@ -146,6 +146,41 @@ def _serialize_position(
     }
 
 
+def _resolve_intent_execution_price(metadata: dict[str, Any]) -> Decimal:
+    """Prefer runtime-resolved execution mark from order intent metadata."""
+    if not isinstance(metadata, dict):
+        return Decimal("0")
+    explicit = metadata.get("execution_price")
+    if explicit is None:
+        explicit = metadata.get("submitted_mark_price")
+    resolved = _to_decimal(explicit, default="0")
+    return resolved if resolved > 0 else Decimal("0")
+
+
+def _resolve_fair_quote_price(
+    *,
+    bid: Decimal,
+    ask: Decimal,
+    last: Decimal,
+) -> Decimal:
+    """Use a fair reference instead of crossing full spread on every fill."""
+    if bid > 0 and ask > 0:
+        lower = min(bid, ask)
+        upper = max(bid, ask)
+        if last > 0 and lower <= last <= upper:
+            return last
+        midpoint = (lower + upper) / Decimal("2")
+        if midpoint > 0:
+            return midpoint
+    if last > 0:
+        return last
+    if bid > 0:
+        return bid
+    if ask > 0:
+        return ask
+    return Decimal("0")
+
+
 class SandboxTradingAdapter(BrokerAdapter):
     """Internal paper-execution adapter with Alpaca market data as source-of-truth."""
 
@@ -291,25 +326,39 @@ class SandboxTradingAdapter(BrokerAdapter):
         *,
         symbol: str,
         side: str,
+        metadata: dict[str, Any] | None = None,
         slippage_bps: Decimal | None = None,
     ) -> tuple[Decimal, datetime]:
+        intent_metadata = metadata if isinstance(metadata, dict) else {}
+        intent_mark = _resolve_intent_execution_price(intent_metadata)
+        if intent_mark > 0:
+            effective_slippage_bps = (
+                slippage_bps if slippage_bps is not None else self._slippage_bps
+            )
+            slippage = effective_slippage_bps / Decimal("10000")
+            adjusted = intent_mark * (
+                Decimal("1") + slippage if side == "buy" else Decimal("1") - slippage
+            )
+            return adjusted, datetime.now(UTC)
+
         quote = await self.fetch_latest_quote(symbol)
         if quote is not None:
             last = _to_decimal(quote.last, default="0")
             bid = _to_decimal(quote.bid, default="0")
             ask = _to_decimal(quote.ask, default="0")
-            if side == "buy":
-                base = ask if ask > 0 else last if last > 0 else bid
-            else:
-                base = bid if bid > 0 else last if last > 0 else ask
+            base = _resolve_fair_quote_price(bid=bid, ask=ask, last=last)
             if base > 0:
-                effective_slippage_bps = slippage_bps if slippage_bps is not None else self._slippage_bps
+                effective_slippage_bps = (
+                    slippage_bps if slippage_bps is not None else self._slippage_bps
+                )
                 slippage = effective_slippage_bps / Decimal("10000")
-                adjusted = base * (Decimal("1") + slippage if side == "buy" else Decimal("1") - slippage)
-                return adjusted, quote.timestamp
+                adjusted = base * (
+                    Decimal("1") + slippage if side == "buy" else Decimal("1") - slippage
+                )
+                return adjusted, datetime.now(UTC)
         latest_bar = await self.fetch_latest_1m_bar(symbol)
         if latest_bar is not None:
-            return _to_decimal(latest_bar.close, default="0"), latest_bar.timestamp
+            return _to_decimal(latest_bar.close, default="0"), datetime.now(UTC)
         return Decimal("0"), datetime.now(UTC)
 
     async def _acquire_account_lock(self):
@@ -650,6 +699,7 @@ class SandboxTradingAdapter(BrokerAdapter):
         fill_price, submitted_at = await self._resolve_fill_price(
             symbol=symbol,
             side=side,
+            metadata=metadata,
             slippage_bps=slippage_bps,
         )
         if fill_price <= 0:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,7 +16,14 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from test._support.live_helpers import BACKEND_DIR, parse_sse_payloads
+from test._support.live_helpers import (
+    BACKEND_DIR,
+    COMPOSE_FILE,
+    compose_ps,
+    parse_sse_payloads,
+    run_command,
+    wait_http_ok,
+)
 
 _HARNESS_REPORT_DIR = BACKEND_DIR / "runtime" / "harness_reports"
 _DEFAULT_PASSWORD = "test1234"
@@ -107,6 +117,37 @@ def _extract_first_sse_payload(raw_text: str) -> dict[str, Any]:
     if isinstance(decoded, dict):
         return decoded
     raise AssertionError(f"No SSE payload found in response: {raw_text[:300]}")
+
+
+def _parse_sse_frames(raw_text: str) -> list[dict[str, Any]]:
+    frames: list[dict[str, Any]] = []
+    blocks = [item.strip() for item in raw_text.split("\n\n") if item.strip()]
+    for block in blocks:
+        event_name = "message"
+        payload: dict[str, Any] | None = None
+        raw_data: str | None = None
+        for line in block.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("event:"):
+                event_name = stripped.removeprefix("event:").strip() or "message"
+            elif stripped.startswith("data:"):
+                raw_data = stripped.removeprefix("data:").strip()
+        if raw_data is not None:
+            try:
+                decoded = json.loads(raw_data)
+            except json.JSONDecodeError:
+                decoded = {"raw": raw_data}
+            if isinstance(decoded, dict):
+                payload = decoded
+            else:
+                payload = {"value": decoded}
+        frames.append(
+            {
+                "event": event_name,
+                "payload": payload or {},
+            }
+        )
+    return frames
 
 
 def _build_deployable_dsl() -> dict[str, object]:
@@ -371,6 +412,37 @@ class ApiDriver:
             status_code=response.status_code,
         )
         assert response.status_code in {200, 201}, response.text
+        access_token = str(body["access_token"])
+        user_id = UUID(str(body["user_id"]))
+        return {"Authorization": f"Bearer {access_token}"}, user_id, step
+
+    def login_user(
+        self,
+        *,
+        email: str,
+        password: str,
+    ) -> tuple[dict[str, str], UUID, HarnessStep]:
+        payload = {
+            "email": email.strip(),
+            "password": password,
+        }
+        started = time.perf_counter()
+        response = self._client.post("/api/v1/auth/login", json=payload)
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        body = response.json()
+        step = HarnessStep(
+            name="login_seeded_user",
+            driver="api",
+            method="POST",
+            target="/api/v1/auth/login",
+            duration_ms=duration_ms,
+            ok=response.status_code == 200,
+            request={"email": payload["email"]},
+            response=body,
+            status_code=response.status_code,
+            error=response.text if response.status_code != 200 else None,
+        )
+        assert response.status_code == 200, response.text
         access_token = str(body["access_token"])
         user_id = UUID(str(body["user_id"]))
         return {"Authorization": f"Bearer {access_token}"}, user_id, step
@@ -1271,6 +1343,348 @@ class DeploymentRuntimeHarness:
         )
         return context, steps
 
+    def _find_existing_deployable_strategy_id(
+        self,
+        *,
+        user_id: UUID,
+    ) -> str | None:
+        db_session_module = _resolve_db_session_module()
+
+        async def _load() -> str | None:
+            assert db_session_module.AsyncSessionLocal is not None
+            async with db_session_module.AsyncSessionLocal() as db:
+                value = await db.scalar(
+                    text(
+                        "select id::text from strategies "
+                        "where user_id = :user_id "
+                        "and lower(status) in ('validated', 'backtested', 'deployed') "
+                        "order by updated_at desc nulls last, created_at desc "
+                        "limit 1"
+                    ),
+                    {"user_id": user_id},
+                )
+                if value is None:
+                    return None
+                return str(value)
+
+        assert self._client.portal is not None
+        return self._client.portal.call(_load)
+
+    def prepare_context_for_existing_user(
+        self,
+        *,
+        email: str,
+        password: str,
+    ) -> tuple[ScenarioContext, list[HarnessStep]]:
+        steps: list[HarnessStep] = []
+        auth_headers, user_id, login_step = self.api.login_user(
+            email=email,
+            password=password,
+        )
+        steps.append(login_step)
+
+        preference_payload, preference_step = self.api.request(
+            name="set_trading_preference_auto_execute",
+            method="PUT",
+            path="/api/v1/trading/preferences",
+            headers=auth_headers,
+            json_body={
+                "execution_mode": "auto_execute",
+                "approval_scope": "open_and_close",
+            },
+        )
+        steps.append(preference_step)
+        assert preference_payload["execution_mode"] == "auto_execute"
+
+        deployments_payload, deployments_step = self.api.request(
+            name="reuse_existing_deployment_list",
+            method="GET",
+            path="/api/v1/deployments",
+            headers=auth_headers,
+            expected_status=200,
+            note=(
+                "Primary path for seeded user: reuse an existing deployment "
+                "so quota-limited accounts can still run realtime E2E."
+            ),
+        )
+        steps.append(deployments_step)
+
+        if isinstance(deployments_payload, list):
+            deployment_rows = [row for row in deployments_payload if isinstance(row, dict)]
+        elif isinstance(deployments_payload, dict):
+            raw_rows = deployments_payload.get("deployments")
+            deployment_rows = (
+                [row for row in raw_rows if isinstance(row, dict)]
+                if isinstance(raw_rows, list)
+                else []
+            )
+        else:
+            deployment_rows = []
+
+        def _deployment_rank(row: dict[str, Any]) -> tuple[int, int]:
+            status_order = {
+                "active": 0,
+                "paused": 1,
+                "pending": 2,
+                "stopped": 3,
+                "error": 4,
+            }
+            raw_status = str(row.get("status", "")).strip().lower()
+            rank = status_order.get(raw_status, 99)
+            market_bonus = (
+                0 if str(row.get("market", "")).strip().lower() == "crypto" else 1
+            )
+            return market_bonus, rank
+
+        candidates = [
+            row
+            for row in deployment_rows
+            if str(row.get("deployment_id", "")).strip()
+        ]
+        candidates.sort(key=_deployment_rank)
+        selected = candidates[0] if candidates else None
+
+        if selected is not None:
+            session_id = str(uuid4())
+            deployment_id = str(selected["deployment_id"])
+            strategy_id = str(selected.get("strategy_id", "")).strip()
+            broker_account_id = ""
+            run_payload = selected.get("run")
+            if isinstance(run_payload, dict):
+                broker_account_id = str(run_payload.get("broker_account_id", "")).strip()
+            if not strategy_id:
+                fallback_strategy_id = self._find_existing_deployable_strategy_id(
+                    user_id=user_id
+                )
+                strategy_id = str(fallback_strategy_id or "")
+            context_symbol = "BTCUSD"
+            selected_symbols = selected.get("symbols")
+            if isinstance(selected_symbols, list) and selected_symbols:
+                first_symbol = str(selected_symbols[0]).strip()
+                if first_symbol:
+                    context_symbol = first_symbol
+            steps.append(
+                HarnessStep(
+                    name="select_existing_deployment_context",
+                    driver="api",
+                    method="SELECT",
+                    target="/api/v1/deployments",
+                    duration_ms=0,
+                    ok=True,
+                    request={"strategy_preference": "crypto-first"},
+                    response={
+                        "deployment_id": deployment_id,
+                        "strategy_id": strategy_id,
+                        "broker_account_id": broker_account_id,
+                        "symbol": context_symbol,
+                        "status": selected.get("status"),
+                    },
+                    note="Reuses seeded-user deployment (real strategy) for deterministic E2E.",
+                )
+            )
+            context = ScenarioContext(
+                user_id=user_id,
+                auth_headers=auth_headers,
+                session_id=session_id,
+                strategy_id=strategy_id,
+                broker_account_id=broker_account_id,
+                deployment_id=deployment_id,
+                symbol=context_symbol,
+            )
+            return context, steps
+
+        # No reusable deployment: create minimal new context as fallback.
+        thread_payload, thread_step = self.api.request(
+            name="create_chat_thread",
+            method="POST",
+            path="/api/v1/chat/new-thread",
+            headers=auth_headers,
+            json_body={
+                "metadata": {
+                    "source": "deployment-runtime-harness-seeded-user",
+                }
+            },
+            expected_status=201,
+        )
+        steps.append(thread_step)
+        session_id = str(thread_payload["session_id"])
+        strategy_payload, strategy_step = self.api.request(
+            name="confirm_strategy",
+            method="POST",
+            path="/api/v1/strategies/confirm",
+            headers=auth_headers,
+            json_body={
+                "session_id": session_id,
+                "dsl_json": _build_deployable_dsl(),
+                "auto_start_backtest": False,
+                "language": "en",
+            },
+        )
+        steps.append(strategy_step)
+        strategy_id = str(strategy_payload["strategy_id"])
+        broker_payload, broker_step = self.api.request(
+            name="create_builtin_sandbox_broker",
+            method="POST",
+            path="/api/v1/broker-accounts/builtin-sandbox",
+            headers=auth_headers,
+            json_body={
+                "starting_cash": "25000",
+                "fee_bps": "3",
+                "metadata": {"source": "deployment-runtime-harness-seeded-user"},
+            },
+            expected_status=201,
+        )
+        steps.append(broker_step)
+        broker_account_id = str(broker_payload["broker_account_id"])
+        deployment_payload, deployment_step = self.api.request(
+            name="create_deployment",
+            method="POST",
+            path="/api/v1/deployments",
+            headers=auth_headers,
+            json_body={
+                "strategy_id": strategy_id,
+                "broker_account_id": broker_account_id,
+                "mode": "paper",
+                "capital_allocated": 10000,
+                "risk_limits": {"order_qty": 1},
+                "runtime_state": {"source": "deployment-runtime-harness-seeded-user"},
+            },
+            expected_status=201,
+        )
+        steps.append(deployment_step)
+        deployment_id = str(deployment_payload["deployment_id"])
+        context_symbol = "BTC/USD"
+
+        context = ScenarioContext(
+            user_id=user_id,
+            auth_headers=auth_headers,
+            session_id=session_id,
+            strategy_id=strategy_id,
+            broker_account_id=broker_account_id,
+            deployment_id=deployment_id,
+            symbol=context_symbol,
+        )
+        return context, steps
+
+    @staticmethod
+    def _extract_access_token(headers: dict[str, str]) -> str:
+        auth_value = str(headers.get("Authorization", "")).strip()
+        bearer_prefix = "Bearer "
+        if auth_value.startswith(bearer_prefix):
+            return auth_value.removeprefix(bearer_prefix).strip()
+        return auth_value
+
+    @staticmethod
+    def _ws_receive_json(
+        ws: Any,
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def _worker() -> None:
+            try:
+                raw = ws.receive_text()
+                result_queue.put(("ok", raw))
+            except Exception as exc:  # noqa: BLE001
+                result_queue.put(("err", exc))
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        try:
+            state, value = result_queue.get(timeout=max(0.1, timeout_seconds))
+        except queue.Empty as exc:
+            raise AssertionError(
+                f"WebSocket receive timed out after {timeout_seconds:.2f}s"
+            ) from exc
+        if state == "err":
+            raise AssertionError(f"WebSocket receive failed: {value!r}")
+        raw_text = str(value)
+        try:
+            payload = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            raise AssertionError(f"WebSocket frame is not JSON: {raw_text[:200]}") from exc
+        if not isinstance(payload, dict):
+            raise AssertionError(f"WebSocket frame must be JSON object: {payload!r}")
+        return payload
+
+    @classmethod
+    def _ws_wait_for_event(
+        cls,
+        ws: Any,
+        *,
+        event_name: str,
+        timeout_seconds: float,
+        predicate: Callable[[dict[str, Any]], bool] | None = None,
+        ignored_events: set[str] | None = None,
+        observed: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        ignored = set(ignored_events or {"heartbeat", "pong"})
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            remaining = max(0.1, deadline - time.monotonic())
+            slice_timeout = min(2.0, remaining)
+            try:
+                message = cls._ws_receive_json(ws, timeout_seconds=slice_timeout)
+            except AssertionError as exc:
+                if "timed out" in str(exc).lower():
+                    continue
+                raise
+            if observed is not None:
+                observed.append(message)
+            current_event = str(message.get("event", "")).strip()
+            if current_event in ignored:
+                continue
+            if current_event != event_name:
+                continue
+            if predicate is None or bool(predicate(message)):
+                return message
+        observed_events = [str(item.get("event")) for item in (observed or [])[-12:]]
+        raise AssertionError(
+            f"Timed out waiting for WS event={event_name}. recent_events={observed_events}"
+        )
+
+    @staticmethod
+    def _wait_for_redis_healthy(*, timeout_seconds: float = 60.0) -> None:
+        wait_http_ok("http://127.0.0.1:8000/api/v1/health", timeout_seconds=60)
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            rows = compose_ps()
+            for row in rows:
+                if str(row.get("Service", "")).strip() != "redis":
+                    continue
+                state = str(row.get("State", "")).strip().lower()
+                health = str(row.get("Health", "")).strip().lower()
+                if state == "running" and health in {"healthy", ""}:
+                    return
+            time.sleep(1.0)
+        raise AssertionError("Redis container did not become healthy in time.")
+
+    @staticmethod
+    def _publish_synthetic_bar_pubsub(
+        *,
+        market: str,
+        symbol: str,
+        timeframe: str,
+        bar: dict[str, Any],
+    ) -> dict[str, Any]:
+        from packages.domain.market_data.bar_event_pubsub import bar_event_channel
+
+        redis = _resolve_sync_redis_client()()
+        payload = {
+            "event": "bar_update",
+            "market": market.strip().lower(),
+            "symbol": symbol.strip().upper(),
+            "timeframe": timeframe.strip().lower(),
+            "bars": [bar],
+            "published_at": datetime.now(UTC).isoformat(),
+        }
+        redis.publish(
+            bar_event_channel(market=market, symbol=symbol),
+            json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+        )
+        return payload
+
     @staticmethod
     def _extract_start_token(connect_url: str) -> str | None:
         text = str(connect_url).strip()
@@ -1410,6 +1824,593 @@ class DeploymentRuntimeHarness:
         artifacts["seeded_telegram_binding"] = binding_payload
         artifacts["telegram_binding_path"] = "seeded_binding"
         return False, "seeded_binding"
+
+    def run_v2_portfolio_realtime_resilience_scenario(
+        self,
+        *,
+        email: str,
+        password: str,
+    ) -> HarnessReport:
+        started_at = _utc_now()
+        context, steps = self.prepare_context_for_existing_user(
+            email=email,
+            password=password,
+        )
+        artifacts: dict[str, Any] = {
+            "seeded_user_email": email,
+            "broker_mode": "builtin_sandbox",
+            "frontend_request_matrix": [
+                "GET /deployments",
+                "GET /trading/preferences",
+                "GET /trade-approvals",
+                "GET /deployments/{id}/portfolio",
+                "GET /deployments/{id}/orders",
+                "GET /deployments/{id}/fills",
+                "GET /market-data/bars",
+                "GET /stream/deployments/{id}",
+                "WS /ws/trading subscribe + subscribe_bars",
+                "POST /deployments/{id}/manual-actions (open/close)",
+            ],
+        }
+
+        db_before = self.db.capture(
+            deployment_id=context.deployment_id,
+            user_id=context.user_id,
+        )
+
+        _, start_step = self.api.request(
+            name="start_deployment",
+            method="POST",
+            path=f"/api/v1/deployments/{context.deployment_id}/start",
+            headers=context.auth_headers,
+            expected_status={200, 409},
+            note="Matches portfolio card 'Start' action.",
+        )
+        steps.append(start_step)
+
+        _, list_deployments_step = self.api.request(
+            name="portfolio_list_deployments",
+            method="GET",
+            path="/api/v1/deployments",
+            headers=context.auth_headers,
+        )
+        steps.append(list_deployments_step)
+
+        _, get_preference_step = self.api.request(
+            name="portfolio_get_trading_preference",
+            method="GET",
+            path="/api/v1/trading/preferences",
+            headers=context.auth_headers,
+        )
+        steps.append(get_preference_step)
+
+        _, list_approvals_step = self.api.request(
+            name="portfolio_list_trade_approvals",
+            method="GET",
+            path="/api/v1/trade-approvals",
+            headers=context.auth_headers,
+            params={
+                "deployment_id": context.deployment_id,
+                "status": (
+                    "pending,approved,rejected,expired,executing,"
+                    "executed,failed,cancelled"
+                ),
+                "limit": 100,
+            },
+        )
+        steps.append(list_approvals_step)
+
+        _, get_portfolio_step = self.api.request(
+            name="portfolio_get_portfolio",
+            method="GET",
+            path=f"/api/v1/deployments/{context.deployment_id}/portfolio",
+            headers=context.auth_headers,
+        )
+        steps.append(get_portfolio_step)
+
+        _, get_orders_step = self.api.request(
+            name="portfolio_get_orders",
+            method="GET",
+            path=f"/api/v1/deployments/{context.deployment_id}/orders",
+            headers=context.auth_headers,
+        )
+        steps.append(get_orders_step)
+
+        _, get_fills_step = self.api.request(
+            name="portfolio_get_fills",
+            method="GET",
+            path=f"/api/v1/deployments/{context.deployment_id}/fills",
+            headers=context.auth_headers,
+        )
+        steps.append(get_fills_step)
+
+        bars_symbol = context.symbol.replace("/", "")
+        _, bars_step = self.api.request(
+            name="portfolio_get_recent_bars",
+            method="GET",
+            path="/api/v1/market-data/bars",
+            headers=context.auth_headers,
+            params={
+                "symbol": bars_symbol,
+                "market": "crypto",
+                "timeframe": "1m",
+                "limit": 120,
+                "refresh_if_empty": "true",
+            },
+        )
+        steps.append(bars_step)
+
+        access_token = self._extract_access_token(context.auth_headers)
+        ws_path = f"/api/v1/ws/trading?token={access_token}"
+        observed_ws_events: list[dict[str, Any]] = []
+        redis_stopped = False
+        initial_mode = "unknown"
+        fallback_mode_seen = False
+        recovered_mode_seen = False
+
+        with self._client.websocket_connect(ws_path) as ws:
+            subscribe_request = {
+                "action": "subscribe",
+                "deployment_ids": [context.deployment_id],
+                "cursors": {},
+            }
+            ws_subscribe_started = time.perf_counter()
+            ws.send_text(json.dumps(subscribe_request, ensure_ascii=True))
+            subscribed_msg = self._ws_wait_for_event(
+                ws,
+                event_name="subscribed",
+                timeout_seconds=20.0,
+                observed=observed_ws_events,
+            )
+            ws_subscribe_duration = int((time.perf_counter() - ws_subscribe_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="ws_subscribe_deployment",
+                    driver="ws",
+                    method="SEND",
+                    target=ws_path,
+                    duration_ms=ws_subscribe_duration,
+                    ok=True,
+                    request=subscribe_request,
+                    response=subscribed_msg,
+                    note="Matches frontend websocket subscribe envelope.",
+                )
+            )
+            initial_mode = str(subscribed_msg.get("transport_mode", "unknown"))
+            if initial_mode != "pubsub":
+                ws_wait_pubsub_started = time.perf_counter()
+                ws_pubsub_mode_msg = self._ws_wait_for_event(
+                    ws,
+                    event_name="transport_mode",
+                    timeout_seconds=45.0,
+                    predicate=lambda msg: str(msg.get("mode", "")) == "pubsub",
+                    observed=observed_ws_events,
+                )
+                ws_wait_pubsub_duration = int(
+                    (time.perf_counter() - ws_wait_pubsub_started) * 1000
+                )
+                steps.append(
+                    HarnessStep(
+                        name="ws_wait_pubsub_before_fault_injection",
+                        driver="ws",
+                        method="RECV",
+                        target=ws_path,
+                        duration_ms=ws_wait_pubsub_duration,
+                        ok=True,
+                        request={"expected_mode": "pubsub"},
+                        response=ws_pubsub_mode_msg,
+                        note=(
+                            "Ensures baseline mode is pubsub before forcing redis outage, "
+                            "so fallback transition is meaningful."
+                        ),
+                    )
+                )
+                initial_mode = "pubsub"
+
+            subscribe_bars_request = {
+                "action": "subscribe_bars",
+                "market": "crypto",
+                "symbol": bars_symbol,
+                "timeframe": "1m",
+                "limit": 120,
+            }
+            ws_bars_started = time.perf_counter()
+            ws.send_text(json.dumps(subscribe_bars_request, ensure_ascii=True))
+            bar_snapshot_msg = self._ws_wait_for_event(
+                ws,
+                event_name="bar_snapshot",
+                timeout_seconds=30.0,
+                observed=observed_ws_events,
+            )
+            bars_subscribed_msg = self._ws_wait_for_event(
+                ws,
+                event_name="bars_subscribed",
+                timeout_seconds=20.0,
+                observed=observed_ws_events,
+            )
+            ws_bars_duration = int((time.perf_counter() - ws_bars_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="ws_subscribe_bars",
+                    driver="ws",
+                    method="SEND",
+                    target=ws_path,
+                    duration_ms=ws_bars_duration,
+                    ok=True,
+                    request=subscribe_bars_request,
+                    response={
+                        "bar_snapshot_count": len(bar_snapshot_msg.get("bars", [])),
+                        "bars_subscribed": bars_subscribed_msg,
+                    },
+                    note="Matches frontend chart stream subscribe path.",
+                )
+            )
+
+            snapshot_bars = bar_snapshot_msg.get("bars", [])
+            last_ts = 0
+            last_close = 100.0
+            if isinstance(snapshot_bars, list):
+                for row in snapshot_bars:
+                    if not isinstance(row, dict):
+                        continue
+                    raw_ts = row.get("t")
+                    try:
+                        ts = int(raw_ts)
+                    except (TypeError, ValueError):
+                        continue
+                    last_ts = max(last_ts, ts)
+                    raw_close = row.get("c")
+                    try:
+                        last_close = float(raw_close)
+                    except (TypeError, ValueError):
+                        continue
+            synthetic_bar = {
+                "t": max(last_ts + 60, int(time.time())),
+                "o": round(last_close, 6),
+                "h": round(last_close * 1.0008, 6),
+                "l": round(last_close * 0.9992, 6),
+                "c": round(last_close * 1.0001, 6),
+                "v": 0.123456,
+            }
+            synthetic_payload = self._publish_synthetic_bar_pubsub(
+                market="crypto",
+                symbol=bars_symbol,
+                timeframe="1m",
+                bar=synthetic_bar,
+            )
+            ws_pubsub_started = time.perf_counter()
+            bar_update_msg = self._ws_wait_for_event(
+                ws,
+                event_name="bar_update",
+                timeout_seconds=20.0,
+                predicate=lambda msg: any(
+                    isinstance(item, dict) and int(item.get("t", 0)) == synthetic_bar["t"]
+                    for item in (msg.get("bars") if isinstance(msg.get("bars"), list) else [])
+                ),
+                observed=observed_ws_events,
+            )
+            ws_pubsub_duration = int((time.perf_counter() - ws_pubsub_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="ws_receive_pubsub_bar_update",
+                    driver="ws",
+                    method="RECV",
+                    target=ws_path,
+                    duration_ms=ws_pubsub_duration,
+                    ok=True,
+                    request={"published_payload": synthetic_payload},
+                    response=bar_update_msg,
+                    note="Proves active pub/sub channel delivery for chart updates.",
+                )
+            )
+
+            manual_open_payload = {
+                "action": "open",
+                "payload": {
+                    "symbol": context.symbol,
+                    "qty": 1,
+                    "side": "long",
+                    "mark_price": 100,
+                },
+            }
+            _, manual_open_step = self.api.request(
+                name="manual_open_long",
+                method="POST",
+                path=f"/api/v1/deployments/{context.deployment_id}/manual-actions",
+                headers=context.auth_headers,
+                json_body=manual_open_payload,
+                note="Matches frontend manual open-long action.",
+            )
+            steps.append(manual_open_step)
+            ws_open_started = time.perf_counter()
+            ws_open_event = self._ws_wait_for_event(
+                ws,
+                event_name="manual_action_update",
+                timeout_seconds=25.0,
+                predicate=lambda msg: str(msg.get("deployment_id", "")) == context.deployment_id,
+                observed=observed_ws_events,
+            )
+            ws_open_duration = int((time.perf_counter() - ws_open_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="ws_receive_manual_open_update",
+                    driver="ws",
+                    method="RECV",
+                    target=ws_path,
+                    duration_ms=ws_open_duration,
+                    ok=True,
+                    request={"action": "open"},
+                    response=ws_open_event,
+                )
+            )
+            open_event_seq = int(ws_open_event.get("event_seq", 0))
+
+            manual_close_payload = {
+                "action": "close",
+                "payload": {
+                    "symbol": context.symbol,
+                    "qty": 1,
+                    "mark_price": 100,
+                },
+            }
+            _, manual_close_step = self.api.request(
+                name="manual_close_position",
+                method="POST",
+                path=f"/api/v1/deployments/{context.deployment_id}/manual-actions",
+                headers=context.auth_headers,
+                json_body=manual_close_payload,
+                note="Matches frontend manual close action.",
+            )
+            steps.append(manual_close_step)
+            ws_close_started = time.perf_counter()
+            ws_close_event = self._ws_wait_for_event(
+                ws,
+                event_name="manual_action_update",
+                timeout_seconds=25.0,
+                predicate=lambda msg: int(msg.get("event_seq", 0)) > open_event_seq,
+                observed=observed_ws_events,
+            )
+            ws_close_duration = int((time.perf_counter() - ws_close_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="ws_receive_manual_close_update",
+                    driver="ws",
+                    method="RECV",
+                    target=ws_path,
+                    duration_ms=ws_close_duration,
+                    ok=True,
+                    request={"action": "close"},
+                    response=ws_close_event,
+                )
+            )
+            close_event_seq = int(ws_close_event.get("event_seq", 0))
+
+            sse_started = time.perf_counter()
+            sse_response = self._client.get(
+                f"/api/v1/stream/deployments/{context.deployment_id}",
+                headers=context.auth_headers,
+                params={
+                    "cursor": max(0, close_event_seq - 1),
+                    "poll_seconds": 0.5,
+                    "heartbeat_seconds": 1.0,
+                    "max_events": 4,
+                },
+            )
+            sse_duration = int((time.perf_counter() - sse_started) * 1000)
+            assert sse_response.status_code == 200, sse_response.text[:400]
+            sse_frames = _parse_sse_frames(sse_response.text)
+            steps.append(
+                HarnessStep(
+                    name="sse_stream_replay_after_ws",
+                    driver="sse",
+                    method="GET",
+                    target=f"/api/v1/stream/deployments/{context.deployment_id}",
+                    duration_ms=sse_duration,
+                    ok=bool(sse_frames),
+                    request={"cursor": max(0, close_event_seq - 1)},
+                    response={
+                        "frame_count": len(sse_frames),
+                        "frames": sse_frames[:6],
+                    },
+                    status_code=sse_response.status_code,
+                    note="Matches frontend SSE fallback stream path with cursor continuity.",
+                )
+            )
+
+            stop_redis_started = time.perf_counter()
+            run_command(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE_FILE),
+                    "stop",
+                    "redis",
+                ],
+                cwd=BACKEND_DIR,
+                timeout=180,
+            )
+            redis_stopped = True
+            stop_redis_duration = int((time.perf_counter() - stop_redis_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="simulate_pubsub_disconnect_stop_redis",
+                    driver="infra",
+                    method="docker compose stop",
+                    target="redis",
+                    duration_ms=stop_redis_duration,
+                    ok=True,
+                    request={},
+                    response={"redis_state": "stopped"},
+                    note="Fault injection: force pub/sub read failure on active WS.",
+                )
+            )
+
+            ws_fallback_started = time.perf_counter()
+            fallback_mode_msg = self._ws_wait_for_event(
+                ws,
+                event_name="transport_mode",
+                timeout_seconds=30.0,
+                predicate=lambda msg: str(msg.get("mode", "")) == "polling_fallback",
+                observed=observed_ws_events,
+            )
+            ws_fallback_duration = int((time.perf_counter() - ws_fallback_started) * 1000)
+            fallback_mode_seen = True
+            steps.append(
+                HarnessStep(
+                    name="ws_switch_to_polling_fallback",
+                    driver="ws",
+                    method="RECV",
+                    target=ws_path,
+                    duration_ms=ws_fallback_duration,
+                    ok=True,
+                    request={"expected_mode": "polling_fallback"},
+                    response=fallback_mode_msg,
+                )
+            )
+
+            _, manual_open_fallback_step = self.api.request(
+                name="manual_open_long_during_fallback",
+                method="POST",
+                path=f"/api/v1/deployments/{context.deployment_id}/manual-actions",
+                headers=context.auth_headers,
+                json_body=manual_open_payload,
+                note=(
+                    "Creates outbox events while redis is down; WS should keep receiving via polling fallback."
+                ),
+            )
+            steps.append(manual_open_fallback_step)
+
+            ws_polling_started = time.perf_counter()
+            fallback_manual_msg = self._ws_wait_for_event(
+                ws,
+                event_name="manual_action_update",
+                timeout_seconds=30.0,
+                predicate=lambda msg: int(msg.get("event_seq", 0)) > close_event_seq,
+                observed=observed_ws_events,
+            )
+            ws_polling_duration = int((time.perf_counter() - ws_polling_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="ws_receive_event_during_polling_fallback",
+                    driver="ws",
+                    method="RECV",
+                    target=ws_path,
+                    duration_ms=ws_polling_duration,
+                    ok=True,
+                    request={"after_event_seq": close_event_seq},
+                    response=fallback_manual_msg,
+                    note="Evidence that fallback path continues incremental outbox delivery.",
+                )
+            )
+
+            start_redis_started = time.perf_counter()
+            run_command(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE_FILE),
+                    "start",
+                    "redis",
+                ],
+                cwd=BACKEND_DIR,
+                timeout=180,
+            )
+            redis_stopped = False
+            self._wait_for_redis_healthy(timeout_seconds=60.0)
+            start_redis_duration = int((time.perf_counter() - start_redis_started) * 1000)
+            steps.append(
+                HarnessStep(
+                    name="restore_pubsub_start_redis",
+                    driver="infra",
+                    method="docker compose start",
+                    target="redis",
+                    duration_ms=start_redis_duration,
+                    ok=True,
+                    request={},
+                    response={"redis_state": "healthy"},
+                )
+            )
+
+            ws_recover_started = time.perf_counter()
+            recovered_mode_msg = self._ws_wait_for_event(
+                ws,
+                event_name="transport_mode",
+                timeout_seconds=45.0,
+                predicate=lambda msg: str(msg.get("mode", "")) == "pubsub",
+                observed=observed_ws_events,
+            )
+            ws_recover_duration = int((time.perf_counter() - ws_recover_started) * 1000)
+            recovered_mode_seen = True
+            steps.append(
+                HarnessStep(
+                    name="ws_switch_back_to_pubsub",
+                    driver="ws",
+                    method="RECV",
+                    target=ws_path,
+                    duration_ms=ws_recover_duration,
+                    ok=True,
+                    request={"expected_mode": "pubsub"},
+                    response=recovered_mode_msg,
+                    note="Auto-recovery from fallback to pub/sub after redis is restored.",
+                )
+            )
+
+        if redis_stopped:
+            run_command(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE_FILE),
+                    "start",
+                    "redis",
+                ],
+                cwd=BACKEND_DIR,
+                timeout=180,
+            )
+            self._wait_for_redis_healthy(timeout_seconds=60.0)
+
+        _, stop_step = self.api.request(
+            name="stop_deployment",
+            method="POST",
+            path=f"/api/v1/deployments/{context.deployment_id}/stop",
+            headers=context.auth_headers,
+            expected_status={200, 409},
+            note="Final cleanup and parity with frontend terminate action.",
+        )
+        steps.append(stop_step)
+
+        db_after = self.db.capture(
+            deployment_id=context.deployment_id,
+            user_id=context.user_id,
+        )
+        redis_probe = self.redis.probe(deployment_id=context.deployment_id)
+        celery_probe = self.celery.probe()
+        artifacts["ws_initial_mode"] = initial_mode
+        artifacts["ws_fallback_mode_seen"] = fallback_mode_seen
+        artifacts["ws_recovered_mode_seen"] = recovered_mode_seen
+        artifacts["ws_observed_event_count"] = len(observed_ws_events)
+        artifacts["ws_observed_events_tail"] = observed_ws_events[-15:]
+
+        json_path, md_path = self._report_paths("deployment_runtime_v2_portfolio_realtime")
+        report = HarnessReport(
+            scenario_name="deployment_runtime_v2_portfolio_realtime",
+            started_at=started_at,
+            completed_at=_utc_now(),
+            context=context,
+            steps=steps,
+            db_before=db_before,
+            db_after=db_after,
+            redis_probe=redis_probe,
+            celery_probe=celery_probe,
+            artifacts=artifacts,
+            report_json_path=json_path,
+            report_markdown_path=md_path,
+        )
+        self.reporter.write(report)
+        return report
 
     def run_v1_rest_scenario(self) -> HarnessReport:
         started_at = _utc_now()

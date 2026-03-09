@@ -17,7 +17,7 @@ class _FakeDb:
         return SimpleNamespace(current_tier=self._tier)
 
 
-async def test_activation_quota_guard_checks_running_deployments(monkeypatch):
+async def test_activation_quota_guard_checks_quota_when_starting_stopped_deployment(monkeypatch):
     user_id = uuid4()
     calls: list[dict] = []
 
@@ -34,7 +34,7 @@ async def test_activation_quota_guard_checks_running_deployments(monkeypatch):
     await deployment_ops._assert_running_deployment_quota_for_activation(
         _FakeDb(),
         user_id=user_id,
-        current_status="paused",
+        current_status="stopped",
     )
 
     assert len(calls) == 1
@@ -64,3 +64,26 @@ async def test_activation_quota_guard_skips_when_already_active(monkeypatch):
     )
 
     assert called is False
+
+
+async def test_activation_quota_guard_skips_for_already_counted_non_stopped_statuses(monkeypatch):
+    calls: list[dict] = []
+
+    class _QuotaServiceCapture:
+        def __init__(self, _usage) -> None:
+            del _usage
+
+        async def assert_quota_available(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(deployment_ops, "QuotaService", _QuotaServiceCapture)
+    monkeypatch.setattr(deployment_ops, "UsageService", lambda _db: object())
+
+    for status in ("pending", "paused", "error"):
+        await deployment_ops._assert_running_deployment_quota_for_activation(
+            _FakeDb(),
+            user_id=uuid4(),
+            current_status=status,
+        )
+
+    assert calls == []

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from math import ceil
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_, or_, select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from apps.api.agents.phases import Phase, can_transition
 from apps.api.dependencies import get_db
 from apps.api.middleware.auth import get_current_user
 from apps.api.schemas.events import (
@@ -21,53 +21,38 @@ from apps.api.schemas.events import (
     DeploymentRunResponse,
     DeploymentSignalProcessResponse,
     ManualTradeActionResponse,
+    OrderHistoryPageResponse,
     OrderResponse,
     PnlSnapshotResponse,
     PositionResponse,
     SignalResponse,
 )
 from apps.api.schemas.requests import DeploymentCreateRequest, ManualTradeActionRequest
-from apps.api.services.trading_queue_service import enqueue_paper_trading_runtime
-from apps.worker.io.tasks.manual_trade_action import enqueue_execute_manual_trade_action
-from packages.core.events.notification_events import EVENT_DEPLOYMENT_STARTED
-from packages.domain.billing.quota_service import QuotaExceededError, QuotaService
-from packages.domain.billing.usage_service import UsageMetric, UsageService
-from packages.domain.notification.services.notification_outbox_service import (
-    NotificationOutboxService,
+from apps.api.services.trading_queue_service import (
+    enqueue_execute_manual_trade_action,
+    enqueue_paper_trading_runtime,
 )
+from packages.domain.exceptions import DomainError
 from packages.domain.trading import deployment_ops as deployment_ops_domain
 from packages.domain.trading.runtime.runtime_service import (
     execute_manual_trade_action,
     process_deployment_signal_cycle,
     reconcile_manual_action_terminal_state,
 )
-from packages.domain.trading.runtime.timeframe_scheduler import timeframe_to_seconds
-from packages.domain.trading.services.broker_provider_service import (
-    BrokerProviderService,
-)
 from packages.domain.trading.services.trading_event_outbox_service import (
     append_trading_event_snapshot,
 )
-from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.deployment_run import DeploymentRun
 from packages.infra.db.models.manual_trade_action import ManualTradeAction
 from packages.infra.db.models.order import Order
-from packages.infra.db.models.phase_transition import PhaseTransition
 from packages.infra.db.models.pnl_snapshot import PnlSnapshot
 from packages.infra.db.models.position import Position
-from packages.infra.db.models.session import Session
 from packages.infra.db.models.signal_event import SignalEvent
-from packages.infra.db.models.strategy import Strategy
 from packages.infra.db.models.user import User
-from packages.infra.observability.logger import logger
-from packages.infra.redis.stores.runtime_state_store import runtime_state_store
 from packages.shared_settings.schema.settings import settings
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
-
-_DEPLOYABLE_STRATEGY_STATUSES = {"validated", "backtested", "deployed"}
-_broker_provider_service = BrokerProviderService()
 
 
 def _deployment_query_options() -> tuple[object, ...]:
@@ -110,98 +95,6 @@ def _as_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
-
-
-def _positive_decimal_or_none(value: Any) -> Decimal | None:
-    try:
-        parsed = Decimal(str(value))
-    except Exception:  # noqa: BLE001
-        return None
-    if parsed <= 0:
-        return None
-    return parsed.quantize(Decimal("0.01"))
-
-
-def _resolve_capital_from_validation_metadata(account: BrokerAccount) -> Decimal | None:
-    metadata = (
-        account.validation_metadata
-        if isinstance(account.validation_metadata, dict)
-        else {}
-    )
-    for key in (
-        "paper_equity",
-        "paper_cash",
-        "paper_buying_power",
-        "equity",
-        "cash",
-        "buying_power",
-    ):
-        capital = _positive_decimal_or_none(metadata.get(key))
-        if capital is not None:
-            return capital
-    return None
-
-
-def _resolve_capital_from_account_metadata(account: BrokerAccount) -> Decimal | None:
-    metadata = account.metadata_ if isinstance(account.metadata_, dict) else {}
-    for key in ("starting_cash", "capital_allocated", "equity", "cash", "buying_power"):
-        capital = _positive_decimal_or_none(metadata.get(key))
-        if capital is not None:
-            return capital
-    return None
-
-
-async def _resolve_deployment_capital_allocated(
-    *,
-    requested_capital: Decimal,
-    account: BrokerAccount,
-) -> Decimal:
-    if requested_capital > 0:
-        return requested_capital.quantize(Decimal("0.01"))
-
-    from_probe = _resolve_capital_from_validation_metadata(account)
-    if from_probe is not None:
-        return from_probe
-
-    from_account_metadata = _resolve_capital_from_account_metadata(account)
-    if from_account_metadata is not None:
-        return from_account_metadata
-
-    binding = _broker_provider_service.build_adapter_binding_from_account(account)
-    adapter = binding.adapter
-    if adapter is None:
-        return Decimal("10000.00")
-
-    try:
-        state = await adapter.fetch_account_state()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "[deployments] failed to fetch account state broker_account_id=%s provider=%s error=%s",
-            account.id,
-            binding.provider,
-            type(exc).__name__,
-        )
-        return Decimal("10000.00")
-    finally:
-        await adapter.aclose()
-
-    for candidate in (state.equity, state.cash, state.buying_power):
-        capital = _positive_decimal_or_none(candidate)
-        if capital is not None:
-            return capital
-    return Decimal("10000.00")
-
-
-async def _resolve_broker_provider_for_run(
-    db: AsyncSession, *, run: DeploymentRun
-) -> str:
-    account = await db.scalar(
-        select(BrokerAccount).where(BrokerAccount.id == run.broker_account_id)
-    )
-    if account is None:
-        return "unknown"
-    provider = str(account.provider).strip().lower()
-    return provider or "unknown"
 
 
 def _serialize_run(run: DeploymentRun | None) -> DeploymentRunResponse | None:
@@ -385,115 +278,6 @@ def _serialize_signal(record: SignalEvent) -> SignalResponse:
     )
 
 
-def _build_phase_transition_metadata(
-    *,
-    reason: str,
-    source: str,
-    context: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "reason": reason,
-        "source": source,
-        "context": context or {},
-        "recorded_at": datetime.now(UTC).isoformat(),
-    }
-
-
-def _map_deployment_status_to_phase_status(target_status: str) -> str:
-    if target_status == "active":
-        return "deployed"
-    if target_status in {"paused", "stopped"}:
-        return "ready"
-    return "ready"
-
-
-async def _sync_session_deployment_phase_state(
-    db: AsyncSession,
-    *,
-    deployment: Deployment,
-    target_status: str,
-    at: datetime,
-) -> None:
-    if deployment.strategy is None:
-        return
-
-    session = await db.scalar(
-        select(Session).where(
-            Session.id == deployment.strategy.session_id,
-            Session.user_id == deployment.user_id,
-        )
-    )
-    if session is None:
-        return
-
-    phase_status = _map_deployment_status_to_phase_status(target_status)
-    artifacts = dict(session.artifacts or {})
-    deployment_block_raw = artifacts.get(Phase.DEPLOYMENT.value)
-    deployment_block = (
-        dict(deployment_block_raw)
-        if isinstance(deployment_block_raw, dict)
-        else {"profile": {}, "missing_fields": ["deployment_status"], "runtime": {}}
-    )
-    profile_raw = deployment_block.get("profile")
-    profile = dict(profile_raw) if isinstance(profile_raw, dict) else {}
-    profile.update(
-        {
-            "strategy_id": str(deployment.strategy_id),
-            "deployment_id": str(deployment.id),
-            "deployment_mode": deployment.mode,
-            "deployment_status": phase_status,
-            "deployment_last_action": target_status,
-            "deployment_last_action_at": at.isoformat(),
-        }
-    )
-    deployment_block["profile"] = profile
-    deployment_block["missing_fields"] = []
-    runtime_raw = deployment_block.get("runtime")
-    runtime = dict(runtime_raw) if isinstance(runtime_raw, dict) else {}
-    runtime.update(
-        {
-            "deployment_id": str(deployment.id),
-            "status": deployment.status,
-            "phase_status": phase_status,
-            "last_action": target_status,
-            "updated_at": at.isoformat(),
-        }
-    )
-    deployment_block["runtime"] = runtime
-    artifacts[Phase.DEPLOYMENT.value] = deployment_block
-    session.artifacts = artifacts
-    session.last_activity_at = at
-
-    if session.current_phase != Phase.DEPLOYMENT.value and can_transition(
-        session.current_phase,
-        Phase.DEPLOYMENT.value,
-    ):
-        from_phase = session.current_phase
-        session.current_phase = Phase.DEPLOYMENT.value
-        session.previous_response_id = None
-        db.add(
-            PhaseTransition(
-                session_id=session.id,
-                from_phase=from_phase,
-                to_phase=Phase.DEPLOYMENT.value,
-                trigger="user_action",
-                metadata_=_build_phase_transition_metadata(
-                    reason="deployment_api_status_sync",
-                    source="api",
-                    context={
-                        "deployment_id": str(deployment.id),
-                        "target_status": target_status,
-                    },
-                ),
-            )
-        )
-
-    next_meta = dict(session.metadata_ or {})
-    next_meta["deployment_status"] = phase_status
-    next_meta["deployment_status_updated_at"] = at.isoformat()
-    session.metadata_ = next_meta
-
-
 async def _load_owned_deployment(
     db: AsyncSession,
     *,
@@ -525,143 +309,19 @@ async def create_deployment(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DeploymentResponse:
-    if payload.mode != "paper":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "DEPLOYMENT_MODE_NOT_SUPPORTED",
-                "message": "Only paper deployment mode is supported.",
-            },
-        )
-
-    strategy = await db.scalar(
-        select(Strategy).where(
-            Strategy.id == payload.strategy_id,
-            Strategy.user_id == user.id,
-        )
-    )
-    if strategy is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "STRATEGY_NOT_FOUND", "message": "Strategy not found."},
-        )
-    if str(strategy.status).strip().lower() not in _DEPLOYABLE_STRATEGY_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "STRATEGY_NOT_DEPLOYABLE",
-                "message": "Strategy is not ready for deployment.",
-            },
-        )
-    compatibility = deployment_ops_domain.assess_strategy_runtime_compatibility(
-        strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {},
-        fallback_timeframe=strategy.timeframe,
-    )
-    if compatibility.status == "blocked":
-        error_code, message = deployment_ops_domain.build_runtime_compatibility_error(
-            compatibility
-        )
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": error_code,
-                "message": message,
-                "blockers": list(compatibility.blockers),
-            },
-        )
-
-    account = await db.scalar(
-        select(BrokerAccount).where(
-            BrokerAccount.id == payload.broker_account_id,
-            BrokerAccount.user_id == user.id,
-        )
-    )
-    if account is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "BROKER_ACCOUNT_NOT_FOUND",
-                "message": "Broker account not found.",
-            },
-        )
-    if account.mode != "paper":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "BROKER_ACCOUNT_MODE_NOT_SUPPORTED",
-                "message": "Only paper broker accounts are supported for deployment.",
-            },
-        )
-    if account.mode != payload.mode:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "BROKER_ACCOUNT_MODE_MISMATCH",
-                "message": "Broker account mode does not match deployment mode.",
-            },
-        )
-    if str(account.status).strip().lower() != "active":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "BROKER_ACCOUNT_INACTIVE",
-                "message": "Broker account must be active before deployment.",
-            },
-        )
-
-    quota_service = QuotaService(UsageService(db))
     try:
-        await quota_service.assert_quota_available(
+        deployment = await deployment_ops_domain.create_deployment(
+            db,
+            strategy_id=payload.strategy_id,
+            broker_account_id=payload.broker_account_id,
             user_id=user.id,
-            tier=user.current_tier,
-            metric=UsageMetric.DEPLOYMENTS_RUNNING_COUNT,
-            increment=1,
+            mode=payload.mode,
+            capital_allocated=payload.capital_allocated,
+            risk_limits=payload.risk_limits,
+            runtime_state=payload.runtime_state,
         )
-    except QuotaExceededError as exc:
+    except DomainError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-    capital_resolution = await deployment_ops_domain.resolve_deployment_capital(
-        requested_capital=payload.capital_allocated,
-        account=account,
-    )
-    capital_allocated = capital_resolution.amount
-    resolved_runtime_state = (
-        dict(payload.runtime_state) if isinstance(payload.runtime_state, dict) else {}
-    )
-    resolved_runtime_state["capital_resolution"] = {
-        "source": capital_resolution.source,
-        "resolved_amount": format(capital_allocated, "f"),
-        "requested_amount": format(
-            payload.capital_allocated.quantize(Decimal("0.01")), "f"
-        ),
-    }
-
-    deployment = Deployment(
-        strategy_id=payload.strategy_id,
-        user_id=user.id,
-        mode=payload.mode,
-        status="pending",
-        risk_limits=payload.risk_limits,
-        capital_allocated=capital_allocated,
-    )
-    db.add(deployment)
-    await db.flush()
-
-    run = DeploymentRun(
-        deployment_id=deployment.id,
-        strategy_id=deployment.strategy_id,
-        broker_account_id=payload.broker_account_id,
-        status="stopped",
-        runtime_state=resolved_runtime_state,
-    )
-    db.add(run)
-    await db.commit()
-    deployment = await db.scalar(
-        select(Deployment)
-        .options(*_deployment_query_options())
-        .where(Deployment.id == deployment.id)
-    )
-    assert deployment is not None
     await append_trading_event_snapshot(db, deployment_id=deployment.id)
     return _serialize_deployment(deployment)
 
@@ -702,205 +362,16 @@ async def _apply_status_transition(
     deployment: Deployment,
     target_status: str,
 ) -> Deployment:
-    run = _latest_run(deployment)
-    if run is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "DEPLOYMENT_RUN_MISSING",
-                "message": "Deployment run is missing.",
-            },
-        )
-
-    now = datetime.now(UTC)
-    timeframe_raw = (
-        deployment.strategy.dsl_payload.get("timeframe")
-        if deployment.strategy is not None
-        and isinstance(deployment.strategy.dsl_payload, dict)
-        else deployment.strategy.timeframe
-        if deployment.strategy is not None
-        else "1m"
-    )
-    timeframe_seconds = timeframe_to_seconds(
-        str(timeframe_raw or "1m"), default_seconds=60
-    )
-    state = dict(run.runtime_state) if isinstance(run.runtime_state, dict) else {}
-    scheduler = (
-        state.get("scheduler") if isinstance(state.get("scheduler"), dict) else {}
-    )
-    scheduler = dict(scheduler)
-    execution = (
-        state.get("execution") if isinstance(state.get("execution"), dict) else {}
-    )
-    execution = dict(execution)
-    if target_status == "active":
-        compatibility = deployment_ops_domain.assess_strategy_runtime_compatibility(
-            deployment.strategy.dsl_payload
-            if deployment.strategy is not None
-            and isinstance(deployment.strategy.dsl_payload, dict)
-            else {},
-            fallback_timeframe=deployment.strategy.timeframe
-            if deployment.strategy is not None
-            else None,
-        )
-        if compatibility.status == "blocked":
-            error_code, message = (
-                deployment_ops_domain.build_runtime_compatibility_error(compatibility)
-            )
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "code": error_code,
-                    "message": message,
-                    "blockers": list(compatibility.blockers),
-                },
-            )
-        if not settings.paper_trading_enabled and deployment.mode == "paper":
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "PAPER_TRADING_DISABLED",
-                    "message": "Paper trading is currently disabled.",
-                },
-            )
-        broker_account = run.broker_account
-        if broker_account is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "BROKER_ACCOUNT_NOT_FOUND",
-                    "message": "Broker account is missing for this deployment run.",
-                },
-            )
-        if str(broker_account.status).strip().lower() != "active":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={
-                    "code": "BROKER_ACCOUNT_INACTIVE",
-                    "message": "Broker account must be active before starting deployment.",
-                },
-            )
-        deployment.status = "active"
-        deployment.deployed_at = deployment.deployed_at or now
-        deployment.stopped_at = None
-        run.status = "starting"
-        if deployment.strategy is not None:
-            deployment.strategy.status = "deployed"
-        scheduler.update(
-            {
-                "timeframe_seconds": timeframe_seconds,
-                "last_trigger_bucket": None,
-                "last_enqueued_at": None,
-                "fallback_last_enqueued_at": None,
-                "updated_at": now.isoformat(),
-            }
-        )
-        broker_provider = await _resolve_broker_provider_for_run(db, run=run)
-        execution.update(
-            {
-                "order_execution_mode": "broker"
-                if settings.paper_trading_execute_orders
-                else "simulated",
-                "market_data_source": f"{broker_provider}_rest",
-                "broker_provider": broker_provider,
-                "updated_at": now.isoformat(),
-            }
-        )
-    elif target_status == "paused":
-        deployment.status = "paused"
-        run.status = "paused"
-        scheduler.update({"updated_at": now.isoformat()})
-        execution["updated_at"] = now.isoformat()
-    elif target_status == "stopped":
-        deployment.status = "stopped"
-        deployment.stopped_at = now
-        run.status = "stopped"
-        scheduler.update({"updated_at": now.isoformat()})
-        execution["updated_at"] = now.isoformat()
-    else:
-        raise ValueError(f"Unsupported target status: {target_status}")
-
-    state["scheduler"] = scheduler
-    state["execution"] = execution
-    run.runtime_state = state
-
-    if target_status == "active":
-        await _enqueue_deployment_started_notification(
+    try:
+        transitioned = await deployment_ops_domain.apply_status_transition(
             db,
             deployment=deployment,
-            at=now,
+            target_status=target_status,
         )
-
-    await _sync_session_deployment_phase_state(
-        db,
-        deployment=deployment,
-        target_status=target_status,
-        at=now,
-    )
-
-    await db.commit()
-    await runtime_state_store.upsert(deployment.id, state)
-    await append_trading_event_snapshot(db, deployment_id=deployment.id)
-    reloaded = await db.scalar(
-        select(Deployment)
-        .options(*_deployment_query_options())
-        .where(Deployment.id == deployment.id)
-    )
-    if reloaded is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "DEPLOYMENT_NOT_FOUND",
-                "message": "Deployment not found after status transition.",
-            },
-        )
-    return reloaded
-
-
-async def _enqueue_deployment_started_notification(
-    db: AsyncSession,
-    *,
-    deployment: Deployment,
-    at: datetime,
-) -> None:
-    if not settings.notifications_enabled:
-        return
-
-    strategy_payload = (
-        deployment.strategy.dsl_payload
-        if deployment.strategy is not None
-        and isinstance(deployment.strategy.dsl_payload, dict)
-        else {}
-    )
-    universe = (
-        strategy_payload.get("universe")
-        if isinstance(strategy_payload.get("universe"), dict)
-        else {}
-    )
-    symbols = (
-        universe.get("tickers") if isinstance(universe.get("tickers"), list) else []
-    )
-    timeframe = (
-        strategy_payload.get("timeframe")
-        if isinstance(strategy_payload.get("timeframe"), str)
-        else None
-    )
-
-    payload = {
-        "deployment_id": str(deployment.id),
-        "strategy_id": str(deployment.strategy_id),
-        "mode": deployment.mode,
-        "symbols": [str(symbol) for symbol in symbols],
-        "timeframe": timeframe or "1m",
-        "deployed_at": at.isoformat(),
-    }
-    service = NotificationOutboxService(db)
-    await service.enqueue_event_for_user(
-        user_id=deployment.user_id,
-        event_type=EVENT_DEPLOYMENT_STARTED,
-        event_key=f"deployment_started:{deployment.id}:{at.isoformat()}",
-        payload=payload,
-    )
+    except DomainError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    await append_trading_event_snapshot(db, deployment_id=transitioned.id)
+    return transitioned
 
 
 @router.post("/{deployment_id}/start", response_model=DeploymentActionResponse)
@@ -912,21 +383,6 @@ async def start_deployment(
     deployment = await _load_owned_deployment(
         db, deployment_id=deployment_id, user_id=user.id
     )
-    if str(deployment.status).strip().lower() != "active":
-        quota_service = QuotaService(UsageService(db))
-        try:
-            await quota_service.assert_quota_available(
-                user_id=user.id,
-                tier=user.current_tier,
-                metric=UsageMetric.DEPLOYMENTS_RUNNING_COUNT,
-                increment=1,
-            )
-        except QuotaExceededError as exc:
-            raise HTTPException(
-                status_code=exc.status_code,
-                detail=exc.detail,
-            ) from exc
-
     deployment = await _apply_status_transition(
         db, deployment=deployment, target_status="active"
     )
@@ -981,10 +437,49 @@ async def list_deployment_orders(
         await db.scalars(
             select(Order)
             .where(Order.deployment_id == deployment_id)
-            .order_by(Order.submitted_at.desc()),
+            .order_by(Order.submitted_at.desc(), Order.id.desc()),
         )
     ).all()
     return [_serialize_order(row) for row in rows]
+
+
+@router.get(
+    "/{deployment_id}/orders/history",
+    response_model=OrderHistoryPageResponse,
+)
+async def list_deployment_orders_history(
+    deployment_id: UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> OrderHistoryPageResponse:
+    await _load_owned_deployment(db, deployment_id=deployment_id, user_id=user.id)
+    total = (
+        await db.scalar(
+            select(func.count(Order.id)).where(Order.deployment_id == deployment_id)
+        )
+    ) or 0
+    total_count = int(total)
+    total_pages = max(1, ceil(total_count / page_size)) if total_count > 0 else 1
+    effective_page = min(page, total_pages)
+    offset = (effective_page - 1) * page_size
+    rows = (
+        await db.scalars(
+            select(Order)
+            .where(Order.deployment_id == deployment_id)
+            .order_by(Order.submitted_at.desc(), Order.id.desc())
+            .offset(offset)
+            .limit(page_size)
+        )
+    ).all()
+    return OrderHistoryPageResponse(
+        items=[_serialize_order(row) for row in rows],
+        page=effective_page,
+        page_size=page_size,
+        total=total_count,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/{deployment_id}/positions", response_model=list[PositionResponse])
@@ -1045,6 +540,7 @@ async def create_manual_action(
     db.add(action)
     await db.commit()
     await db.refresh(action)
+    await append_trading_event_snapshot(db, deployment_id=deployment_id)
     action_name = str(payload.action).strip().lower()
     requires_active_deployment = action_name not in {"stop", "close", "reduce"}
     if requires_active_deployment and deployment.status != "active":
@@ -1058,6 +554,7 @@ async def create_manual_action(
         }
         await db.commit()
         await db.refresh(action)
+        await append_trading_event_snapshot(db, deployment_id=deployment_id)
         return _serialize_manual_action(action)
     task_id = enqueue_execute_manual_trade_action(action.id)
     if task_id is not None:
@@ -1081,6 +578,7 @@ async def create_manual_action(
             }
             await db.commit()
             await db.refresh(action)
+        await append_trading_event_snapshot(db, deployment_id=deployment_id)
         return _serialize_manual_action(action)
     result = await execute_manual_trade_action(
         db,
@@ -1115,6 +613,7 @@ async def create_manual_action(
                 },
             }
             await db.commit()
+            await append_trading_event_snapshot(db, deployment_id=deployment_id)
         else:
             payload_dict = action.payload if isinstance(action.payload, dict) else {}
             execution = (
@@ -1132,7 +631,9 @@ async def create_manual_action(
                 },
             }
             await db.commit()
+            await append_trading_event_snapshot(db, deployment_id=deployment_id)
     await db.refresh(action)
+    await append_trading_event_snapshot(db, deployment_id=deployment_id)
     return _serialize_manual_action(action)
 
 
