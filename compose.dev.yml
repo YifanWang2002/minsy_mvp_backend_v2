@@ -149,7 +149,8 @@ services:
       - --loglevel=INFO
       - --hostname=worker-io@%h
       - -Q
-      - market_data,paper_trading,maintenance,notifications,trade_approval
+      - market_data,paper_trading,paper_trading_manual,maintenance,notifications,trade_approval
+      - --without-mingle
       - --concurrency=4
 
   beat:

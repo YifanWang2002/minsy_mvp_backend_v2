@@ -20,6 +20,18 @@ class BillingCheckoutSessionResponse(BaseModel):
     publishable_key: str
 
 
+class BillingChangePlanRequest(BaseModel):
+    plan: Literal["go", "plus", "pro"]
+
+
+class BillingChangePlanResponse(BaseModel):
+    action: Literal["noop", "updated", "checkout_redirect", "portal_redirect"]
+    current_tier: TierValue
+    target_tier: TierValue
+    redirect_url: str | None = None
+    publishable_key: str | None = None
+
+
 class BillingPortalSessionResponse(BaseModel):
     portal_url: str
 

@@ -92,20 +92,6 @@ async def send_message_stream(
     language: str = Query("en", description="ISO 639-1 language code from frontend"),
 ) -> StreamingResponse:
     """Stream a chat turn via the OpenAI Responses API (SSE)."""
-    quota_service = QuotaService(UsageService(db))
-    try:
-        await quota_service.assert_quota_available(
-            user_id=user.id,
-            tier=user.current_tier,
-            metric=UsageMetric.AI_TOKENS_MONTHLY_TOTAL,
-            increment=1,
-        )
-    except QuotaExceededError as exc:
-        raise HTTPException(
-            status_code=exc.status_code,
-            detail=exc.detail,
-        ) from exc
-
     trace = build_chat_debug_trace(
         default_enabled=settings.chat_debug_trace_enabled,
         default_mode=settings.chat_debug_trace_mode,

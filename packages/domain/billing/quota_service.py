@@ -91,7 +91,7 @@ class QuotaService:
     @staticmethod
     def normalize_tier(value: str | None) -> str:
         raw = (value or "").strip().lower()
-        if raw in {"free", "plus", "pro"}:
+        if raw in {"free", "go", "plus", "pro"}:
             return raw
         return "free"
 

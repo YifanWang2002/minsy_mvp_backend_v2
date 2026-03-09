@@ -42,7 +42,7 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         CheckConstraint(
-            "current_tier IN ('free', 'plus', 'pro')",
+            "current_tier IN ('free', 'go', 'plus', 'pro')",
             name="ck_users_current_tier",
         ),
     )

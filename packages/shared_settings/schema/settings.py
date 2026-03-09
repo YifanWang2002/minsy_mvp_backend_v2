@@ -509,6 +509,26 @@ class Settings(BaseSettings):
         default=None,
         alias="MARKET_DATA_RUNTIME_FAIL_FAST_ON_REDIS_ERROR",
     )
+    trading_ws_pubsub_wait_seconds: float = Field(
+        default=1.0,
+        alias="TRADING_WS_PUBSUB_WAIT_SECONDS",
+    )
+    trading_ws_fallback_poll_seconds: float = Field(
+        default=0.5,
+        alias="TRADING_WS_FALLBACK_POLL_SECONDS",
+    )
+    trading_ws_reconcile_seconds: float = Field(
+        default=2.0,
+        alias="TRADING_WS_RECONCILE_SECONDS",
+    )
+    trading_ws_pubsub_probe_base_seconds: float = Field(
+        default=1.0,
+        alias="TRADING_WS_PUBSUB_PROBE_BASE_SECONDS",
+    )
+    trading_ws_pubsub_probe_max_seconds: float = Field(
+        default=15.0,
+        alias="TRADING_WS_PUBSUB_PROBE_MAX_SECONDS",
+    )
     market_data_refresh_dedupe_enabled: bool = Field(
         default=True,
         alias="MARKET_DATA_REFRESH_DEDUPE_ENABLED",

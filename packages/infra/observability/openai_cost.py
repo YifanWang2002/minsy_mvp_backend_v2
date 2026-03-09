@@ -89,7 +89,12 @@ def _extract_model_pricing(
     if not isinstance(pricing, Mapping):
         return (0.0, 0.0)
 
-    raw_model_entry = pricing.get(model)
+    raw_model_entry = None
+    for candidate in _iter_model_pricing_candidates(model):
+        maybe_entry = pricing.get(candidate)
+        if isinstance(maybe_entry, Mapping):
+            raw_model_entry = maybe_entry
+            break
     if not isinstance(raw_model_entry, Mapping):
         raw_model_entry = pricing.get("default")
     if not isinstance(raw_model_entry, Mapping):
@@ -104,6 +109,23 @@ def _extract_model_pricing(
             _to_non_negative_float(raw_model_entry.get("output_per_1k_tokens")) / 1000.0
         )
     return (input_per_token, output_per_token)
+
+
+def _iter_model_pricing_candidates(model: str) -> tuple[str, ...]:
+    normalized = str(model or "").strip()
+    if not normalized:
+        return ()
+
+    candidates: list[str] = [normalized]
+    parts = normalized.split("-")
+    if len(parts) <= 2:
+        return tuple(candidates)
+
+    for end in range(len(parts) - 1, 1, -1):
+        candidate = "-".join(parts[:end]).strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return tuple(candidates)
 
 
 def build_turn_usage_snapshot(
@@ -209,4 +231,3 @@ def read_session_openai_cost_totals(metadata: Mapping[str, Any] | None) -> dict[
     if not isinstance(totals_raw, Mapping):
         return None
     return _build_counter_block(totals_raw)
-

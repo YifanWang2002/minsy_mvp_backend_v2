@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from collections import deque
+from datetime import timedelta
+
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError, SQLAlchemyError
+
 from .shared import *  # noqa: F403
+
+_USAGE_PERSIST_SILENT_FAILURES: deque[datetime] = deque()
 
 
 class PostProcessorMixin:
@@ -252,6 +259,8 @@ class PostProcessorMixin:
         )
         self.db.add(assistant_message)
         await self.db.flush()
+        usage_reconcile_payload: dict[str, Any] | None = None
+        usage_persisted = False
         try:
             usage_service = UsageService(self.db)
             raw_usage = (
@@ -260,6 +269,15 @@ class PostProcessorMixin:
                 else None
             )
             if isinstance(raw_usage, dict) and raw_usage:
+                usage_reconcile_payload = {
+                    "user_id": str(session.user_id),
+                    "assistant_message_id": str(assistant_message.id),
+                    "session_id": str(session.id),
+                    "phase": preparation.phase_before,
+                    "response_id": session.previous_response_id,
+                    "model": stream_state.completed_model or stream_state.request_model,
+                    "raw_usage": raw_usage,
+                }
                 await usage_service.record_ai_tokens_from_openai_usage(
                     user_id=session.user_id,
                     raw_usage=raw_usage,
@@ -273,18 +291,30 @@ class PostProcessorMixin:
                         "response_id": session.previous_response_id,
                     },
                 )
+                usage_persisted = True
             elif isinstance(turn_usage, dict):
-                await usage_service.record_ai_tokens_from_openai_usage(
-                    user_id=session.user_id,
-                    raw_usage={
-                        "input_tokens": int(turn_usage.get("input_tokens") or 0),
-                        "output_tokens": int(turn_usage.get("output_tokens") or 0),
-                    },
-                    model=(
+                fallback_usage = {
+                    "input_tokens": int(turn_usage.get("input_tokens") or 0),
+                    "output_tokens": int(turn_usage.get("output_tokens") or 0),
+                }
+                usage_reconcile_payload = {
+                    "user_id": str(session.user_id),
+                    "assistant_message_id": str(assistant_message.id),
+                    "session_id": str(session.id),
+                    "phase": preparation.phase_before,
+                    "response_id": session.previous_response_id,
+                    "model": (
                         str(turn_usage.get("model") or "").strip()
                         or stream_state.completed_model
                         or stream_state.request_model
                     ),
+                    "raw_usage": fallback_usage,
+                    "usage_source": "turn_usage_snapshot_fallback",
+                }
+                await usage_service.record_ai_tokens_from_openai_usage(
+                    user_id=session.user_id,
+                    raw_usage=fallback_usage,
+                    model=usage_reconcile_payload["model"],
                     source="chat_turn",
                     reference_type="assistant_message",
                     reference_id=str(assistant_message.id),
@@ -295,13 +325,35 @@ class PostProcessorMixin:
                         "usage_source": "turn_usage_snapshot_fallback",
                     },
                 )
+                usage_persisted = True
+            if usage_persisted:
+                self._reset_usage_persist_silent_failure_window()
+        except (OperationalError, DBAPIError, IntegrityError, SQLAlchemyError) as exc:
+            await self._handle_usage_persist_failure(
+                exc=exc,
+                failure_kind="db_error",
+                session=session,
+                assistant_message=assistant_message,
+                preparation=preparation,
+                usage_reconcile_payload=usage_reconcile_payload,
+            )
+        except (TypeError, ValueError, KeyError) as exc:
+            await self._handle_usage_persist_failure(
+                exc=exc,
+                failure_kind="payload_error",
+                session=session,
+                assistant_message=assistant_message,
+                preparation=preparation,
+                usage_reconcile_payload=usage_reconcile_payload,
+            )
         except Exception as exc:  # noqa: BLE001
-            log_agent(
-                "orchestrator",
-                (
-                    f"session={session.id} usage_persist_failed="
-                    f"{type(exc).__name__}: {exc}"
-                ),
+            await self._handle_usage_persist_failure(
+                exc=exc,
+                failure_kind="unexpected_error",
+                session=session,
+                assistant_message=assistant_message,
+                preparation=preparation,
+                usage_reconcile_payload=usage_reconcile_payload,
             )
         self._update_stream_recovery(
             session=session,
@@ -377,6 +429,92 @@ class PostProcessorMixin:
                 "assistant_message_id": str(assistant_message.id),
             },
         )
+
+    async def _handle_usage_persist_failure(
+        self,
+        *,
+        exc: Exception,
+        failure_kind: str,
+        session: Session,
+        assistant_message: Message,
+        preparation: _TurnPreparation,
+        usage_reconcile_payload: dict[str, Any] | None,
+    ) -> None:
+        reconcile_task_id: str | None = None
+        if usage_reconcile_payload is not None:
+            reconcile_task_id = enqueue_reconcile_billing_usage_event(usage_reconcile_payload)
+        reconcile_status = (
+            "enqueued"
+            if reconcile_task_id
+            else "enqueue_failed"
+            if usage_reconcile_payload is not None
+            else "payload_missing"
+        )
+        capture_exception_with_context(
+            exc,
+            tags={
+                "component": "orchestrator_postprocessor",
+                "billing_usage_persist_failed": "1",
+                "billing_usage_failure_kind": failure_kind,
+                "billing_usage_reconcile_status": reconcile_status,
+                "phase": preparation.phase_before,
+            },
+            extras={
+                "session_id": str(session.id),
+                "assistant_message_id": str(assistant_message.id),
+                "response_id": session.previous_response_id,
+                "reconcile_task_id": reconcile_task_id,
+            },
+        )
+        log_agent(
+            "orchestrator",
+            (
+                f"session={session.id} usage_persist_failed kind={failure_kind} "
+                f"error={type(exc).__name__}: {exc}"
+            ),
+        )
+        if usage_reconcile_payload is not None:
+            log_agent(
+                "orchestrator",
+                (
+                    "session="
+                    f"{session.id} usage_reconcile_task_{reconcile_status} "
+                    f"task_id={reconcile_task_id or 'none'}"
+                ),
+            )
+
+        # Compensated failures are observable and replayable; no need to escalate.
+        if reconcile_task_id is not None:
+            self._reset_usage_persist_silent_failure_window()
+            return
+
+        failures_in_window, should_escalate = self._record_usage_persist_silent_failure()
+        log_agent(
+            "orchestrator",
+            (
+                "session="
+                f"{session.id} uncompensated_usage_persist_failure_count={failures_in_window}"
+            ),
+        )
+        if should_escalate:
+            raise RuntimeError(
+                "Billing usage persistence failed without compensation task; escalation triggered."
+            ) from exc
+
+    def _record_usage_persist_silent_failure(self) -> tuple[int, bool]:
+        limit = max(int(settings.billing_usage_persist_silent_failure_limit), 0)
+        if limit <= 0:
+            return (0, False)
+        window_seconds = max(int(settings.billing_usage_persist_silent_window_seconds), 1)
+        window_start = datetime.now(UTC) - timedelta(seconds=window_seconds)
+        _USAGE_PERSIST_SILENT_FAILURES.append(datetime.now(UTC))
+        while _USAGE_PERSIST_SILENT_FAILURES and _USAGE_PERSIST_SILENT_FAILURES[0] < window_start:
+            _USAGE_PERSIST_SILENT_FAILURES.popleft()
+        current_count = len(_USAGE_PERSIST_SILENT_FAILURES)
+        return (current_count, current_count >= limit)
+
+    def _reset_usage_persist_silent_failure_window(self) -> None:
+        _USAGE_PERSIST_SILENT_FAILURES.clear()
 
     def _extract_wrapped_payloads(
         self,

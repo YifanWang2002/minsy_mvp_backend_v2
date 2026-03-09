@@ -9,14 +9,19 @@ import subprocess
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 
+from packages.domain.billing.usage_service import UsageMetric, UsageService
 from packages.shared_settings.schema.settings import settings
 from packages.infra.db.models.backtest import BacktestJob
 from packages.infra.db import session as db_module
+from packages.infra.db.models.billing_usage_event import BillingUsageEvent
 from packages.infra.db.models.user import User
 from packages.infra.observability.logger import logger
+from packages.infra.observability.sentry import capture_exception_with_context
 from apps.worker.common.celery_base import celery_app
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -197,6 +202,74 @@ async def _fail_stale_backtest_jobs_once() -> dict[str, int | list[str]]:
     }
 
 
+async def _reconcile_billing_usage_event_once(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reconcile one missing AI usage write by assistant-message reference id."""
+    user_id_raw = str(payload.get("user_id") or "").strip()
+    message_id = str(payload.get("assistant_message_id") or "").strip()
+    raw_usage = payload.get("raw_usage")
+    model = str(payload.get("model") or "").strip() or None
+    session_id = str(payload.get("session_id") or "").strip() or None
+    phase = str(payload.get("phase") or "").strip() or None
+    response_id = str(payload.get("response_id") or "").strip() or None
+    usage_source = str(payload.get("usage_source") or "").strip() or "raw_usage"
+
+    if not user_id_raw or not message_id or not isinstance(raw_usage, dict):
+        return {
+            "status": "invalid_payload",
+            "message": "user_id, assistant_message_id, raw_usage are required.",
+        }
+
+    user_id = UUID(user_id_raw)
+
+    with suppress(Exception):
+        await db_module.close_postgres()
+    await db_module.init_postgres(ensure_schema=False)
+    assert db_module.AsyncSessionLocal is not None
+
+    try:
+        async with db_module.AsyncSessionLocal() as session:
+            existing = await session.scalar(
+                select(BillingUsageEvent.id).where(
+                    BillingUsageEvent.user_id == user_id,
+                    BillingUsageEvent.metric_code == UsageMetric.AI_TOKENS_MONTHLY_TOTAL,
+                    BillingUsageEvent.reference_type == "assistant_message",
+                    BillingUsageEvent.reference_id == message_id,
+                )
+            )
+            if existing is not None:
+                return {
+                    "status": "duplicate",
+                    "user_id": user_id_raw,
+                    "assistant_message_id": message_id,
+                }
+
+            usage_service = UsageService(session)
+            await usage_service.record_ai_tokens_from_openai_usage(
+                user_id=user_id,
+                raw_usage=raw_usage,
+                model=model,
+                source="chat_turn_reconcile",
+                reference_type="assistant_message",
+                reference_id=message_id,
+                metadata={
+                    "session_id": session_id,
+                    "phase": phase,
+                    "response_id": response_id,
+                    "usage_source": usage_source,
+                    "reconciled_by": "maintenance_task",
+                },
+            )
+            await session.commit()
+            return {
+                "status": "reconciled",
+                "user_id": user_id_raw,
+                "assistant_message_id": message_id,
+            }
+    finally:
+        with suppress(Exception):
+            await db_module.close_postgres()
+
+
 @celery_app.task(name="maintenance.backup_postgres_full")
 def backup_postgres_full_task() -> dict[str, str | int]:
     """Create a full PostgreSQL backup and rotate old backup files."""
@@ -255,3 +328,32 @@ def export_user_emails_csv_task() -> dict[str, str | int]:
 def fail_stale_backtest_jobs_task() -> dict[str, int | list[str]]:
     """Fail stale backtest jobs stuck in running state."""
     return asyncio.run(_fail_stale_backtest_jobs_once())
+
+
+@celery_app.task(
+    bind=True,
+    name="maintenance.reconcile_billing_usage_event",
+    max_retries=6,
+)
+def reconcile_billing_usage_event_task(
+    self,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Retryable compensation task for failed billing usage persistence."""
+    try:
+        return asyncio.run(_reconcile_billing_usage_event_once(payload))
+    except Exception as exc:  # noqa: BLE001
+        retries = int(getattr(self.request, "retries", 0))
+        capture_exception_with_context(
+            exc,
+            tags={
+                "component": "maintenance_reconcile_billing_usage",
+                "billing_usage_persist_failed": "1",
+            },
+            extras={
+                "retry_count": retries,
+                "payload_keys": sorted(payload.keys()) if isinstance(payload, dict) else [],
+            },
+        )
+        countdown = min(300, 2 ** (retries + 1))
+        raise self.retry(exc=exc, countdown=countdown)

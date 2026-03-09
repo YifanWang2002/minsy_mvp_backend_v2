@@ -9,7 +9,8 @@ from math import ceil
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from packages.infra.db.models.billing_usage_event import BillingUsageEvent
@@ -95,23 +96,102 @@ class UsageService:
         *,
         user_id: UUID,
         window_month: date,
+        for_update: bool = False,
     ) -> BillingUsageMonthly:
-        existing = await self._db.scalar(
-            select(BillingUsageMonthly).where(
+        # UPSERT avoids duplicate inserts under concurrent writers.
+        await self._db.execute(
+            pg_insert(BillingUsageMonthly)
+            .values(
+                user_id=user_id,
+                window_month=window_month,
+            )
+            .on_conflict_do_nothing(
+                index_elements=[
+                    BillingUsageMonthly.user_id,
+                    BillingUsageMonthly.window_month,
+                ],
+            )
+        )
+
+        stmt = select(BillingUsageMonthly).where(
+            BillingUsageMonthly.user_id == user_id,
+            BillingUsageMonthly.window_month == window_month,
+        )
+        if for_update:
+            stmt = stmt.with_for_update()
+        existing = await self._db.scalar(stmt)
+        if existing is None:
+            raise RuntimeError(
+                f"Unable to upsert billing_usage_monthly row user_id={user_id} month={window_month}",
+            )
+        return existing
+
+    async def _increment_monthly_usage(
+        self,
+        *,
+        user_id: UUID,
+        window_month: date,
+        ai_input_delta: int = 0,
+        ai_reasoning_delta: int = 0,
+        ai_output_delta: int = 0,
+        ai_total_delta: int = 0,
+        cpu_total_delta: int = 0,
+    ) -> None:
+        await self._get_or_create_monthly_row(
+            user_id=user_id,
+            window_month=window_month,
+            for_update=True,
+        )
+        await self._db.execute(
+            update(BillingUsageMonthly)
+            .where(
                 BillingUsageMonthly.user_id == user_id,
                 BillingUsageMonthly.window_month == window_month,
             )
+            .values(
+                ai_input_tokens=BillingUsageMonthly.ai_input_tokens + ai_input_delta,
+                ai_reasoning_tokens=BillingUsageMonthly.ai_reasoning_tokens + ai_reasoning_delta,
+                ai_output_tokens=BillingUsageMonthly.ai_output_tokens + ai_output_delta,
+                ai_total_tokens=BillingUsageMonthly.ai_total_tokens + ai_total_delta,
+                cpu_jobs_total=BillingUsageMonthly.cpu_jobs_total + cpu_total_delta,
+            )
         )
-        if existing is not None:
-            return existing
 
-        created = BillingUsageMonthly(
+    async def _insert_usage_event(
+        self,
+        *,
+        user_id: UUID,
+        metric_code: str,
+        quantity: int,
+        window_month: date,
+        source: str,
+        reference_type: str | None,
+        reference_id: str | None,
+        metadata: dict | None,
+        dedupe_by_reference: bool,
+    ) -> bool:
+        insert_stmt = pg_insert(BillingUsageEvent).values(
             user_id=user_id,
+            metric_code=metric_code,
+            quantity=quantity,
             window_month=window_month,
+            source=source,
+            reference_type=reference_type,
+            reference_id=reference_id,
+            metadata_=dict(metadata or {}),
         )
-        self._db.add(created)
-        await self._db.flush()
-        return created
+        if dedupe_by_reference and reference_type and reference_id:
+            insert_stmt = insert_stmt.on_conflict_do_nothing(
+                index_elements=[
+                    BillingUsageEvent.user_id,
+                    BillingUsageEvent.metric_code,
+                    BillingUsageEvent.reference_type,
+                    BillingUsageEvent.reference_id,
+                ],
+            )
+        result = await self._db.execute(insert_stmt.returning(BillingUsageEvent.id))
+        inserted_id = result.scalar_one_or_none()
+        return inserted_id is not None
 
     async def get_monthly_usage(
         self,
@@ -184,28 +264,7 @@ class UsageService:
         )
 
         window_month = month_window_start()
-        if reference_type and reference_id:
-            existing = await self._db.scalar(
-                select(BillingUsageEvent.id).where(
-                    BillingUsageEvent.user_id == user_id,
-                    BillingUsageEvent.metric_code == _AI_METRIC_CODE,
-                    BillingUsageEvent.reference_type == reference_type,
-                    BillingUsageEvent.reference_id == reference_id,
-                )
-            )
-            if existing is not None:
-                return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
-
-        row = await self._get_or_create_monthly_row(
-            user_id=user_id,
-            window_month=window_month,
-        )
-        row.ai_input_tokens = int(row.ai_input_tokens) + normalized_input
-        row.ai_reasoning_tokens = int(row.ai_reasoning_tokens) + normalized_reasoning
-        row.ai_output_tokens = int(row.ai_output_tokens) + normalized_output
-        row.ai_total_tokens = int(row.ai_total_tokens) + total_tokens
-
-        event = BillingUsageEvent(
+        inserted = await self._insert_usage_event(
             user_id=user_id,
             metric_code=_AI_METRIC_CODE,
             quantity=total_tokens,
@@ -213,10 +272,21 @@ class UsageService:
             source=source,
             reference_type=reference_type,
             reference_id=reference_id,
-            metadata_=dict(metadata or {}),
+            metadata=metadata,
+            dedupe_by_reference=bool(reference_type and reference_id),
         )
-        self._db.add(event)
-        await self._db.flush()
+        if not inserted:
+            # Idempotent replay: already counted for this reference.
+            return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
+
+        await self._increment_monthly_usage(
+            user_id=user_id,
+            window_month=window_month,
+            ai_input_delta=normalized_input,
+            ai_reasoning_delta=normalized_reasoning,
+            ai_output_delta=normalized_output,
+            ai_total_delta=total_tokens,
+        )
         return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
 
     async def record_ai_tokens_from_openai_usage(
@@ -275,8 +345,11 @@ class UsageService:
     ) -> MonthlyUsageSnapshot:
         normalized_quantity = max(int(quantity), 0)
         window_month = month_window_start()
+        if normalized_quantity <= 0:
+            return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
         if reference_type and reference_id:
-            existing = await self._db.scalar(
+            # Backward compatibility: legacy cpu_jobs metric used the same reference space.
+            legacy_existing = await self._db.scalar(
                 select(BillingUsageEvent.id).where(
                     BillingUsageEvent.user_id == user_id,
                     BillingUsageEvent.metric_code.in_(
@@ -286,18 +359,10 @@ class UsageService:
                     BillingUsageEvent.reference_id == reference_id,
                 )
             )
-            if existing is not None:
+            if legacy_existing is not None:
                 return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
-        if normalized_quantity <= 0:
-            return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
 
-        row = await self._get_or_create_monthly_row(
-            user_id=user_id,
-            window_month=window_month,
-        )
-        row.cpu_jobs_total = int(row.cpu_jobs_total) + normalized_quantity
-
-        event = BillingUsageEvent(
+        inserted = await self._insert_usage_event(
             user_id=user_id,
             metric_code=_CPU_TOKENS_METRIC_CODE,
             quantity=normalized_quantity,
@@ -305,10 +370,17 @@ class UsageService:
             source=source,
             reference_type=reference_type,
             reference_id=reference_id,
-            metadata_=dict(metadata or {}),
+            metadata=metadata,
+            dedupe_by_reference=bool(reference_type and reference_id),
         )
-        self._db.add(event)
-        await self._db.flush()
+        if not inserted:
+            return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
+
+        await self._increment_monthly_usage(
+            user_id=user_id,
+            window_month=window_month,
+            cpu_total_delta=normalized_quantity,
+        )
         return await self.get_monthly_usage(user_id=user_id, window_month=window_month)
 
     async def record_cpu_job(
@@ -425,7 +497,12 @@ def _resolve_model_pricing(
     if not isinstance(pricing, Mapping):
         return (0.0, 0.0)
 
-    model_entry = pricing.get(model)
+    model_entry = None
+    for candidate in _iter_model_pricing_candidates(model):
+        raw_entry = pricing.get(candidate)
+        if isinstance(raw_entry, Mapping):
+            model_entry = raw_entry
+            break
     if not isinstance(model_entry, Mapping):
         model_entry = pricing.get("default")
     if not isinstance(model_entry, Mapping):
@@ -438,6 +515,24 @@ def _resolve_model_pricing(
     if output_per_token <= 0:
         output_per_token = _to_float(model_entry.get("output_per_1k_tokens")) / 1000.0
     return (input_per_token, output_per_token)
+
+
+def _iter_model_pricing_candidates(model: str) -> tuple[str, ...]:
+    normalized = str(model or "").strip()
+    if not normalized:
+        return ()
+
+    candidates: list[str] = [normalized]
+    parts = normalized.split("-")
+    if len(parts) <= 2:
+        return tuple(candidates)
+
+    # Versioned aliases like gpt-5.2-2025-12-11 should resolve to gpt-5.2.
+    for end in range(len(parts) - 1, 1, -1):
+        candidate = "-".join(parts[:end]).strip()
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    return tuple(candidates)
 
 
 def _resolve_internal_ai_unit_usd(

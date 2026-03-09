@@ -237,6 +237,8 @@ uv run alembic revision --autogenerate -m "description"
 | `STRIPE_PUBLISHABLE_KEY` | Stripe publishable key |
 | `STRIPE_SECRET_KEY` | Stripe billing key |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook verification |
+| `STRIPE_PRICE_GO_MONTHLY` | Stripe price id for Go plan |
+| `STRIPE_PRODUCT_GO` | Stripe product id for Go plan |
 | `STRIPE_PRICE_PLUS_MONTHLY` | Stripe price id for Plus plan |
 | `STRIPE_PRICE_PRO_MONTHLY` | Stripe price id for Pro plan |
 | `BILLING_PRICING_JSON` | Unified billing config (pricing/cost model/tier limits) |

@@ -48,7 +48,7 @@ def _resolve_kyc_status(user: User) -> str:
 
 def _resolve_user_tier(user: User) -> str:
     normalized = str(user.current_tier or "").strip().lower()
-    if normalized in {"free", "plus", "pro"}:
+    if normalized in {"free", "go", "plus", "pro"}:
         return normalized
     return "free"
 

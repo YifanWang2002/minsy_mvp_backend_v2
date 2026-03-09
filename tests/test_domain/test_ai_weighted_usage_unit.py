@@ -56,3 +56,20 @@ def test_weighted_ai_usage_supports_explicit_internal_unit_override() -> None:
     # total cost = 20 * 0.0005 = 0.01 ; unit = 0.00025 => 40
     assert usage.weighted_total_tokens == 40
     assert usage.usd_per_internal_token == 0.00025
+
+
+def test_weighted_ai_usage_resolves_versioned_model_name_to_base_pricing() -> None:
+    usage = compute_weighted_ai_usage_from_openai(
+        raw_usage={"input_tokens": 100, "output_tokens": 50},
+        model="gpt-5.2-2025-12-11",
+        pricing={
+            "default": {"input_per_token": 0.0001, "output_per_token": 0.0001},
+            "gpt-5.2": {"input_per_token": 0.001, "output_per_token": 0.002},
+        },
+        billing_cost_model={"ai_usage_unit_usd": 0.0005},
+    )
+
+    assert usage.input_per_token_usd == 0.001
+    assert usage.output_per_token_usd == 0.002
+    assert usage.estimated_cost_usd == 0.2
+    assert usage.weighted_total_tokens == 400

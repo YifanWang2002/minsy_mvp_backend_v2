@@ -159,7 +159,7 @@ async def _ensure_trading_event_outbox_constraint() -> None:
     assert engine is not None
     event_type_constraint_sql = (
         "event_type IN ('deployment_status', 'order_update', 'fill_update', "
-        "'position_update', 'pnl_update', 'trade_approval_update', 'heartbeat')"
+        "'position_update', 'pnl_update', 'manual_action_update', 'trade_approval_update', 'heartbeat')"
     )
     async with engine.begin() as connection:
         await connection.execute(
@@ -421,7 +421,7 @@ async def _ensure_broker_account_audit_log_constraint() -> None:
 async def _ensure_user_billing_columns() -> None:
     """Ensure users table has tier column and matching check constraint."""
     assert engine is not None
-    tier_constraint_sql = "current_tier IN ('free', 'plus', 'pro')"
+    tier_constraint_sql = "current_tier IN ('free', 'go', 'plus', 'pro')"
     async with engine.begin() as connection:
         await connection.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_tier VARCHAR(20)"),
@@ -442,6 +442,81 @@ async def _ensure_user_billing_columns() -> None:
             text(
                 "ALTER TABLE users "
                 f"ADD CONSTRAINT ck_users_current_tier CHECK ({tier_constraint_sql})",
+            ),
+        )
+
+
+async def _ensure_billing_schema() -> None:
+    """Ensure billing tables include replay-safe webhook and usage idempotency constraints."""
+    assert engine is not None
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "ALTER TABLE billing_subscriptions "
+                "DROP CONSTRAINT IF EXISTS ck_billing_subscriptions_tier",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE billing_subscriptions "
+                "ADD CONSTRAINT ck_billing_subscriptions_tier "
+                "CHECK (tier IN ('free', 'go', 'plus', 'pro'))",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE billing_subscriptions "
+                "DROP CONSTRAINT IF EXISTS ck_billing_subscriptions_pending_tier",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE billing_subscriptions "
+                "ADD CONSTRAINT ck_billing_subscriptions_pending_tier "
+                "CHECK (pending_tier IS NULL OR pending_tier IN ('free', 'go', 'plus', 'pro'))",
+            ),
+        )
+
+        await connection.execute(
+            text(
+                "ALTER TABLE billing_webhook_events "
+                "ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ",
+            ),
+        )
+
+        # Keep one usage event per idempotent reference before enforcing uniqueness.
+        await connection.execute(
+            text(
+                "DELETE FROM billing_usage_events e "
+                "USING ("
+                "  SELECT id FROM ("
+                "    SELECT id, "
+                "           ROW_NUMBER() OVER ("
+                "             PARTITION BY user_id, metric_code, reference_type, reference_id "
+                "             ORDER BY occurred_at ASC, id ASC"
+                "           ) AS rn "
+                "    FROM billing_usage_events "
+                "    WHERE reference_type IS NOT NULL "
+                "      AND reference_id IS NOT NULL"
+                "  ) ranked "
+                "  WHERE ranked.rn > 1"
+                ") dupes "
+                "WHERE e.id = dupes.id",
+            ),
+        )
+        await connection.execute(
+            text(
+                "DO $$ "
+                "BEGIN "
+                "  IF NOT EXISTS ("
+                "    SELECT 1 FROM pg_constraint "
+                "    WHERE conname = 'uq_billing_usage_events_user_metric_reference'"
+                "  ) THEN "
+                "    ALTER TABLE billing_usage_events "
+                "    ADD CONSTRAINT uq_billing_usage_events_user_metric_reference "
+                "    UNIQUE (user_id, metric_code, reference_type, reference_id); "
+                "  END IF; "
+                "END $$;",
             ),
         )
 
@@ -509,6 +584,7 @@ async def init_postgres(*, ensure_schema: bool = True) -> None:
         await _ensure_broker_account_schema()
         await _ensure_broker_account_audit_log_constraint()
         await _ensure_user_billing_columns()
+        await _ensure_billing_schema()
         await _ensure_sessions_phase_constraint()
         await _ensure_sessions_archival_columns()
         await _ensure_trading_runtime_columns()
@@ -546,6 +622,7 @@ async def init_db(drop_existing: bool = False) -> None:
     await _ensure_broker_account_schema()
     await _ensure_broker_account_audit_log_constraint()
     await _ensure_user_billing_columns()
+    await _ensure_billing_schema()
     await _ensure_sessions_phase_constraint()
     await _ensure_sessions_archival_columns()
     await _ensure_trading_runtime_columns()

@@ -46,6 +46,7 @@ class BillingWebhookEvent(Base):
         server_default=text("'{}'::jsonb"),
     )
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

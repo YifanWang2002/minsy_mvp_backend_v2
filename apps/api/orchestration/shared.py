@@ -28,6 +28,9 @@ from apps.api.agents.skills.pre_strategy_skills import (
     get_tradingview_symbol_for_market_instrument,
 )
 from apps.api.schemas.requests import ChatSendRequest
+from apps.api.services.billing_queue_service import (
+    enqueue_reconcile_billing_usage_event,
+)
 from packages.shared_settings.schema.settings import settings
 from packages.domain.billing.quota_service import QuotaExceededError, QuotaService
 from packages.domain.billing.usage_service import UsageMetric, UsageService
@@ -49,6 +52,7 @@ from apps.api.orchestration.chat_debug_trace import (
     record_chat_debug_trace,
 )
 from packages.infra.observability.logger import log_agent
+from packages.infra.observability.sentry import capture_exception_with_context
 
 from .constants import *  # noqa: F403
 from .types import _TurnPostProcessResult, _TurnPreparation, _TurnStreamState

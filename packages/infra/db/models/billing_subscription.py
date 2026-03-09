@@ -36,11 +36,11 @@ class BillingSubscription(Base):
             name="uq_billing_subscriptions_stripe_subscription_id",
         ),
         CheckConstraint(
-            "tier IN ('free', 'plus', 'pro')",
+            "tier IN ('free', 'go', 'plus', 'pro')",
             name="ck_billing_subscriptions_tier",
         ),
         CheckConstraint(
-            "pending_tier IS NULL OR pending_tier IN ('free', 'plus', 'pro')",
+            "pending_tier IS NULL OR pending_tier IN ('free', 'go', 'plus', 'pro')",
             name="ck_billing_subscriptions_pending_tier",
         ),
         Index(

@@ -136,6 +136,12 @@ class SubscriptionSyncService:
         pending_price_id, pending_tier = self._resolve_pending_price_and_tier(subscription_payload)
         status = str(subscription_payload.get("status") or "inactive").strip().lower() or "inactive"
         effective_tier = resolved_tier if status in _ACTIVE_TIER_STATUSES else "free"
+        metadata_raw = subscription_payload.get("metadata")
+        metadata = dict(metadata_raw) if isinstance(metadata_raw, dict) else {}
+        hold_entitlements_until = _resolve_hold_entitlements_until(
+            metadata.get("entitlements_hold_until")
+        )
+        metadata_pending_tier = _normalize_tier_value(metadata.get("pending_tier"))
 
         record = await self._db.scalar(
             select(BillingSubscription).where(
@@ -150,6 +156,17 @@ class SubscriptionSyncService:
                 stripe_subscription_id=stripe_subscription_id,
             )
             self._db.add(record)
+
+        if (
+            status in _ACTIVE_TIER_STATUSES
+            and hold_entitlements_until is not None
+            and datetime.now(UTC) < hold_entitlements_until
+        ):
+            current_record_tier = _normalize_tier_value(record.tier)
+            if current_record_tier and _tier_rank(resolved_tier) < _tier_rank(current_record_tier):
+                effective_tier = current_record_tier
+                pending_tier = metadata_pending_tier or resolved_tier
+                pending_price_id = pending_price_id or resolved_price_id
 
         record.user_id = user_id
         record.customer_id = customer.id if customer is not None else None
@@ -244,12 +261,15 @@ class SubscriptionSyncService:
         user = await self._db.scalar(select(User).where(User.id == user_id))
         if user is None:
             return
-        user.current_tier = target_tier if target_tier in {"free", "plus", "pro"} else "free"
+        user.current_tier = (
+            target_tier if target_tier in {"free", "go", "plus", "pro"} else "free"
+        )
         await self._db.flush()
 
     @staticmethod
     def _resolve_current_price_and_tier(subscription_payload: dict[str, Any]) -> tuple[str | None, str]:
-        mapping = settings.stripe_price_to_tier_map
+        price_to_tier = settings.stripe_price_to_tier_map
+        product_to_tier = settings.stripe_product_to_tier_map
         items_root = subscription_payload.get("items")
         items = items_root.get("data") if isinstance(items_root, dict) else []
         if not isinstance(items, list):
@@ -265,8 +285,9 @@ class SubscriptionSyncService:
             if not price_id:
                 continue
             fallback_price = fallback_price or price_id
-            tier = mapping.get(price_id)
-            if tier in {"plus", "pro"}:
+            product_id = str(price.get("product") or "").strip()
+            tier = price_to_tier.get(price_id) or product_to_tier.get(product_id)
+            if tier in {"go", "plus", "pro"}:
                 return price_id, tier
 
         if fallback_price is not None:
@@ -275,7 +296,8 @@ class SubscriptionSyncService:
 
     @staticmethod
     def _resolve_pending_price_and_tier(subscription_payload: dict[str, Any]) -> tuple[str | None, str | None]:
-        mapping = settings.stripe_price_to_tier_map
+        price_to_tier = settings.stripe_price_to_tier_map
+        product_to_tier = settings.stripe_product_to_tier_map
         pending_raw = subscription_payload.get("pending_update")
         pending = dict(pending_raw) if isinstance(pending_raw, dict) else {}
         subscription_items = pending.get("subscription_items")
@@ -293,7 +315,12 @@ class SubscriptionSyncService:
                 price_id = price_raw.strip()
             if not price_id:
                 continue
-            return price_id, mapping.get(price_id)
+            product_id = (
+                str(price_raw.get("product") or "").strip()
+                if isinstance(price_raw, dict)
+                else ""
+            )
+            return price_id, price_to_tier.get(price_id) or product_to_tier.get(product_id)
         return None, None
 
 
@@ -330,4 +357,48 @@ def _resolve_latest_invoice_id(subscription_payload: dict[str, Any]) -> str | No
     if isinstance(raw, dict):
         text = str(raw.get("id") or "").strip()
         return text or None
+    return None
+
+
+def _normalize_tier_value(raw: Any) -> str | None:
+    value = str(raw or "").strip().lower()
+    if value in {"free", "go", "plus", "pro"}:
+        return value
+    return None
+
+
+def _tier_rank(raw: str) -> int:
+    return {
+        "free": 0,
+        "go": 1,
+        "plus": 2,
+        "pro": 3,
+    }.get(_normalize_tier_value(raw) or "free", 0)
+
+
+def _resolve_hold_entitlements_until(raw: Any) -> datetime | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(raw), tz=UTC)
+        except Exception:  # noqa: BLE001
+            return None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return None
+        try:
+            as_int = int(text)
+            return datetime.fromtimestamp(as_int, tz=UTC)
+        except ValueError:
+            pass
+        normalized = text.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
     return None

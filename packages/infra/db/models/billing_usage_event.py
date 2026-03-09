@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -31,6 +32,13 @@ class BillingUsageEvent(Base):
     __tablename__ = "billing_usage_events"
     __table_args__ = (
         CheckConstraint("quantity >= 0", name="ck_billing_usage_events_quantity"),
+        UniqueConstraint(
+            "user_id",
+            "metric_code",
+            "reference_type",
+            "reference_id",
+            name="uq_billing_usage_events_user_metric_reference",
+        ),
         Index(
             "ix_billing_usage_events_user_metric_month",
             "user_id",

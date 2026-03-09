@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.api.dependencies import get_db
 from apps.api.middleware.auth import get_current_user
 from apps.api.schemas.billing_schemas import (
+    BillingChangePlanRequest,
+    BillingChangePlanResponse,
     BillingCheckoutSessionRequest,
     BillingCheckoutSessionResponse,
     BillingOverviewResponse,
@@ -42,6 +44,15 @@ from packages.infra.providers.stripe.client import (
 from packages.shared_settings.schema.settings import settings
 
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+_ACTIVE_SUBSCRIPTION_STATUSES = (
+    "trialing",
+    "active",
+    "past_due",
+    "unpaid",
+    "paused",
+)
+_CHECKOUT_TRIAL_DAYS = 7
 
 
 @router.get("/plans", response_model=BillingPlansResponse)
@@ -95,12 +106,7 @@ async def create_checkout_session(
 ) -> BillingCheckoutSessionResponse:
     _require_stripe_ready()
 
-    price_map = {
-        "go": settings.stripe_price_go_monthly.strip(),
-        "plus": settings.stripe_price_plus_monthly.strip(),
-        "pro": settings.stripe_price_pro_monthly.strip(),
-    }
-    price_id = price_map.get(payload.plan, "")
+    price_id = _price_id_for_tier(payload.plan)
     if not price_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -110,7 +116,42 @@ async def create_checkout_session(
             },
         )
 
+    active_subscription = await _latest_active_subscription_for_user(
+        db=db,
+        user_id=user.id,
+    )
+    if active_subscription is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "BILLING_ACTIVE_SUBSCRIPTION_EXISTS",
+                "message": "Active subscription exists. Use /billing/change-plan for plan switching.",
+            },
+        )
+
     customer = await _resolve_or_create_customer(db=db, user=user)
+    remote_active_subscription = await _latest_remote_active_subscription_for_customer(
+        customer_id=customer.stripe_customer_id,
+    )
+    if remote_active_subscription is not None:
+        sync_service = SubscriptionSyncService(db, stripe_client=stripe_client)
+        await sync_service.sync_subscription_payload(
+            subscription_payload=remote_active_subscription,
+            fallback_user_id=user.id,
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "BILLING_ACTIVE_SUBSCRIPTION_EXISTS",
+                "message": "Active subscription exists. Use /billing/change-plan for plan switching.",
+            },
+        )
+
+    has_prior_paid_subscription = await _user_has_paid_subscription_history(
+        db=db,
+        user_id=user.id,
+    )
 
     session = await stripe_client.create_checkout_session(
         customer_id=customer.stripe_customer_id,
@@ -122,6 +163,7 @@ async def create_checkout_session(
             "user_id": str(user.id),
             "target_tier": payload.plan,
         },
+        trial_days=0 if has_prior_paid_subscription else _CHECKOUT_TRIAL_DAYS,
     )
     await db.commit()
 
@@ -169,6 +211,159 @@ async def create_portal_session(
         )
 
     return BillingPortalSessionResponse(portal_url=portal_url)
+
+
+@router.post("/change-plan", response_model=BillingChangePlanResponse)
+async def change_billing_plan(
+    payload: BillingChangePlanRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BillingChangePlanResponse:
+    _require_stripe_ready()
+
+    target_tier = _normalize_tier(payload.plan)
+    target_price_id = _price_id_for_tier(target_tier)
+    if not target_price_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "BILLING_PRICE_NOT_CONFIGURED",
+                "message": f"Stripe price id is missing for plan '{target_tier}'.",
+            },
+        )
+
+    active_subscription = await _latest_active_subscription_for_user(
+        db=db,
+        user_id=user.id,
+    )
+    subscription_payload: dict | None = None
+    fallback_current_tier = _normalize_tier(user.current_tier)
+
+    if active_subscription is None:
+        customer = await _resolve_or_create_customer(db=db, user=user)
+        remote_active_subscription = await _latest_remote_active_subscription_for_customer(
+            customer_id=customer.stripe_customer_id,
+        )
+        if remote_active_subscription is not None:
+            subscription_payload = remote_active_subscription
+        else:
+            has_prior_paid_subscription = await _user_has_paid_subscription_history(
+                db=db,
+                user_id=user.id,
+            )
+            checkout_session = await stripe_client.create_checkout_session(
+                customer_id=customer.stripe_customer_id,
+                price_id=target_price_id,
+                success_url=_resolve_checkout_return_url(request=request, billing="success"),
+                cancel_url=_resolve_checkout_return_url(request=request, billing="cancel"),
+                client_reference_id=str(user.id),
+                metadata={
+                    "user_id": str(user.id),
+                    "target_tier": target_tier,
+                },
+                trial_days=0 if has_prior_paid_subscription else _CHECKOUT_TRIAL_DAYS,
+            )
+            await db.commit()
+            checkout_url = str(checkout_session.get("url") or "").strip()
+            if not checkout_url:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={
+                        "code": "STRIPE_CHECKOUT_CREATE_FAILED",
+                        "message": "Stripe checkout session did not return url.",
+                    },
+                )
+            return BillingChangePlanResponse(
+                action="checkout_redirect",
+                current_tier=_normalize_tier(user.current_tier),
+                target_tier=target_tier,
+                redirect_url=checkout_url,
+                publishable_key=settings.stripe_publishable_key,
+            )
+
+    if active_subscription is not None:
+        fallback_current_tier = _normalize_tier(active_subscription.tier)
+        subscription_id = active_subscription.stripe_subscription_id.strip()
+    else:
+        subscription_id = str(subscription_payload.get("id") or "").strip() if isinstance(subscription_payload, dict) else ""
+    if not subscription_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "BILLING_SUBSCRIPTION_ID_MISSING",
+                "message": "Active subscription id missing. Please open billing portal.",
+            },
+        )
+
+    if not isinstance(subscription_payload, dict):
+        subscription_payload = await stripe_client.retrieve_subscription(subscription_id)
+    subscription_item_id, current_price_id = _resolve_primary_subscription_item(
+        subscription_payload
+    )
+    if not subscription_item_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "STRIPE_SUBSCRIPTION_ITEM_NOT_FOUND",
+                "message": "Unable to resolve current subscription item.",
+            },
+        )
+
+    current_tier = _tier_from_price_or_fallback(
+        price_id=current_price_id,
+        fallback_tier=fallback_current_tier,
+    )
+    if current_tier == target_tier:
+        sync_service = SubscriptionSyncService(db, stripe_client=stripe_client)
+        await sync_service.sync_subscription_payload(
+            subscription_payload=subscription_payload,
+            fallback_user_id=user.id,
+        )
+        await db.commit()
+        return BillingChangePlanResponse(
+            action="noop",
+            current_tier=current_tier,
+            target_tier=target_tier,
+        )
+
+    current_rank = _tier_rank(current_tier)
+    target_rank = _tier_rank(target_tier)
+    metadata: dict[str, str] | None = None
+    proration_behavior = "always_invoice"
+    payment_behavior = "pending_if_incomplete"
+    if target_rank < current_rank:
+        proration_behavior = "none"
+        payment_behavior = "allow_incomplete"
+        current_period_end_raw = subscription_payload.get("current_period_end")
+        if _latest_invoice_is_paid(subscription_payload) and isinstance(
+            current_period_end_raw, (int, float)
+        ):
+            metadata = {
+                "entitlements_hold_until": str(int(current_period_end_raw)),
+                "pending_tier": target_tier,
+            }
+
+    updated_subscription_payload = await stripe_client.update_subscription_price(
+        subscription_id,
+        subscription_item_id=subscription_item_id,
+        price_id=target_price_id,
+        proration_behavior=proration_behavior,
+        payment_behavior=payment_behavior,
+        metadata=metadata,
+    )
+    sync_service = SubscriptionSyncService(db, stripe_client=stripe_client)
+    await sync_service.sync_subscription_payload(
+        subscription_payload=updated_subscription_payload,
+        fallback_user_id=user.id,
+    )
+    await db.commit()
+
+    return BillingChangePlanResponse(
+        action="updated",
+        current_tier=current_tier,
+        target_tier=target_tier,
+    )
 
 
 @router.get("/overview", response_model=BillingOverviewResponse)
@@ -366,6 +561,116 @@ async def _resolve_or_create_customer(
         email=user.email,
         metadata={"origin": "checkout_or_portal"},
     )
+
+
+async def _latest_active_subscription_for_user(
+    *,
+    db: AsyncSession,
+    user_id,
+) -> BillingSubscription | None:
+    return await db.scalar(
+        select(BillingSubscription)
+        .where(
+            BillingSubscription.user_id == user_id,
+            BillingSubscription.status.in_(_ACTIVE_SUBSCRIPTION_STATUSES),
+        )
+        .order_by(
+            BillingSubscription.updated_at.desc(),
+            BillingSubscription.created_at.desc(),
+        )
+        .limit(1)
+    )
+
+
+async def _latest_remote_active_subscription_for_customer(
+    *,
+    customer_id: str,
+) -> dict | None:
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        return None
+    rows = await stripe_client.list_subscriptions(
+        customer_id=normalized_customer_id,
+        status="all",
+        limit=20,
+    )
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status in _ACTIVE_SUBSCRIPTION_STATUSES:
+            return row
+    return None
+
+
+async def _user_has_paid_subscription_history(*, db: AsyncSession, user_id) -> bool:
+    row = await db.scalar(
+        select(BillingSubscription.id)
+        .where(
+            BillingSubscription.user_id == user_id,
+            BillingSubscription.tier.in_(("go", "plus", "pro")),
+        )
+        .limit(1)
+    )
+    return row is not None
+
+
+def _price_id_for_tier(tier: str) -> str:
+    normalized = _normalize_tier(tier)
+    return {
+        "go": settings.stripe_price_go_monthly.strip(),
+        "plus": settings.stripe_price_plus_monthly.strip(),
+        "pro": settings.stripe_price_pro_monthly.strip(),
+    }.get(normalized, "")
+
+
+def _tier_rank(tier: str) -> int:
+    normalized = _normalize_tier(tier)
+    return {
+        "free": 0,
+        "go": 1,
+        "plus": 2,
+        "pro": 3,
+    }.get(normalized, 0)
+
+
+def _tier_from_price_or_fallback(*, price_id: str | None, fallback_tier: str) -> str:
+    mapping = settings.stripe_price_to_tier_map
+    normalized = mapping.get((price_id or "").strip())
+    if normalized in {"go", "plus", "pro"}:
+        return normalized
+    return _normalize_tier(fallback_tier)
+
+
+def _latest_invoice_is_paid(subscription_payload: dict) -> bool:
+    latest_invoice = subscription_payload.get("latest_invoice")
+    if not isinstance(latest_invoice, dict):
+        return False
+    status = str(latest_invoice.get("status") or "").strip().lower()
+    if status == "paid":
+        return True
+    return bool(latest_invoice.get("paid_out_of_band"))
+
+
+def _resolve_primary_subscription_item(
+    subscription_payload: dict,
+) -> tuple[str | None, str | None]:
+    items_root = subscription_payload.get("items")
+    rows = items_root.get("data") if isinstance(items_root, dict) else []
+    if not isinstance(rows, list):
+        return None, None
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "").strip()
+        price_raw = item.get("price")
+        if isinstance(price_raw, dict):
+            price_id = str(price_raw.get("id") or "").strip()
+        else:
+            price_id = str(price_raw or "").strip()
+        if item_id:
+            return item_id, price_id or None
+    return None, None
 
 
 def _normalize_tier(raw: str | None) -> str:
