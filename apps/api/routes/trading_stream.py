@@ -8,21 +8,31 @@ import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from apps.api.middleware.auth import get_current_user
 from apps.api.dependencies import get_db
-from packages.domain.trading.runtime.runtime_service import refresh_portfolio_snapshot_for_poll
+from apps.api.middleware.auth import get_current_user
+from apps.api.services.trading_stream_replay_service import (
+    load_owned_deployment as load_owned_deployment_service,
+)
+from apps.api.services.trading_stream_replay_service import (
+    poll_outbox_events as poll_outbox_events_service,
+)
+from apps.api.services.trading_stream_replay_service import (
+    resolve_replay_cursor,
+)
+from packages.domain.trading.runtime.runtime_service import (
+    refresh_portfolio_snapshot_for_poll,
+)
+from packages.domain.trading.services.trading_projection_builder import (
+    build_projection_payload,
+    extract_broker_account_payload,
+    load_projection_entities,
+)
 from packages.infra.db.models.deployment import Deployment
-from packages.infra.db.models.deployment_run import DeploymentRun
-from packages.infra.db.models.fill import Fill
-from packages.infra.db.models.order import Order
-from packages.infra.db.models.position import Position
-from packages.infra.db.models.trade_approval_request import TradeApprovalRequest
 from packages.infra.db.models.trading_event_outbox import TradingEventOutbox
 from packages.infra.db.models.user import User
 
@@ -34,70 +44,10 @@ _EVENT_TYPES = (
     "fill_update",
     "position_update",
     "pnl_update",
+    "manual_action_update",
     "trade_approval_update",
 )
 _OUTBOX_RETENTION_PER_DEPLOYMENT = 2000
-
-
-def _as_optional_int(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_iso_or_none(value: object) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.astimezone(UTC).isoformat()
-    text = str(value).strip()
-    return text or None
-
-
-def _as_optional_float(value: object) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _extract_broker_account_payload(runtime_state: dict[str, object]) -> dict[str, object] | None:
-    raw = runtime_state.get("broker_account")
-    if not isinstance(raw, dict):
-        return None
-    provider = str(raw.get("provider") or "").strip().lower()
-    source = str(raw.get("source") or "").strip()
-    sync_status = str(raw.get("sync_status") or "").strip()
-    if not provider or not source or not sync_status:
-        return None
-    symbols_raw = raw.get("symbols")
-    symbols = [str(item).upper() for item in symbols_raw if isinstance(item, str)] if isinstance(symbols_raw, list) else []
-    positions_count = raw.get("positions_count")
-    try:
-        parsed_positions_count = int(positions_count) if positions_count is not None else None
-    except (TypeError, ValueError):
-        parsed_positions_count = None
-    return {
-        "provider": provider,
-        "source": source,
-        "sync_status": sync_status,
-        "fetched_at": _as_iso_or_none(raw.get("fetched_at")),
-        "equity": _as_optional_float(raw.get("equity")),
-        "cash": _as_optional_float(raw.get("cash")),
-        "buying_power": _as_optional_float(raw.get("buying_power")),
-        "margin_used": _as_optional_float(raw.get("margin_used")),
-        "unrealized_pnl": _as_optional_float(raw.get("unrealized_pnl")),
-        "realized_pnl": _as_optional_float(raw.get("realized_pnl")),
-        "positions_count": parsed_positions_count,
-        "symbols": symbols,
-        "error": str(raw.get("error"))[:500] if raw.get("error") is not None else None,
-        "updated_at": _as_iso_or_none(raw.get("updated_at")),
-    }
 
 
 async def _load_owned_deployment(
@@ -106,21 +56,11 @@ async def _load_owned_deployment(
     deployment_id: str,
     user_id: str,
 ) -> Deployment:
-    deployment = await db.scalar(
-        select(Deployment)
-        .options(
-            selectinload(Deployment.strategy),
-            selectinload(Deployment.deployment_runs),
-            selectinload(Deployment.positions),
-        )
-        .where(Deployment.id == deployment_id, Deployment.user_id == user_id)
+    return await load_owned_deployment_service(
+        db,
+        deployment_id=deployment_id,
+        user_id=user_id,
     )
-    if deployment is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "DEPLOYMENT_NOT_FOUND", "message": "Deployment not found."},
-        )
-    return deployment
 
 
 async def _build_snapshot_payload(
@@ -132,146 +72,18 @@ async def _build_snapshot_payload(
         db,
         deployment=deployment,
     )
-    positions = (
-        await db.scalars(
-            select(Position)
-            .where(Position.deployment_id == deployment.id)
-            .order_by(Position.updated_at.desc())
-        )
-    ).all()
-    orders = (
-        await db.scalars(
-            select(Order)
-            .where(Order.deployment_id == deployment.id)
-            .order_by(Order.submitted_at.desc())
-            .limit(50)
-        )
-    ).all()
-    fills = (
-        await db.scalars(
-            select(Fill)
-            .join(Order, Order.id == Fill.order_id)
-            .where(Order.deployment_id == deployment.id)
-            .order_by(Fill.filled_at.desc())
-            .limit(100)
-        )
-    ).all()
-    approvals = (
-        await db.scalars(
-            select(TradeApprovalRequest)
-            .where(TradeApprovalRequest.deployment_id == deployment.id)
-            .order_by(TradeApprovalRequest.requested_at.desc())
-            .limit(20)
-        )
-    ).all()
-    run = await db.scalar(
-        select(DeploymentRun)
-        .where(DeploymentRun.deployment_id == deployment.id)
-        .order_by(DeploymentRun.created_at.desc())
-        .limit(1)
+    entities = await load_projection_entities(db, deployment=deployment)
+    broker_account = extract_broker_account_payload(
+        runtime_state=entities.runtime_state,
+        broker_payload=broker_payload if isinstance(broker_payload, dict) else None,
     )
-    runtime_state = run.runtime_state if run is not None and isinstance(run.runtime_state, dict) else {}
-    scheduler = runtime_state.get("scheduler") if isinstance(runtime_state.get("scheduler"), dict) else {}
-    broker_account = (
-        _extract_broker_account_payload({"broker_account": broker_payload})
-        if isinstance(broker_payload, dict)
-        else _extract_broker_account_payload(runtime_state)
+    return build_projection_payload(
+        deployment=deployment,
+        entities=entities,
+        snapshot=snapshot,
+        pnl_source="platform_estimate",
+        broker_account=broker_account,
     )
-    return {
-        "deployment_id": str(deployment.id),
-        "status": deployment.status,
-        "run": (
-            {
-                "deployment_run_id": str(run.id),
-                "status": run.status,
-                "last_bar_time": run.last_bar_time.isoformat() if run.last_bar_time is not None else None,
-                "runtime_state": runtime_state,
-                "timeframe_seconds": _as_optional_int(scheduler.get("timeframe_seconds")),
-                "last_trigger_bucket": _as_optional_int(scheduler.get("last_trigger_bucket")),
-                "last_enqueued_at": _as_iso_or_none(scheduler.get("last_enqueued_at")),
-            }
-            if run is not None
-            else None
-        ),
-        "pnl": {
-            "equity": float(snapshot.equity),
-            "cash": float(snapshot.cash),
-            "margin_used": float(snapshot.margin_used),
-            "unrealized_pnl": float(snapshot.unrealized_pnl),
-            "realized_pnl": float(snapshot.realized_pnl),
-            "snapshot_time": snapshot.snapshot_time.isoformat(),
-        },
-        "pnl_source": "platform_estimate",
-        "broker_account": broker_account,
-        "positions": [
-            {
-                "symbol": position.symbol,
-                "side": position.side,
-                "qty": float(position.qty),
-                "avg_entry_price": float(position.avg_entry_price),
-                "mark_price": float(position.mark_price),
-                "unrealized_pnl": float(position.unrealized_pnl),
-                "realized_pnl": float(position.realized_pnl),
-            }
-            for position in positions
-        ],
-        "orders": [
-            {
-                "order_id": str(order.id),
-                "symbol": order.symbol,
-                "side": order.side,
-                "type": order.type,
-                "qty": float(order.qty),
-                "price": float(order.price) if order.price is not None else None,
-                "status": order.status,
-                "provider_status": (
-                    str(order.metadata_.get("provider_status"))
-                    if isinstance(order.metadata_, dict) and order.metadata_.get("provider_status") is not None
-                    else order.status
-                ),
-                "reject_reason": order.reject_reason,
-                "last_sync_at": order.last_sync_at.isoformat() if order.last_sync_at else None,
-                "submitted_at": order.submitted_at.isoformat(),
-            }
-            for order in orders
-        ],
-        "fills": [
-            {
-                "fill_id": str(fill.id),
-                "order_id": str(fill.order_id),
-                "provider_fill_id": fill.provider_fill_id,
-                "fill_price": float(fill.fill_price),
-                "fill_qty": float(fill.fill_qty),
-                "fee": float(fill.fee),
-                "filled_at": fill.filled_at.isoformat(),
-            }
-            for fill in fills
-        ],
-        "approvals": [
-            {
-                "trade_approval_request_id": str(approval.id),
-                "deployment_id": str(approval.deployment_id),
-                "signal": approval.signal,
-                "side": approval.side,
-                "symbol": approval.symbol,
-                "qty": float(approval.qty),
-                "mark_price": float(approval.mark_price),
-                "reason": approval.reason,
-                "timeframe": approval.timeframe,
-                "status": approval.status,
-                "requested_at": approval.requested_at.isoformat(),
-                "expires_at": approval.expires_at.isoformat(),
-                "approved_at": approval.approved_at.isoformat() if approval.approved_at else None,
-                "rejected_at": approval.rejected_at.isoformat() if approval.rejected_at else None,
-                "expired_at": approval.expired_at.isoformat() if approval.expired_at else None,
-                "executed_at": approval.executed_at.isoformat() if approval.executed_at else None,
-                "approved_via": approval.approved_via,
-                "decision_actor": approval.decision_actor,
-                "execution_error": approval.execution_error,
-            }
-            for approval in approvals
-        ],
-    }
 
 
 async def _append_outbox_snapshot(
@@ -313,6 +125,26 @@ async def _append_outbox_snapshot(
             "pnl": pnl_payload,
             "pnl_source": snapshot.get("pnl_source"),
             "broker_account": snapshot.get("broker_account"),
+        },
+        "manual_action_update": {
+            "deployment_id": snapshot["deployment_id"],
+            "manual_actions": snapshot.get("manual_actions", []),
+            "latest_manual_action_id": (
+                snapshot["manual_actions"][0]["manual_trade_action_id"]
+                if isinstance(snapshot.get("manual_actions"), list)
+                and snapshot["manual_actions"]
+                and isinstance(snapshot["manual_actions"][0], dict)
+                and snapshot["manual_actions"][0].get("manual_trade_action_id") is not None
+                else None
+            ),
+            "updated_at": (
+                snapshot["manual_actions"][0]["updated_at"]
+                if isinstance(snapshot.get("manual_actions"), list)
+                and snapshot["manual_actions"]
+                and isinstance(snapshot["manual_actions"][0], dict)
+                and snapshot["manual_actions"][0].get("updated_at") is not None
+                else now
+            ),
         },
         "trade_approval_update": {
             "deployment_id": snapshot["deployment_id"],
@@ -384,20 +216,14 @@ async def _poll_outbox_events(
     *,
     deployment_id: str,
     cursor: int,
-    limit: int = 50,
+    limit: int = 300,
 ) -> list[TradingEventOutbox]:
-    rows = (
-        await db.scalars(
-            select(TradingEventOutbox)
-            .where(
-                TradingEventOutbox.deployment_id == deployment_id,
-                TradingEventOutbox.event_seq > cursor,
-            )
-            .order_by(TradingEventOutbox.event_seq.asc())
-            .limit(limit),
-        )
-    ).all()
-    return list(rows)
+    return await poll_outbox_events_service(
+        db,
+        deployment_id=deployment_id,
+        cursor=cursor,
+        limit=limit,
+    )
 
 
 async def _append_heartbeat_outbox_event(
@@ -440,16 +266,12 @@ async def stream_deployment(
     await _load_owned_deployment(db, deployment_id=deployment_id, user_id=user_id)
 
     async def _event_stream() -> AsyncIterator[str]:
-        if cursor is None:
-            latest = await db.scalar(
-                select(TradingEventOutbox.event_seq)
-                .where(TradingEventOutbox.deployment_id == deployment_id)
-                .order_by(TradingEventOutbox.event_seq.desc())
-                .limit(1)
-            )
-            next_cursor = int(latest or 0)
-        else:
-            next_cursor = int(cursor)
+        resolved = await resolve_replay_cursor(
+            db,
+            deployment_id=deployment_id,
+            requested_cursor=cursor,
+        )
+        next_cursor = int(resolved.cursor)
         emitted = 0
         last_heartbeat_at = time.monotonic()
 

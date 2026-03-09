@@ -319,6 +319,17 @@ class BrokerAccountResponse(BaseModel):
     updated_at: datetime
 
 
+class BrokerAccountCapitalBudgetResponse(BaseModel):
+    """Broker capital budget snapshot for deployment allocation checks."""
+
+    broker_account_id: UUID
+    total_capital: float
+    reserved_capital: float
+    remaining_capital: float
+    reservation_statuses: list[str] = Field(default_factory=list)
+    as_of: datetime
+
+
 class CcxtExchangeInfo(BaseModel):
     """CCXT exchange metadata payload for settings UI dynamic form rendering."""
 
@@ -414,6 +425,16 @@ class OrderResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class OrderHistoryPageResponse(BaseModel):
+    """Paginated order history payload for deployment activity."""
+
+    items: list[OrderResponse] = Field(default_factory=list)
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
 
 
 class FillResponse(BaseModel):

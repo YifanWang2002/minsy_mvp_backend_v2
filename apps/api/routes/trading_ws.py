@@ -5,35 +5,60 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.services.trading_queue_service import enqueue_market_data_refresh
+from apps.api.services.trading_stream_replay_service import (
+    load_owned_deployment,
+    poll_outbox_events,
+    resolve_replay_cursor,
+)
+from packages.domain.market_data.bar_event_pubsub import (
+    bar_event_channel,
+    decode_bar_realtime_event,
+)
 from packages.domain.market_data.refresh_dedupe import reserve_market_data_refresh_slot
 from packages.domain.market_data.runtime import RuntimeBar, market_data_runtime
+from packages.domain.trading.services.realtime_transport_policy import (
+    RealtimeTransportPolicy,
+    RealtimeTransportState,
+)
+from packages.domain.trading.services.trading_event_pubsub import (
+    decode_realtime_event,
+    trading_event_channel,
+)
 from packages.domain.user.services.auth_service import AuthService
-from packages.infra.db.models.trading_event_outbox import TradingEventOutbox
 from packages.infra.db.models.user import User
 from packages.infra.db.session import get_db_session
 from packages.infra.observability.logger import logger
 from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
+from packages.infra.redis.client import get_redis_client
+from packages.shared_settings.schema.settings import settings
 
 from . import market_data as market_data_route
-from .trading_stream import _load_owned_deployment, _poll_outbox_events
 
 router = APIRouter(prefix="/ws", tags=["trading-ws"])
 
-_POLL_INTERVAL = 1.0
+# Backward-compatible aliases for existing tests/patch targets.
+_load_owned_deployment = load_owned_deployment
+_poll_outbox_events = poll_outbox_events
+
 _HEARTBEAT_INTERVAL = 15.0
-_BAR_PUSH_INTERVAL = 2.0
 _BAR_DEFAULT_LIMIT = 600
-_BAR_PUSH_LIMIT = 5
 _BAR_WARMUP_WAIT_INTERVAL = 0.25
 _BAR_WARMUP_MAX_WAIT_SECONDS = 3.0
+_PUBSUB_WAIT_SECONDS = max(0.05, float(settings.trading_ws_pubsub_wait_seconds))
+_FALLBACK_POLL_SECONDS = max(0.1, float(settings.trading_ws_fallback_poll_seconds))
+_RECONCILE_SECONDS = max(0.2, float(settings.trading_ws_reconcile_seconds))
+_PUBSUB_PROBE_BASE_SECONDS = max(0.2, float(settings.trading_ws_pubsub_probe_base_seconds))
+_PUBSUB_PROBE_MAX_SECONDS = max(
+    _PUBSUB_PROBE_BASE_SECONDS,
+    float(settings.trading_ws_pubsub_probe_max_seconds),
+)
 
 
 def _bar_to_dict(bar: RuntimeBar) -> dict:
@@ -243,12 +268,20 @@ async def _load_bar_snapshot(
         return bars
 
     if reserve_market_data_refresh_slot(market, symbol):
-        enqueue_market_data_refresh(
-            market=market,
-            symbol=symbol,
-            requested_timeframe=timeframe,
-            min_bars=limit,
-        )
+        try:
+            enqueue_market_data_refresh(
+                market=market,
+                symbol=symbol,
+                requested_timeframe=timeframe,
+                min_bars=limit,
+            )
+        except Exception as exc:
+            logger.warning(
+                "WS bars refresh enqueue failed market=%s symbol=%s error=%s",
+                market,
+                symbol,
+                type(exc).__name__,
+            )
         hydrated = await _hydrate_bar_snapshot_from_provider(
             market=market,
             symbol=symbol,
@@ -306,20 +339,34 @@ async def _authenticate_ws(token: str | None) -> User | None:
 
 
 async def _resolve_cursor(
-    db: AsyncSession,
+    db: object,
     deployment_id: str,
     requested_cursor: int | None,
 ) -> int:
-    """Resolve the starting cursor for a deployment subscription."""
-    if requested_cursor is not None:
-        return requested_cursor
-    latest = await db.scalar(
-        select(TradingEventOutbox.event_seq)
-        .where(TradingEventOutbox.deployment_id == deployment_id)
-        .order_by(TradingEventOutbox.event_seq.desc())
-        .limit(1)
+    resolved = await resolve_replay_cursor(
+        db,
+        deployment_id=deployment_id,
+        requested_cursor=requested_cursor,
     )
-    return int(latest or 0)
+    return int(resolved.cursor)
+
+
+@dataclass(slots=True)
+class ConnectionRuntimeState:
+    """Mutable state for one active WS connection."""
+
+    transport: RealtimeTransportState
+    bar_last_payload_signature: dict[tuple[str, str, str], str]
+
+
+def _bars_payload_signature(bars: list[dict]) -> str:
+    """Stable signature to suppress duplicate bar_update payloads."""
+    return json.dumps(
+        bars,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 @router.websocket("/trading")
@@ -339,11 +386,12 @@ async def ws_trading(
         {"action": "ping"}
 
     Server → Client:
-        {"event": "subscribed", "deployment_ids": ["d1"], "cursors": {"d1": 105}}
+        {"event": "subscribed", "deployment_ids": ["d1"], "cursors": {"d1": 105}, "transport_mode": "pubsub"}
         {"event": "unsubscribed", "deployment_ids": ["d1"]}
+        {"event": "transport_mode", "mode": "pubsub|polling_fallback", "reason": "...", "server_time": "..."}
         {"event": "<event_type>", "deployment_id": "d1", "event_seq": 106, "payload": {...}}
         {"event": "bar_snapshot", "market": "stocks", "symbol": "AAPL", "timeframe": "1m", "bars": [...]}
-        {"event": "bar_update", "market": "stocks", "symbol": "AAPL", "timeframe": "1m", "bars": [...]}
+        {"event": "bar_update", "market": "stocks", "symbol": "AAPL", "timeframe": "1m", "bars": [...]}  # realtime pub/sub
         {"event": "bars_subscribed", "market": "stocks", "symbol": "AAPL", "timeframe": "1m"}
         {"event": "bars_unsubscribed", "market": "stocks", "symbol": "AAPL", "timeframe": "1m"}
         {"event": "pong", "server_time": "..."}
@@ -361,10 +409,36 @@ async def ws_trading(
 
     # deployment_id → cursor
     subscriptions: dict[str, int] = {}
+    deployment_channels: dict[str, str] = {}
     # (market, symbol, timeframe) → last_sent_ts_seconds
     bar_subscriptions: dict[tuple[str, str, str], int] = {}
     bar_runtime_subscribers: dict[tuple[str, str, str], str] = {}
+    bar_pubsub_channel_refs: dict[str, int] = {}
     running = True
+
+    try:
+        redis_client = get_redis_client()
+    except RuntimeError:
+        redis_client = None
+    pubsub = (
+        redis_client.pubsub(ignore_subscribe_messages=True)
+        if redis_client is not None
+        else None
+    )
+    pubsub_enabled = pubsub is not None
+    transport_policy = RealtimeTransportPolicy(
+        fallback_poll_seconds=_FALLBACK_POLL_SECONDS,
+        reconcile_seconds=_RECONCILE_SECONDS,
+        pubsub_probe_base_seconds=_PUBSUB_PROBE_BASE_SECONDS,
+        pubsub_probe_max_seconds=_PUBSUB_PROBE_MAX_SECONDS,
+    )
+    runtime_state = ConnectionRuntimeState(
+        transport=transport_policy.initial_state(
+            pubsub_available=pubsub_enabled,
+            now=time.monotonic(),
+        ),
+        bar_last_payload_signature={},
+    )
 
     async def _send_json(data: dict) -> None:
         try:
@@ -373,15 +447,157 @@ async def ws_trading(
             nonlocal running
             running = False
 
+    async def _maybe_send_heartbeat(last_heartbeat: float) -> float:
+        now = time.monotonic()
+        if now - last_heartbeat < _HEARTBEAT_INTERVAL:
+            return last_heartbeat
+        await _send_json(
+            {
+                "event": "heartbeat",
+                "server_time": datetime.now(UTC).isoformat(),
+                "subscriptions": list(subscriptions.keys()),
+            }
+        )
+        return now
+
+    async def _emit_transport_mode(*, mode: str, reason: str) -> None:
+        await _send_json(
+            {
+                "event": "transport_mode",
+                "mode": mode,
+                "reason": reason,
+                "server_time": datetime.now(UTC).isoformat(),
+            }
+        )
+
+    async def _subscribe_pubsub_channel(channel: str) -> bool:
+        if not pubsub_enabled or pubsub is None:
+            return False
+        try:
+            await pubsub.subscribe(channel)
+            return True
+        except Exception as exc:
+            logger.debug("WS pubsub subscribe failed channel=%s error=%s", channel, type(exc).__name__)
+            return False
+
+    async def _unsubscribe_pubsub_channel(channel: str) -> None:
+        if not pubsub_enabled or pubsub is None:
+            return
+        try:
+            await pubsub.unsubscribe(channel)
+        except Exception as exc:
+            logger.debug("WS pubsub unsubscribe failed channel=%s error=%s", channel, type(exc).__name__)
+
+    async def _forward_deployment_event(
+        *,
+        deployment_id: str,
+        event_type: str,
+        event_seq: int,
+        payload: dict,
+    ) -> None:
+        current = subscriptions.get(deployment_id)
+        if current is None or event_seq <= current:
+            return
+        payload_dict = dict(payload) if isinstance(payload, dict) else {}
+        payload_dict.setdefault("deployment_id", deployment_id)
+        payload_dict.setdefault("event_seq", event_seq)
+        await _send_json(
+            {
+                "event": event_type,
+                "deployment_id": deployment_id,
+                "event_seq": event_seq,
+                "payload": payload_dict,
+            }
+        )
+        latest = subscriptions.get(deployment_id)
+        if latest is not None:
+            subscriptions[deployment_id] = max(latest, event_seq)
+
+    async def _forward_outbox_row(deployment_id: str, row: object) -> None:
+        payload = row.payload if isinstance(row.payload, dict) else {}
+        try:
+            seq = int(row.event_seq)
+        except (TypeError, ValueError):
+            return
+        await _forward_deployment_event(
+            deployment_id=deployment_id,
+            event_type=str(row.event_type),
+            event_seq=seq,
+            payload=payload,
+        )
+
     def _unsubscribe_bar_key(key: tuple[str, str, str]) -> None:
         subscriber_id = bar_runtime_subscribers.pop(key, None)
         if subscriber_id is None:
             return
         market_data_runtime.unsubscribe(subscriber_id)
 
+    async def _replay_deployment_events(
+        db: object,
+        *,
+        deployment_id: str,
+        cursor: int,
+        limit: int = 300,
+    ) -> None:
+        replay_cursor = cursor
+        while running:
+            rows = await _poll_outbox_events(
+                db,
+                deployment_id=deployment_id,
+                cursor=replay_cursor,
+                limit=limit,
+            )
+            if not rows:
+                break
+            for row in rows:
+                await _forward_outbox_row(deployment_id, row)
+                try:
+                    replay_cursor = max(replay_cursor, int(row.event_seq))
+                except (TypeError, ValueError):
+                    continue
+            if len(rows) < limit:
+                break
+        current = subscriptions.get(deployment_id)
+        if current is not None:
+            subscriptions[deployment_id] = max(current, replay_cursor)
+
+    async def _poll_outbox_once(*, limit: int) -> None:
+        if not subscriptions:
+            return
+        async for db in get_db_session():
+            try:
+                for deployment_id, cursor in list(subscriptions.items()):
+                    if deployment_id not in subscriptions:
+                        continue
+                    await _replay_deployment_events(
+                        db,
+                        deployment_id=deployment_id,
+                        cursor=cursor,
+                        limit=limit,
+                    )
+            finally:
+                await db.rollback()
+
+    async def _switch_to_fallback(reason: str) -> None:
+        changed = transport_policy.record_pubsub_failure(
+            runtime_state.transport,
+            now=time.monotonic(),
+            error=reason,
+        )
+        if changed:
+            await _emit_transport_mode(mode="polling_fallback", reason=reason)
+
+    async def _switch_to_pubsub(reason: str) -> None:
+        changed = transport_policy.record_pubsub_success(
+            runtime_state.transport,
+            now=time.monotonic(),
+        )
+        if changed:
+            await _emit_transport_mode(mode="pubsub", reason=reason)
+
     async def _handle_subscribe(
         msg: dict,
-        db: AsyncSession,
+        db: object,
     ) -> None:
         deployment_ids = msg.get("deployment_ids")
         if not isinstance(deployment_ids, list):
@@ -391,38 +607,63 @@ async def ws_trading(
         cursors_map = cursors_raw if isinstance(cursors_raw, dict) else {}
         confirmed_ids: list[str] = []
         confirmed_cursors: dict[str, int] = {}
-        for did in deployment_ids:
-            did_str = str(did).strip()
-            if not did_str:
-                continue
-            try:
-                await _load_owned_deployment(db, deployment_id=did_str, user_id=user_id)
-            except Exception:
-                await _send_json({
-                    "event": "error",
-                    "message": f"deployment {did_str} not found or not owned",
-                })
-                continue
-            requested = cursors_map.get(did_str)
-            cursor_val = None
-            if isinstance(requested, int):
-                cursor_val = requested
-            elif isinstance(requested, str):
+        try:
+            for did in deployment_ids:
+                did_str = str(did).strip()
+                if not did_str:
+                    continue
                 try:
-                    cursor_val = int(requested)
-                except ValueError:
-                    cursor_val = None
-            resolved = await _resolve_cursor(db, did_str, cursor_val)
-            subscriptions[did_str] = resolved
-            confirmed_ids.append(did_str)
-            confirmed_cursors[did_str] = resolved
-        await db.rollback()
-        if confirmed_ids:
-            await _send_json({
-                "event": "subscribed",
-                "deployment_ids": confirmed_ids,
-                "cursors": confirmed_cursors,
-            })
+                    await _load_owned_deployment(db, deployment_id=did_str, user_id=user_id)
+                except Exception:
+                    await _send_json(
+                        {
+                            "event": "error",
+                            "message": f"deployment {did_str} not found or not owned",
+                        }
+                    )
+                    continue
+                requested = cursors_map.get(did_str)
+                cursor_val = None
+                if isinstance(requested, int):
+                    cursor_val = requested if requested > 0 else None
+                elif isinstance(requested, str):
+                    try:
+                        parsed_cursor = int(requested)
+                        cursor_val = parsed_cursor if parsed_cursor > 0 else None
+                    except ValueError:
+                        cursor_val = None
+                resolved = await _resolve_cursor(
+                    db,
+                    did_str,
+                    cursor_val,
+                )
+                subscriptions[did_str] = resolved
+                confirmed_ids.append(did_str)
+                confirmed_cursors[did_str] = resolved
+                if pubsub_enabled and did_str not in deployment_channels:
+                    channel = trading_event_channel(did_str)
+                    deployment_channels[did_str] = channel
+                    subscribed = await _subscribe_pubsub_channel(channel)
+                    if not subscribed:
+                        await _switch_to_fallback("pubsub_subscribe_failed")
+            if confirmed_ids:
+                await _send_json(
+                    {
+                        "event": "subscribed",
+                        "deployment_ids": confirmed_ids,
+                        "cursors": confirmed_cursors,
+                        "transport_mode": runtime_state.transport.mode,
+                    }
+                )
+                for deployment_id in confirmed_ids:
+                    await _replay_deployment_events(
+                        db,
+                        deployment_id=deployment_id,
+                        cursor=confirmed_cursors[deployment_id],
+                        limit=300,
+                    )
+        finally:
+            await db.rollback()
 
     async def _handle_unsubscribe(msg: dict) -> None:
         deployment_ids = msg.get("deployment_ids")
@@ -432,9 +673,13 @@ async def ws_trading(
         removed: list[str] = []
         for did in deployment_ids:
             did_str = str(did).strip()
-            if did_str in subscriptions:
-                del subscriptions[did_str]
-                removed.append(did_str)
+            if did_str not in subscriptions:
+                continue
+            del subscriptions[did_str]
+            removed.append(did_str)
+            channel = deployment_channels.pop(did_str, None)
+            if channel is not None:
+                await _unsubscribe_pubsub_channel(channel)
         if removed:
             await _send_json({"event": "unsubscribed", "deployment_ids": removed})
 
@@ -450,6 +695,7 @@ async def ws_trading(
             await _send_json({"event": "error", "message": "symbol is required for subscribe_bars"})
             return
         key = (market, symbol, timeframe)
+        is_new_key = key not in bar_subscriptions
         subscriber_id = bar_runtime_subscribers.get(key)
         if subscriber_id is None:
             subscriber_id = _bar_subscription_subscriber_id(
@@ -471,36 +717,61 @@ async def ws_trading(
             limit=limit,
         )
         bar_dicts = [_bar_to_dict(b) for b in bars]
-        await _send_json({
-            "event": "bar_snapshot",
-            "market": market,
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "bars": bar_dicts,
-        })
+        await _send_json(
+            {
+                "event": "bar_snapshot",
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "bars": bar_dicts,
+            }
+        )
         last_ts = max((_bar_ts_seconds(b) for b in bars), default=0)
         bar_subscriptions[key] = last_ts
-        await _send_json({
-            "event": "bars_subscribed",
-            "market": market,
-            "symbol": symbol,
-            "timeframe": timeframe,
-        })
+        if bar_dicts:
+            runtime_state.bar_last_payload_signature[key] = _bars_payload_signature(bar_dicts)
+        if pubsub_enabled and is_new_key:
+            channel = bar_event_channel(market=market, symbol=symbol)
+            next_ref = bar_pubsub_channel_refs.get(channel, 0) + 1
+            bar_pubsub_channel_refs[channel] = next_ref
+            if next_ref == 1:
+                subscribed = await _subscribe_pubsub_channel(channel)
+                if not subscribed:
+                    await _switch_to_fallback("pubsub_subscribe_failed")
+        await _send_json(
+            {
+                "event": "bars_subscribed",
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe,
+            }
+        )
 
     async def _handle_unsubscribe_bars(msg: dict) -> None:
         market = str(msg.get("market", "stocks")).strip().lower() or "stocks"
         symbol = str(msg.get("symbol", "")).strip().upper()
         timeframe = str(msg.get("timeframe", "1m")).strip().lower() or "1m"
         key = (market, symbol, timeframe)
-        if key in bar_subscriptions:
-            del bar_subscriptions[key]
+        removed = key in bar_subscriptions
+        bar_subscriptions.pop(key, None)
+        runtime_state.bar_last_payload_signature.pop(key, None)
         _unsubscribe_bar_key(key)
-        await _send_json({
-            "event": "bars_unsubscribed",
-            "market": market,
-            "symbol": symbol,
-            "timeframe": timeframe,
-        })
+        if pubsub_enabled and removed:
+            channel = bar_event_channel(market=market, symbol=symbol)
+            current_ref = bar_pubsub_channel_refs.get(channel, 0)
+            if current_ref <= 1:
+                bar_pubsub_channel_refs.pop(channel, None)
+                await _unsubscribe_pubsub_channel(channel)
+            else:
+                bar_pubsub_channel_refs[channel] = current_ref - 1
+        await _send_json(
+            {
+                "event": "bars_unsubscribed",
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe,
+            }
+        )
 
     async def _read_client_messages() -> None:
         """Read and dispatch incoming client messages."""
@@ -518,10 +789,12 @@ async def ws_trading(
                     continue
                 action = str(msg.get("action", "")).strip().lower()
                 if action == "ping":
-                    await _send_json({
-                        "event": "pong",
-                        "server_time": datetime.now(UTC).isoformat(),
-                    })
+                    await _send_json(
+                        {
+                            "event": "pong",
+                            "server_time": datetime.now(UTC).isoformat(),
+                        }
+                    )
                 elif action == "subscribe":
                     async for db in get_db_session():
                         await _handle_subscribe(msg, db)
@@ -539,121 +812,124 @@ async def ws_trading(
             logger.debug("WS reader error: %s", exc)
             running = False
 
-    async def _push_events() -> None:
-        """Poll outbox and push events to the client."""
+    async def _process_pubsub_message(message: object) -> None:
+        if not isinstance(message, dict):
+            return
+        data = message.get("data")
+        realtime_event = decode_realtime_event(data)
+        if realtime_event is not None:
+            await _forward_deployment_event(
+                deployment_id=realtime_event.deployment_id,
+                event_type=realtime_event.event_type,
+                event_seq=realtime_event.event_seq,
+                payload=realtime_event.payload,
+            )
+            return
+
+        bar_payload = decode_bar_realtime_event(data)
+        if bar_payload is None:
+            return
+        key = (
+            str(bar_payload.get("market", "")).strip().lower(),
+            str(bar_payload.get("symbol", "")).strip().upper(),
+            str(bar_payload.get("timeframe", "")).strip().lower(),
+        )
+        last_ts = bar_subscriptions.get(key)
+        if last_ts is None:
+            return
+        raw_bars = bar_payload.get("bars")
+        if not isinstance(raw_bars, list):
+            return
+        next_bars: list[dict] = []
+        latest_ts = last_ts
+        for item in raw_bars:
+            if not isinstance(item, dict):
+                continue
+            raw_ts = item.get("t")
+            try:
+                ts = int(raw_ts)
+            except (TypeError, ValueError):
+                continue
+            if ts < last_ts:
+                continue
+            next_bars.append(dict(item))
+            latest_ts = max(latest_ts, ts)
+        if not next_bars:
+            return
+        signature = _bars_payload_signature(next_bars)
+        previous_signature = runtime_state.bar_last_payload_signature.get(key)
+        if previous_signature == signature and latest_ts == last_ts:
+            return
+        await _send_json(
+            {
+                "event": "bar_update",
+                "market": key[0],
+                "symbol": key[1],
+                "timeframe": key[2],
+                "bars": next_bars,
+            }
+        )
+        bar_subscriptions[key] = latest_ts
+        runtime_state.bar_last_payload_signature[key] = signature
+
+    async def _push_transport_events() -> None:
         nonlocal running
         last_heartbeat = time.monotonic()
-        try:
-            while running:
-                if not subscriptions:
-                    await asyncio.sleep(_POLL_INTERVAL)
-                    now = time.monotonic()
-                    if now - last_heartbeat >= _HEARTBEAT_INTERVAL:
-                        await _send_json({
-                            "event": "heartbeat",
-                            "server_time": datetime.now(UTC).isoformat(),
-                            "subscriptions": [],
-                        })
-                        last_heartbeat = now
-                    continue
+        while running:
+            now = time.monotonic()
+            did_poll = False
 
-                any_events = False
-                async for db in get_db_session():
+            if runtime_state.transport.mode == "pubsub":
+                if pubsub_enabled and pubsub is not None:
                     try:
-                        for did, cursor in list(subscriptions.items()):
-                            rows = await _poll_outbox_events(
-                                db,
-                                deployment_id=did,
-                                cursor=cursor,
-                            )
-                            for row in rows:
-                                payload = row.payload if isinstance(row.payload, dict) else {}
-                                payload_dict = dict(payload)
-                                payload_dict.setdefault("deployment_id", did)
-                                payload_dict.setdefault("event_seq", row.event_seq)
-                                await _send_json({
-                                    "event": row.event_type,
-                                    "deployment_id": did,
-                                    "event_seq": int(row.event_seq),
-                                    "payload": payload_dict,
-                                })
-                                subscriptions[did] = max(cursor, int(row.event_seq))
-                                any_events = True
-                    finally:
-                        await db.rollback()
-
-                now = time.monotonic()
-                if not any_events and now - last_heartbeat >= _HEARTBEAT_INTERVAL:
-                    await _send_json({
-                        "event": "heartbeat",
-                        "server_time": datetime.now(UTC).isoformat(),
-                        "subscriptions": list(subscriptions.keys()),
-                    })
-                    last_heartbeat = now
-
-                await asyncio.sleep(_POLL_INTERVAL)
-        except Exception as exc:
-            logger.debug("WS pusher error: %s", exc)
-            running = False
-
-    async def _push_bars() -> None:
-        """Poll MarketDataRuntime and push incremental bar updates."""
-        nonlocal running
-        try:
-            while running:
-                if not bar_subscriptions:
-                    await asyncio.sleep(_BAR_PUSH_INTERVAL)
-                    continue
-                for key, last_ts in list(bar_subscriptions.items()):
-                    if not running:
-                        break
-                    market, symbol, timeframe = key
-                    bars = await _read_bar_window(
-                        market=market,
-                        symbol=symbol,
-                        timeframe=timeframe,
-                        limit=_BAR_PUSH_LIMIT,
-                    )
-                    if (
-                        not bars
-                        or market_data_route._bars_are_stale(
-                            market=market,
-                            timeframe=timeframe,
-                            bars=bars,
+                        message = await pubsub.get_message(
+                            ignore_subscribe_messages=True,
+                            timeout=_PUBSUB_WAIT_SECONDS,
                         )
-                    ) and reserve_market_data_refresh_slot(market, symbol):
-                        enqueue_market_data_refresh(
-                            market=market,
-                            symbol=symbol,
-                            requested_timeframe=timeframe,
-                            min_bars=_BAR_PUSH_LIMIT,
+                        await _process_pubsub_message(message)
+                    except Exception as exc:
+                        await _switch_to_fallback(f"pubsub_read_error:{type(exc).__name__}")
+                else:
+                    await _switch_to_fallback("pubsub_unavailable")
+            else:
+                if transport_policy.should_poll_fallback(runtime_state.transport, now=now):
+                    await _poll_outbox_once(limit=120)
+                    transport_policy.mark_fallback_poll(runtime_state.transport, now=time.monotonic())
+                    did_poll = True
+                if (
+                    pubsub_enabled
+                    and pubsub is not None
+                    and transport_policy.should_probe_pubsub(runtime_state.transport, now=now)
+                ):
+                    try:
+                        probe_message = await pubsub.get_message(
+                            ignore_subscribe_messages=True,
+                            timeout=0.05,
                         )
-                    # Send bars with ts >= last_sent (catches updates to current bar)
-                    new_bars = [b for b in bars if _bar_ts_seconds(b) >= last_ts]
-                    if not new_bars:
-                        continue
-                    bar_dicts = [_bar_to_dict(b) for b in new_bars]
-                    await _send_json({
-                        "event": "bar_update",
-                        "market": market,
-                        "symbol": symbol,
-                        "timeframe": timeframe,
-                        "bars": bar_dicts,
-                    })
-                    latest_ts = max(_bar_ts_seconds(b) for b in new_bars)
-                    bar_subscriptions[key] = latest_ts
-                await asyncio.sleep(_BAR_PUSH_INTERVAL)
-        except Exception as exc:
-            logger.debug("WS bar pusher error: %s", exc)
-            running = False
+                        await _switch_to_pubsub("pubsub_recovered")
+                        await _process_pubsub_message(probe_message)
+                    except Exception as exc:
+                        transport_policy.record_pubsub_failure(
+                            runtime_state.transport,
+                            now=time.monotonic(),
+                            error=f"pubsub_probe_error:{type(exc).__name__}",
+                        )
+
+            if subscriptions and transport_policy.should_reconcile(runtime_state.transport, now=time.monotonic()):
+                await _poll_outbox_once(limit=300)
+                transport_policy.mark_reconcile(runtime_state.transport, now=time.monotonic())
+                did_poll = True
+
+            last_heartbeat = await _maybe_send_heartbeat(last_heartbeat)
+            if runtime_state.transport.mode == "polling_fallback" and not did_poll:
+                await asyncio.sleep(0.05)
 
     reader_task = asyncio.create_task(_read_client_messages())
-    pusher_task = asyncio.create_task(_push_events())
-    bar_pusher_task = asyncio.create_task(_push_bars())
+    pusher_task = asyncio.create_task(_push_transport_events())
 
     try:
         done, pending = await asyncio.wait(
-            [reader_task, pusher_task, bar_pusher_task],
+            [reader_task, pusher_task],
             return_when=asyncio.FIRST_COMPLETED,
         )
         running = False
@@ -663,14 +939,25 @@ async def ws_trading(
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        for task in done:
+            if task.cancelled():
+                continue
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
     except Exception:
         running = False
-        reader_task.cancel()
-        pusher_task.cancel()
-        bar_pusher_task.cancel()
+        for task in (reader_task, pusher_task):
+            task.cancel()
     finally:
         for key in list(bar_runtime_subscribers):
             _unsubscribe_bar_key(key)
+        if pubsub is not None:
+            try:
+                await pubsub.aclose()
+            except Exception:
+                pass
         try:
             await websocket.close()
         except Exception:

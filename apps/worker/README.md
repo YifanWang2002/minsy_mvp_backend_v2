@@ -58,7 +58,7 @@
 uv run celery -A apps.worker.cpu.celery_app worker -l info -Q backtest,stress
 
 # IO worker
-uv run celery -A apps.worker.io.celery_app worker -l info -Q market_data,paper_trading,maintenance,notifications,trade_approval
+uv run celery -A apps.worker.io.celery_app worker -l info -Q market_data,paper_trading,paper_trading_manual,maintenance,notifications,trade_approval --without-mingle
 ```
 
 启动过程（两类 worker相同）：

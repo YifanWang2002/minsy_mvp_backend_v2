@@ -29,6 +29,10 @@ _PROFILE_CPU = "cpu"
 _PROFILE_IO = "io"
 _PROFILE_BEAT = "beat"
 _SUPPORTED_PROFILES = {_PROFILE_ALL, _PROFILE_CPU, _PROFILE_IO, _PROFILE_BEAT}
+_MANUAL_ACTION_QUEUE_NAME = os.getenv(
+    "PAPER_TRADING_MANUAL_ACTION_QUEUE",
+    "paper_trading_manual",
+).strip() or "paper_trading_manual"
 
 _INCLUDES_CPU: tuple[str, ...] = (
     "apps.worker.cpu.tasks.backtest",
@@ -52,6 +56,9 @@ _ROUTES_IO: dict[str, dict[str, str]] = {
     "market_data.*": {"queue": "market_data"},
     "paper_trading.scheduler_tick": {"queue": "paper_trading"},
     "paper_trading.run_deployment_runtime": {"queue": "paper_trading"},
+    "paper_trading.execute_manual_trade_action": {
+        "queue": _MANUAL_ACTION_QUEUE_NAME
+    },
     "paper_trading.*": {"queue": "paper_trading"},
     "maintenance.*": {"queue": "maintenance"},
     "notifications.dispatch_pending": {"queue": "notifications"},
@@ -74,25 +81,29 @@ def _queue(name: str) -> Queue:
     return Queue(name, exchange=_TASK_EXCHANGE, routing_key=name)
 
 
-_QUEUES_CPU: tuple[Queue, ...] = (
-    _queue("backtest"),
-    _queue("stress"),
+def _queue_list(*names: str) -> tuple[Queue, ...]:
+    deduped = tuple(dict.fromkeys(name.strip() for name in names if name.strip()))
+    return tuple(_queue(name) for name in deduped)
+
+
+_QUEUES_CPU: tuple[Queue, ...] = _queue_list("backtest", "stress")
+_QUEUES_IO: tuple[Queue, ...] = _queue_list(
+    "market_data",
+    "paper_trading",
+    _MANUAL_ACTION_QUEUE_NAME,
+    "maintenance",
+    "notifications",
+    "trade_approval",
 )
-_QUEUES_IO: tuple[Queue, ...] = (
-    _queue("market_data"),
-    _queue("paper_trading"),
-    _queue("maintenance"),
-    _queue("notifications"),
-    _queue("trade_approval"),
-)
-_QUEUES_ALL: tuple[Queue, ...] = (
-    _queue("backtest"),
-    _queue("market_data"),
-    _queue("stress"),
-    _queue("paper_trading"),
-    _queue("maintenance"),
-    _queue("notifications"),
-    _queue("trade_approval"),
+_QUEUES_ALL: tuple[Queue, ...] = _queue_list(
+    "backtest",
+    "market_data",
+    "stress",
+    "paper_trading",
+    _MANUAL_ACTION_QUEUE_NAME,
+    "maintenance",
+    "notifications",
+    "trade_approval",
 )
 
 

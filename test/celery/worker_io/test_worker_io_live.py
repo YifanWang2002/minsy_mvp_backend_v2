@@ -52,6 +52,7 @@ def test_000_accessibility_worker_queues(compose_stack: list[dict[str, object]])
     assert "worker-cpu@" in stdout
     assert "market_data" in stdout
     assert "paper_trading" in stdout
+    assert "paper_trading_manual" in stdout
     assert "backtest" in stdout
 
 

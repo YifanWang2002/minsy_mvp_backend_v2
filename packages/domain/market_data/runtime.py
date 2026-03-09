@@ -8,10 +8,15 @@ from decimal import Decimal
 from threading import RLock
 from typing import Any
 
-from packages.shared_settings.schema.settings import settings
-from packages.infra.providers.trading.adapters.base import OhlcvBar, QuoteSnapshot
 from packages.domain.market_data.aggregator import AggregatedBar, BarAggregator
+from packages.domain.market_data.bar_event_pubsub import (
+    build_bar_realtime_event,
+    publish_bar_realtime_event,
+)
 from packages.domain.market_data.factor_cache import FactorCache
+from packages.domain.market_data.ring_buffer import OhlcvRing
+from packages.domain.market_data.subscription_registry import SubscriptionDelta
+from packages.infra.providers.trading.adapters.base import OhlcvBar, QuoteSnapshot
 from packages.infra.redis.stores.market_data_store import (
     RedisBar,
     RedisMarketDataStore,
@@ -21,8 +26,7 @@ from packages.infra.redis.stores.market_data_subscription_store import (
     RedisSubscriptionStore,
     redis_subscription_store,
 )
-from packages.domain.market_data.ring_buffer import OhlcvRing
-from packages.domain.market_data.subscription_registry import SubscriptionDelta
+from packages.shared_settings.schema.settings import settings
 
 
 def _normalize_market(market: str) -> str:
@@ -365,6 +369,35 @@ class MarketDataRuntime:
                 )
                 if not ok:
                     self._increment_metric("redis_write_errors")
+
+        # Realtime WS push channel: emit 1m and closed aggregated bars as they materialize.
+        published_events: list[tuple[str, RuntimeBar]] = [
+            (
+                "1m",
+                RuntimeBar(
+                    timestamp=(
+                        bar.timestamp.replace(tzinfo=UTC)
+                        if bar.timestamp.tzinfo is None
+                        else bar.timestamp.astimezone(UTC)
+                    ),
+                    open=_to_float(bar.open),
+                    high=_to_float(bar.high),
+                    low=_to_float(bar.low),
+                    close=_to_float(bar.close),
+                    volume=_to_float(bar.volume),
+                ),
+            )
+        ]
+        published_events.extend((timeframe, runtime_bar) for timeframe, runtime_bar in closed_runtime.items())
+        for timeframe, runtime_bar in published_events:
+            publish_bar_realtime_event(
+                build_bar_realtime_event(
+                    market=normalized_market,
+                    symbol=normalized_symbol,
+                    timeframe=timeframe,
+                    bars=[runtime_bar],
+                )
+            )
 
         return closed_runtime
 

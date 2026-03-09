@@ -108,6 +108,16 @@ class RuntimeAccountBudget:
     source: str
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutionPriceSnapshot:
+    mark_price: Decimal
+    source: str
+    timestamp: datetime | None = None
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    last: Decimal | None = None
+
+
 _broker_provider_service = BrokerProviderService()
 
 
@@ -404,21 +414,85 @@ def _merge_seed_bars(
     return [deduped[ts] for ts in sorted(deduped)]
 
 
-def _resolve_mark_price(
+def _normalize_snapshot_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    return value.astimezone(UTC) if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _build_execution_price_metadata(
+    snapshot: ExecutionPriceSnapshot | None,
+) -> dict[str, Any]:
+    if snapshot is None:
+        return {}
+    if snapshot.mark_price <= 0:
+        return {}
+    metadata: dict[str, Any] = {
+        "submitted_mark_price": str(snapshot.mark_price),
+        "execution_price": str(snapshot.mark_price),
+        "execution_price_source": snapshot.source,
+    }
+    if snapshot.timestamp is not None:
+        metadata["execution_price_timestamp"] = snapshot.timestamp.isoformat()
+        metadata["execution_price_age_seconds"] = max(
+            0.0, (datetime.now(UTC) - snapshot.timestamp).total_seconds()
+        )
+    if snapshot.bid is not None and snapshot.bid > 0:
+        metadata["execution_quote_bid"] = str(snapshot.bid)
+    if snapshot.ask is not None and snapshot.ask > 0:
+        metadata["execution_quote_ask"] = str(snapshot.ask)
+    if snapshot.last is not None and snapshot.last > 0:
+        metadata["execution_quote_last"] = str(snapshot.last)
+    return metadata
+
+
+def _resolve_quote_mark_price(
+    *,
+    bid: Decimal | None,
+    ask: Decimal | None,
+    last: Decimal | None,
+) -> Decimal:
+    bid_value = bid if bid is not None and bid > 0 else None
+    ask_value = ask if ask is not None and ask > 0 else None
+    last_value = last if last is not None and last > 0 else None
+    if bid_value is not None and ask_value is not None:
+        lower = min(bid_value, ask_value)
+        upper = max(bid_value, ask_value)
+        midpoint = (lower + upper) / Decimal("2")
+        if last_value is not None and lower <= last_value <= upper:
+            return last_value
+        if midpoint > 0:
+            return midpoint
+    if last_value is not None:
+        return last_value
+    if bid_value is not None:
+        return bid_value
+    if ask_value is not None:
+        return ask_value
+    return Decimal("0")
+
+
+def _resolve_mark_price_snapshot(
     *,
     market: str,
     symbol: str,
     timeframe: str,
     payload: dict[str, Any],
     positions: list[Position],
-) -> Decimal:
+) -> ExecutionPriceSnapshot:
     explicit_mark = payload.get("mark_price")
     if explicit_mark is not None:
         try:
             mark = Decimal(str(explicit_mark))
         except (InvalidOperation, ValueError, TypeError):
-            return Decimal("0")
-        return mark if mark > 0 else Decimal("0")
+            mark = Decimal("0")
+        if mark > 0:
+            return ExecutionPriceSnapshot(
+                mark_price=mark,
+                source="payload.mark_price",
+                timestamp=datetime.now(UTC),
+            )
+        return ExecutionPriceSnapshot(mark_price=Decimal("0"), source="payload.mark_price.invalid")
 
     bars = market_data_runtime.get_recent_bars(
         market=market,
@@ -429,21 +503,33 @@ def _resolve_mark_price(
     if bars:
         mark = Decimal(str(bars[-1].close))
         if mark > 0:
-            return mark
+            return ExecutionPriceSnapshot(
+                mark_price=mark,
+                source=f"runtime.{timeframe}.close",
+                timestamp=_normalize_snapshot_timestamp(bars[-1].timestamp),
+            )
 
     for position in positions:
         if not _symbols_match(position.symbol, symbol):
             continue
         mark = Decimal(str(position.mark_price))
         if mark > 0:
-            return mark
+            return ExecutionPriceSnapshot(
+                mark_price=mark,
+                source="position.mark_price",
+                timestamp=datetime.now(UTC),
+            )
         avg = Decimal(str(position.avg_entry_price))
         if avg > 0:
-            return avg
-    return Decimal("0")
+            return ExecutionPriceSnapshot(
+                mark_price=avg,
+                source="position.avg_entry_price",
+                timestamp=datetime.now(UTC),
+            )
+    return ExecutionPriceSnapshot(mark_price=Decimal("0"), source="unavailable")
 
 
-async def _resolve_mark_price_with_provider_fallback(
+async def _resolve_execution_price_snapshot_with_provider_fallback(
     *,
     market: str,
     symbol: str,
@@ -451,29 +537,41 @@ async def _resolve_mark_price_with_provider_fallback(
     payload: dict[str, Any],
     positions: list[Position],
     adapter: BrokerAdapter | None,
-) -> Decimal:
-    explicit_mark = payload.get("mark_price")
-    if explicit_mark is not None:
-        try:
-            mark = Decimal(str(explicit_mark))
-        except (InvalidOperation, ValueError, TypeError):
-            return Decimal("0")
-        return mark if mark > 0 else Decimal("0")
+) -> ExecutionPriceSnapshot:
+    direct_snapshot = _resolve_mark_price_snapshot(
+        market=market,
+        symbol=symbol,
+        timeframe=timeframe,
+        payload=payload,
+        positions=positions,
+    )
+    if direct_snapshot.source.startswith("payload."):
+        return direct_snapshot
 
     if adapter is not None:
         try:
             quote = await adapter.fetch_latest_quote(symbol)
         except Exception:  # noqa: BLE001
             quote = None
-        if quote is not None and quote.last is not None:
-            quote_last = Decimal(str(quote.last))
-            if quote_last > 0:
+        if quote is not None:
+            bid = _to_decimal_or_none(getattr(quote, "bid", None))
+            ask = _to_decimal_or_none(getattr(quote, "ask", None))
+            last = _to_decimal_or_none(getattr(quote, "last", None))
+            quote_mark = _resolve_quote_mark_price(bid=bid, ask=ask, last=last)
+            if quote_mark > 0:
                 market_data_runtime.upsert_quote(
                     market=market,
                     symbol=symbol,
                     quote=quote,
                 )
-                return quote_last
+                return ExecutionPriceSnapshot(
+                    mark_price=quote_mark,
+                    source="provider.quote",
+                    timestamp=_normalize_snapshot_timestamp(getattr(quote, "timestamp", None)),
+                    bid=bid,
+                    ask=ask,
+                    last=last,
+                )
 
         try:
             latest_bar = await adapter.fetch_latest_1m_bar(symbol)
@@ -495,15 +593,33 @@ async def _resolve_mark_price_with_provider_fallback(
             )
             close = Decimal(str(latest_bar.close))
             if close > 0:
-                return close
+                return ExecutionPriceSnapshot(
+                    mark_price=close,
+                    source="provider.latest_1m_bar.close",
+                    timestamp=_normalize_snapshot_timestamp(latest_bar.timestamp),
+                )
 
-    return _resolve_mark_price(
+    return direct_snapshot
+
+
+async def _resolve_mark_price_with_provider_fallback(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    payload: dict[str, Any],
+    positions: list[Position],
+    adapter: BrokerAdapter | None,
+) -> Decimal:
+    snapshot = await _resolve_execution_price_snapshot_with_provider_fallback(
         market=market,
         symbol=symbol,
         timeframe=timeframe,
         payload=payload,
         positions=positions,
+        adapter=adapter,
     )
+    return snapshot.mark_price
 
 
 def _to_decimal_or_none(value: object) -> Decimal | None:
@@ -1784,6 +1900,7 @@ async def reconcile_manual_action_terminal_state(
     action.payload = next_payload
     await db.commit()
     await db.refresh(action)
+    await append_trading_event_snapshot(db, deployment_id=action.deployment_id)
     return True
 
 
@@ -2271,6 +2388,22 @@ async def process_deployment_signal_cycle(
 
         last_close = bars[-1].close
         last_close_decimal = Decimal(str(last_close))
+        execution_price_snapshot = await _resolve_execution_price_snapshot_with_provider_fallback(
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe,
+            payload={},
+            positions=runtime_positions,
+            adapter=market_data_adapter,
+        )
+        execution_mark_price = execution_price_snapshot.mark_price
+        if execution_mark_price <= 0:
+            execution_mark_price = last_close_decimal
+            execution_price_snapshot = ExecutionPriceSnapshot(
+                mark_price=execution_mark_price,
+                source="strategy.last_close",
+                timestamp=bar_time or bars[-1].timestamp,
+            )
         order_qty = float((deployment.risk_limits or {}).get("order_qty", 1.0))
         current_symbol_qty = _resolve_position_qty(runtime_positions, symbol)
         open_budget: RuntimeAccountBudget | None = None
@@ -2334,7 +2467,7 @@ async def process_deployment_signal_cycle(
                 request=_build_position_sizing_request(
                     deployment=deployment,
                     signal=decision.signal,
-                    mark_price=last_close_decimal,
+                    mark_price=execution_mark_price,
                     budget=open_budget,
                 )
             )
@@ -2377,9 +2510,11 @@ async def process_deployment_signal_cycle(
                 context=RiskContext(
                     cash=float(open_budget.cash),
                     equity=float(open_budget.equity),
-                    current_symbol_notional=current_symbol_qty * float(last_close),
+                    current_symbol_notional=current_symbol_qty * float(
+                        execution_mark_price
+                    ),
                     requested_qty=order_qty,
-                    mark_price=float(last_close),
+                    mark_price=float(execution_mark_price),
                 ),
             )
             if not risk_decision.allowed:
@@ -2411,7 +2546,7 @@ async def process_deployment_signal_cycle(
                     side=approval_side,
                     symbol=symbol,
                     qty=Decimal(str(order_qty)),
-                    mark_price=Decimal(str(last_close)),
+                    mark_price=execution_mark_price,
                     reason=decision.reason,
                     timeframe=timeframe,
                     bar_time=bar_time,
@@ -2423,7 +2558,7 @@ async def process_deployment_signal_cycle(
                         "symbol": symbol,
                         "timeframe": timeframe,
                         "qty": order_qty,
-                        "mark_price": float(last_close),
+                        "mark_price": float(execution_mark_price),
                         "bar_time": bar_time.isoformat()
                         if bar_time is not None
                         else None,
@@ -2479,6 +2614,7 @@ async def process_deployment_signal_cycle(
                 "reason": decision.reason,
                 "timeframe": timeframe,
                 "market": market,
+                **_build_execution_price_metadata(execution_price_snapshot),
             },
         )
 
@@ -3093,6 +3229,7 @@ async def execute_manual_trade_action(
         apply_risk = False
         open_budget: RuntimeAccountBudget | None = None
         mark_price: Decimal | None = None
+        execution_price_snapshot: ExecutionPriceSnapshot | None = None
 
         if action.action == "open":
             kill_decision = RuntimeKillSwitch().evaluate(
@@ -3109,14 +3246,17 @@ async def execute_manual_trade_action(
             else:
                 return await _reject("invalid_side")
 
-            mark_price = await _resolve_mark_price_with_provider_fallback(
-                market=market,
-                symbol=symbol,
-                timeframe=timeframe,
-                payload=payload,
-                positions=deployment.positions,
-                adapter=market_data_adapter,
+            execution_price_snapshot = (
+                await _resolve_execution_price_snapshot_with_provider_fallback(
+                    market=market,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    payload=payload,
+                    positions=deployment.positions,
+                    adapter=market_data_adapter,
+                )
             )
+            mark_price = execution_price_snapshot.mark_price
             if mark_price <= 0:
                 return await _reject("invalid_mark_price")
             open_budget, budget_metadata = await _resolve_runtime_account_budget(
@@ -3198,16 +3338,26 @@ async def execute_manual_trade_action(
             return await _reject("unsupported_action")
 
         if mark_price is None:
-            mark_price = await _resolve_mark_price_with_provider_fallback(
-                market=market,
-                symbol=symbol,
-                timeframe=timeframe,
-                payload=payload,
-                positions=deployment.positions,
-                adapter=market_data_adapter,
+            execution_price_snapshot = (
+                await _resolve_execution_price_snapshot_with_provider_fallback(
+                    market=market,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    payload=payload,
+                    positions=deployment.positions,
+                    adapter=market_data_adapter,
+                )
             )
+            mark_price = execution_price_snapshot.mark_price
         if mark_price <= 0:
             return await _reject("invalid_mark_price")
+
+        if execution_price_snapshot is None:
+            execution_price_snapshot = ExecutionPriceSnapshot(
+                mark_price=mark_price,
+                source="manual.mark_price",
+                timestamp=datetime.now(UTC),
+            )
 
         if apply_risk:
             risk_gate = RiskGate()
@@ -3252,7 +3402,7 @@ async def execute_manual_trade_action(
                 "manual_action_id": str(action.id),
                 "action": action.action,
                 "market": market,
-                "submitted_mark_price": str(mark_price),
+                **_build_execution_price_metadata(execution_price_snapshot),
                 **(
                     {
                         "trade_approval_request_id": str(

@@ -11,9 +11,13 @@ from sqlalchemy import select
 
 from apps.worker.common.celery_base import celery_app
 from packages.domain.trading.runtime.runtime_service import execute_manual_trade_action
+from packages.domain.trading.services.trading_event_outbox_service import (
+    append_trading_event_snapshot,
+)
 from packages.infra.db import session as db_module
 from packages.infra.db.models.manual_trade_action import ManualTradeAction
 from packages.infra.observability.logger import logger
+from packages.shared_settings.schema.settings import settings
 
 
 async def _run_execute_manual_trade_action(action_id: UUID) -> dict[str, Any]:
@@ -55,6 +59,10 @@ async def _run_execute_manual_trade_action(action_id: UUID) -> dict[str, Any]:
                 }
                 await session.commit()
                 await session.refresh(action)
+                await append_trading_event_snapshot(
+                    session,
+                    deployment_id=action.deployment_id,
+                )
 
             try:
                 result = await execute_manual_trade_action(
@@ -80,6 +88,10 @@ async def _run_execute_manual_trade_action(action_id: UUID) -> dict[str, Any]:
                 }
                 await session.commit()
                 await session.refresh(action)
+                await append_trading_event_snapshot(
+                    session,
+                    deployment_id=action.deployment_id,
+                )
                 return {
                     "action_id": str(action.id),
                     "deployment_id": str(action.deployment_id),
@@ -115,6 +127,10 @@ async def _run_execute_manual_trade_action(action_id: UUID) -> dict[str, Any]:
                     }
                     await session.commit()
                     await session.refresh(action)
+                    await append_trading_event_snapshot(
+                        session,
+                        deployment_id=action.deployment_id,
+                    )
                     return {
                         "action_id": str(action.id),
                         "deployment_id": str(action.deployment_id),
@@ -138,6 +154,10 @@ async def _run_execute_manual_trade_action(action_id: UUID) -> dict[str, Any]:
                 }
                 await session.commit()
                 await session.refresh(action)
+                await append_trading_event_snapshot(
+                    session,
+                    deployment_id=action.deployment_id,
+                )
                 return {
                     "action_id": str(action.id),
                     "deployment_id": str(action.deployment_id),
@@ -181,7 +201,7 @@ def enqueue_execute_manual_trade_action(
             kwargs["countdown"] = countdown_seconds
         result = execute_manual_trade_action_task.apply_async(
             args=(str(action_id),),
-            queue="paper_trading",
+            queue=settings.paper_trading_manual_action_queue,
             **kwargs,
         )
     except Exception:  # noqa: BLE001

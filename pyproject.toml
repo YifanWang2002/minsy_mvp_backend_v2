@@ -57,3 +57,6 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["test", "tests"]
 asyncio_mode = "auto"
+markers = [
+    "external: tests that call external providers/services with real credentials",
+]

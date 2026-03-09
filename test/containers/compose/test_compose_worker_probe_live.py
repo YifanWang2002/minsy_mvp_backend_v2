@@ -61,5 +61,6 @@ def test_010_worker_queue_bindings_visible(
     stdout = queues.stdout
     assert "market_data" in stdout
     assert "paper_trading" in stdout
+    assert "paper_trading_manual" in stdout
     assert "notifications" in stdout
     assert "trade_approval" in stdout

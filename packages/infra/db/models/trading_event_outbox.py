@@ -28,7 +28,7 @@ class TradingEventOutbox(Base):
     __table_args__ = (
         CheckConstraint(
             "event_type IN ('deployment_status', 'order_update', 'fill_update', "
-            "'position_update', 'pnl_update', 'trade_approval_update', 'heartbeat')",
+            "'position_update', 'pnl_update', 'manual_action_update', 'trade_approval_update', 'heartbeat')",
             name="ck_trading_event_outbox_event_type",
         ),
         Index("ix_trading_event_outbox_deployment_seq", "deployment_id", "event_seq"),
