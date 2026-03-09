@@ -84,12 +84,25 @@ class SubscriptionSyncService:
             except ValueError:
                 user_id = None
 
-        customer_email = checkout_session.get("customer_details", {}).get("email") if isinstance(checkout_session.get("customer_details"), dict) else None
+        customer_details = checkout_session.get("customer_details")
+        customer_email_raw = customer_details.get("email") if isinstance(customer_details, dict) else None
+        customer_email = customer_email_raw.strip() if isinstance(customer_email_raw, str) else None
+        resolved_user_id: UUID | None = None
         if isinstance(user_id, UUID):
+            user = await self._db.scalar(select(User).where(User.id == user_id))
+            if user is None:
+                logger.warning(
+                    "[billing] checkout session references missing user; skip mapping user_id=%s stripe_customer_id=%s",
+                    user_id,
+                    customer_id,
+                )
+            else:
+                resolved_user_id = user.id
+        if resolved_user_id is not None:
             await self.upsert_customer_mapping(
-                user_id=user_id,
+                user_id=resolved_user_id,
                 stripe_customer_id=customer_id,
-                email=customer_email if isinstance(customer_email, str) else None,
+                email=customer_email or None,
                 metadata=metadata,
             )
 
@@ -100,7 +113,7 @@ class SubscriptionSyncService:
         subscription_payload = await self._stripe.retrieve_subscription(subscription_id)
         return await self.sync_subscription_payload(
             subscription_payload=subscription_payload,
-            fallback_user_id=user_id,
+            fallback_user_id=resolved_user_id,
             latest_event_id=latest_event_id,
         )
 
@@ -247,15 +260,21 @@ class SubscriptionSyncService:
             if mapping is not None:
                 return mapping.user_id
 
-        if fallback_user_id is not None and stripe_customer_id:
+        if fallback_user_id is not None:
             user = await self._db.scalar(select(User).where(User.id == fallback_user_id))
             if user is not None:
-                await self.upsert_customer_mapping(
-                    user_id=fallback_user_id,
-                    stripe_customer_id=stripe_customer_id,
-                )
+                if stripe_customer_id:
+                    await self.upsert_customer_mapping(
+                        user_id=fallback_user_id,
+                        stripe_customer_id=stripe_customer_id,
+                    )
                 return fallback_user_id
-        return fallback_user_id
+            logger.warning(
+                "[billing] subscription fallback user missing; skip sync fallback_user_id=%s stripe_customer_id=%s",
+                fallback_user_id,
+                stripe_customer_id,
+            )
+        return None
 
     async def _sync_user_tier(self, *, user_id: UUID, target_tier: str) -> None:
         user = await self._db.scalar(select(User).where(User.id == user_id))
