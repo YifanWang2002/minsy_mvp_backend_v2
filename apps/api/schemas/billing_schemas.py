@@ -8,10 +8,12 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 TierValue = Literal["free", "go", "plus", "pro"]
+BillingIntervalValue = Literal["monthly", "yearly"]
 
 
 class BillingCheckoutSessionRequest(BaseModel):
     plan: Literal["go", "plus", "pro"]
+    interval: BillingIntervalValue = "monthly"
 
 
 class BillingCheckoutSessionResponse(BaseModel):
@@ -22,6 +24,7 @@ class BillingCheckoutSessionResponse(BaseModel):
 
 class BillingChangePlanRequest(BaseModel):
     plan: Literal["go", "plus", "pro"]
+    interval: BillingIntervalValue = "monthly"
 
 
 class BillingChangePlanResponse(BaseModel):
@@ -40,8 +43,11 @@ class BillingPlanResponse(BaseModel):
     tier: TierValue
     display_name: str
     price_usd_monthly: float
+    price_usd_yearly: float | None = None
     currency: str = "USD"
     stripe_price_id: str | None = None
+    stripe_price_id_monthly: str | None = None
+    stripe_price_id_yearly: str | None = None
     stripe_product_id: str | None = None
     limits: dict[str, int] = Field(default_factory=dict)
 

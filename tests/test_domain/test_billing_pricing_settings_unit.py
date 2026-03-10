@@ -89,7 +89,10 @@ def test_defaults_include_go_tier_and_price(monkeypatch) -> None:
     model = settings.billing_cost_model
 
     assert "go" in limits
-    assert limits["go"]["ai_tokens_monthly_total"] > limits["free"]["ai_tokens_monthly_total"]
+    assert (
+        limits["go"]["ai_tokens_monthly_total"]
+        > limits["free"]["ai_tokens_monthly_total"]
+    )
     assert model["go_price_usd"] == 8.0
 
 
@@ -97,11 +100,25 @@ def test_stripe_go_price_and_product_map(monkeypatch) -> None:
     monkeypatch.setattr(settings, "stripe_price_go_monthly", "price_go")
     monkeypatch.setattr(settings, "stripe_price_plus_monthly", "price_plus")
     monkeypatch.setattr(settings, "stripe_price_pro_monthly", "price_pro")
+    monkeypatch.setattr(settings, "stripe_price_go_yearly", "price_go_y")
+    monkeypatch.setattr(settings, "stripe_price_plus_yearly", "price_plus_y")
+    monkeypatch.setattr(settings, "stripe_price_pro_yearly", "price_pro_y")
     monkeypatch.setattr(settings, "stripe_product_go", "prod_go")
 
     assert settings.stripe_price_to_tier_map == {
         "price_go": "go",
         "price_plus": "plus",
         "price_pro": "pro",
+        "price_go_y": "go",
+        "price_plus_y": "plus",
+        "price_pro_y": "pro",
+    }
+    assert settings.stripe_price_to_interval_map == {
+        "price_go": "monthly",
+        "price_plus": "monthly",
+        "price_pro": "monthly",
+        "price_go_y": "yearly",
+        "price_plus_y": "yearly",
+        "price_pro_y": "yearly",
     }
     assert settings.stripe_product_to_tier_map == {"prod_go": "go"}

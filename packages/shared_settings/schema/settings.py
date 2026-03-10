@@ -104,11 +104,20 @@ class Settings(BaseSettings):
         default="price_1T7ek0RruOLLmTefTzIHF7Ge",
         alias="STRIPE_PRICE_GO_MONTHLY",
     )
-    stripe_price_plus_monthly: str = Field(default="", alias="STRIPE_PRICE_PLUS_MONTHLY")
+    stripe_price_plus_monthly: str = Field(
+        default="", alias="STRIPE_PRICE_PLUS_MONTHLY"
+    )
     stripe_price_pro_monthly: str = Field(default="", alias="STRIPE_PRICE_PRO_MONTHLY")
+    stripe_price_go_yearly: str = Field(default="", alias="STRIPE_PRICE_GO_YEARLY")
+    stripe_price_plus_yearly: str = Field(default="", alias="STRIPE_PRICE_PLUS_YEARLY")
+    stripe_price_pro_yearly: str = Field(default="", alias="STRIPE_PRICE_PRO_YEARLY")
     stripe_product_go: str = Field(
         default="prod_U5qQpo2ztIhimg",
         alias="STRIPE_PRODUCT_GO",
+    )
+    stripe_promotion_code_plus_pro: str = Field(
+        default="",
+        alias="STRIPE_PROMOTION_CODE_PLUS_PRO",
     )
     billing_checkout_success_url: str = Field(
         default="",
@@ -801,7 +810,9 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_billing_usage_persist_silent_window_seconds(cls, value: int) -> int:
         if value < 1:
-            raise ValueError("BILLING_USAGE_PERSIST_SILENT_WINDOW_SECONDS must be >= 1.")
+            raise ValueError(
+                "BILLING_USAGE_PERSIST_SILENT_WINDOW_SECONDS must be >= 1."
+            )
         return value
 
     @field_validator("postgres_backup_retention_count")
@@ -876,7 +887,9 @@ class Settings(BaseSettings):
 
     @field_validator("notifications_dispatch_max_runtime_seconds")
     @classmethod
-    def _validate_notifications_dispatch_max_runtime_seconds(cls, value: float) -> float:
+    def _validate_notifications_dispatch_max_runtime_seconds(
+        cls, value: float
+    ) -> float:
         if value <= 0:
             raise ValueError("NOTIFICATIONS_DISPATCH_MAX_RUNTIME_SECONDS must be > 0.")
         return value
@@ -936,14 +949,20 @@ class Settings(BaseSettings):
 
     @field_validator("paper_trading_broker_account_sync_interval_seconds")
     @classmethod
-    def _validate_paper_trading_broker_account_sync_interval_seconds(cls, value: float) -> float:
+    def _validate_paper_trading_broker_account_sync_interval_seconds(
+        cls, value: float
+    ) -> float:
         if value <= 0:
-            raise ValueError("PAPER_TRADING_BROKER_ACCOUNT_SYNC_INTERVAL_SECONDS must be > 0.")
+            raise ValueError(
+                "PAPER_TRADING_BROKER_ACCOUNT_SYNC_INTERVAL_SECONDS must be > 0."
+            )
         return value
 
     @field_validator("paper_trading_runtime_task_expires_seconds")
     @classmethod
-    def _validate_paper_trading_runtime_task_expires_seconds(cls, value: float) -> float:
+    def _validate_paper_trading_runtime_task_expires_seconds(
+        cls, value: float
+    ) -> float:
         if value <= 0:
             raise ValueError("PAPER_TRADING_RUNTIME_TASK_EXPIRES_SECONDS must be > 0.")
         return value
@@ -959,7 +978,9 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_paper_trading_scheduler_max_enqueues_per_tick(cls, value: int) -> int:
         if value < 0:
-            raise ValueError("PAPER_TRADING_SCHEDULER_MAX_ENQUEUES_PER_TICK must be >= 0.")
+            raise ValueError(
+                "PAPER_TRADING_SCHEDULER_MAX_ENQUEUES_PER_TICK must be >= 0."
+            )
         return value
 
     @field_validator("paper_trading_deployment_lock_ttl_seconds")
@@ -1119,9 +1140,13 @@ class Settings(BaseSettings):
 
     @field_validator("market_data_sync_request_start_interval_seconds")
     @classmethod
-    def _validate_market_data_sync_request_start_interval_seconds(cls, value: float) -> float:
+    def _validate_market_data_sync_request_start_interval_seconds(
+        cls, value: float
+    ) -> float:
         if value < 0:
-            raise ValueError("MARKET_DATA_SYNC_REQUEST_START_INTERVAL_SECONDS must be >= 0.")
+            raise ValueError(
+                "MARKET_DATA_SYNC_REQUEST_START_INTERVAL_SECONDS must be >= 0."
+            )
         return float(value)
 
     @field_validator("ccxt_market_data_timeout_seconds")
@@ -1338,12 +1363,44 @@ class Settings(BaseSettings):
         go = self.stripe_price_go_monthly.strip()
         plus = self.stripe_price_plus_monthly.strip()
         pro = self.stripe_price_pro_monthly.strip()
+        go_yearly = self.stripe_price_go_yearly.strip()
+        plus_yearly = self.stripe_price_plus_yearly.strip()
+        pro_yearly = self.stripe_price_pro_yearly.strip()
         if go:
             mapping[go] = "go"
         if plus:
             mapping[plus] = "plus"
         if pro:
             mapping[pro] = "pro"
+        if go_yearly:
+            mapping[go_yearly] = "go"
+        if plus_yearly:
+            mapping[plus_yearly] = "plus"
+        if pro_yearly:
+            mapping[pro_yearly] = "pro"
+        return mapping
+
+    @property
+    def stripe_price_to_interval_map(self) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        go = self.stripe_price_go_monthly.strip()
+        plus = self.stripe_price_plus_monthly.strip()
+        pro = self.stripe_price_pro_monthly.strip()
+        go_yearly = self.stripe_price_go_yearly.strip()
+        plus_yearly = self.stripe_price_plus_yearly.strip()
+        pro_yearly = self.stripe_price_pro_yearly.strip()
+        if go:
+            mapping[go] = "monthly"
+        if plus:
+            mapping[plus] = "monthly"
+        if pro:
+            mapping[pro] = "monthly"
+        if go_yearly:
+            mapping[go_yearly] = "yearly"
+        if plus_yearly:
+            mapping[plus_yearly] = "yearly"
+        if pro_yearly:
+            mapping[pro_yearly] = "yearly"
         return mapping
 
     @property
@@ -1426,9 +1483,15 @@ class Settings(BaseSettings):
         if not isinstance(raw, dict):
             return default_limits
 
-        merged: dict[str, dict[str, int]] = {tier: dict(values) for tier, values in default_limits.items()}
+        merged: dict[str, dict[str, int]] = {
+            tier: dict(values) for tier, values in default_limits.items()
+        }
         for tier, values in raw.items():
-            if not isinstance(tier, str) or tier not in merged or not isinstance(values, dict):
+            if (
+                not isinstance(tier, str)
+                or tier not in merged
+                or not isinstance(values, dict)
+            ):
                 continue
             for key, value in values.items():
                 if not isinstance(key, str):
@@ -1458,6 +1521,9 @@ class Settings(BaseSettings):
             "go_price_usd": 8.0,
             "plus_price_usd": 20.0,
             "pro_price_usd": 60.0,
+            "go_price_usd_yearly": 81.6,
+            "plus_price_usd_yearly": 196.8,
+            "pro_price_usd_yearly": 576.0,
         }
         unified_cost_model = (
             self.billing_pricing_json.get("cost_model")

@@ -59,37 +59,55 @@ _CHECKOUT_TRIAL_DAYS = 7
 async def get_billing_plans() -> BillingPlansResponse:
     limits = settings.billing_tier_limits
     pricing = settings.billing_cost_model
+    go_monthly = float(pricing.get("go_price_usd", 8.0))
+    plus_monthly = float(pricing.get("plus_price_usd", 20.0))
+    pro_monthly = float(pricing.get("pro_price_usd", 60.0))
+    go_yearly = float(pricing.get("go_price_usd_yearly", go_monthly * 12))
+    plus_yearly = float(pricing.get("plus_price_usd_yearly", plus_monthly * 12))
+    pro_yearly = float(pricing.get("pro_price_usd_yearly", pro_monthly * 12))
 
     plans = [
         BillingPlanResponse(
             tier="free",
             display_name="Free",
             price_usd_monthly=0,
+            price_usd_yearly=0,
             stripe_price_id=None,
+            stripe_price_id_monthly=None,
+            stripe_price_id_yearly=None,
             stripe_product_id=None,
             limits=limits.get("free", {}),
         ),
         BillingPlanResponse(
             tier="go",
             display_name="Go",
-            price_usd_monthly=float(pricing.get("go_price_usd", 8.0)),
+            price_usd_monthly=go_monthly,
+            price_usd_yearly=go_yearly,
             stripe_price_id=settings.stripe_price_go_monthly.strip() or None,
+            stripe_price_id_monthly=settings.stripe_price_go_monthly.strip() or None,
+            stripe_price_id_yearly=settings.stripe_price_go_yearly.strip() or None,
             stripe_product_id=settings.stripe_product_go.strip() or None,
             limits=limits.get("go", {}),
         ),
         BillingPlanResponse(
             tier="plus",
             display_name="Plus",
-            price_usd_monthly=float(pricing.get("plus_price_usd", 20.0)),
+            price_usd_monthly=plus_monthly,
+            price_usd_yearly=plus_yearly,
             stripe_price_id=settings.stripe_price_plus_monthly.strip() or None,
+            stripe_price_id_monthly=settings.stripe_price_plus_monthly.strip() or None,
+            stripe_price_id_yearly=settings.stripe_price_plus_yearly.strip() or None,
             stripe_product_id=None,
             limits=limits.get("plus", {}),
         ),
         BillingPlanResponse(
             tier="pro",
             display_name="Pro",
-            price_usd_monthly=float(pricing.get("pro_price_usd", 60.0)),
+            price_usd_monthly=pro_monthly,
+            price_usd_yearly=pro_yearly,
             stripe_price_id=settings.stripe_price_pro_monthly.strip() or None,
+            stripe_price_id_monthly=settings.stripe_price_pro_monthly.strip() or None,
+            stripe_price_id_yearly=settings.stripe_price_pro_yearly.strip() or None,
             stripe_product_id=None,
             limits=limits.get("pro", {}),
         ),
@@ -106,13 +124,18 @@ async def create_checkout_session(
 ) -> BillingCheckoutSessionResponse:
     _require_stripe_ready()
 
-    price_id = _price_id_for_tier(payload.plan)
+    target_tier = _normalize_tier(payload.plan)
+    target_interval = _normalize_billing_interval(payload.interval)
+    price_id = _price_id_for_tier(tier=target_tier, interval=target_interval)
     if not price_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "BILLING_PRICE_NOT_CONFIGURED",
-                "message": f"Stripe price id is missing for plan '{payload.plan}'.",
+                "message": (
+                    f"Stripe price id is missing for plan '{target_tier}' "
+                    f"with interval '{target_interval}'."
+                ),
             },
         )
 
@@ -161,9 +184,11 @@ async def create_checkout_session(
         client_reference_id=str(user.id),
         metadata={
             "user_id": str(user.id),
-            "target_tier": payload.plan,
+            "target_tier": target_tier,
+            "target_interval": target_interval,
         },
         trial_days=0 if has_prior_paid_subscription else _CHECKOUT_TRIAL_DAYS,
+        promotion_code_id=_promotion_code_for_checkout_tier(target_tier),
     )
     await db.commit()
 
@@ -223,13 +248,17 @@ async def change_billing_plan(
     _require_stripe_ready()
 
     target_tier = _normalize_tier(payload.plan)
-    target_price_id = _price_id_for_tier(target_tier)
+    target_interval = _normalize_billing_interval(payload.interval)
+    target_price_id = _price_id_for_tier(tier=target_tier, interval=target_interval)
     if not target_price_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "code": "BILLING_PRICE_NOT_CONFIGURED",
-                "message": f"Stripe price id is missing for plan '{target_tier}'.",
+                "message": (
+                    f"Stripe price id is missing for plan '{target_tier}' "
+                    f"with interval '{target_interval}'."
+                ),
             },
         )
 
@@ -242,8 +271,10 @@ async def change_billing_plan(
 
     if active_subscription is None:
         customer = await _resolve_or_create_customer(db=db, user=user)
-        remote_active_subscription = await _latest_remote_active_subscription_for_customer(
-            customer_id=customer.stripe_customer_id,
+        remote_active_subscription = (
+            await _latest_remote_active_subscription_for_customer(
+                customer_id=customer.stripe_customer_id,
+            )
         )
         if remote_active_subscription is not None:
             subscription_payload = remote_active_subscription
@@ -255,14 +286,20 @@ async def change_billing_plan(
             checkout_session = await stripe_client.create_checkout_session(
                 customer_id=customer.stripe_customer_id,
                 price_id=target_price_id,
-                success_url=_resolve_checkout_return_url(request=request, billing="success"),
-                cancel_url=_resolve_checkout_return_url(request=request, billing="cancel"),
+                success_url=_resolve_checkout_return_url(
+                    request=request, billing="success"
+                ),
+                cancel_url=_resolve_checkout_return_url(
+                    request=request, billing="cancel"
+                ),
                 client_reference_id=str(user.id),
                 metadata={
                     "user_id": str(user.id),
                     "target_tier": target_tier,
+                    "target_interval": target_interval,
                 },
                 trial_days=0 if has_prior_paid_subscription else _CHECKOUT_TRIAL_DAYS,
+                promotion_code_id=_promotion_code_for_checkout_tier(target_tier),
             )
             await db.commit()
             checkout_url = str(checkout_session.get("url") or "").strip()
@@ -286,7 +323,11 @@ async def change_billing_plan(
         fallback_current_tier = _normalize_tier(active_subscription.tier)
         subscription_id = active_subscription.stripe_subscription_id.strip()
     else:
-        subscription_id = str(subscription_payload.get("id") or "").strip() if isinstance(subscription_payload, dict) else ""
+        subscription_id = (
+            str(subscription_payload.get("id") or "").strip()
+            if isinstance(subscription_payload, dict)
+            else ""
+        )
     if not subscription_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -297,7 +338,9 @@ async def change_billing_plan(
         )
 
     if not isinstance(subscription_payload, dict):
-        subscription_payload = await stripe_client.retrieve_subscription(subscription_id)
+        subscription_payload = await stripe_client.retrieve_subscription(
+            subscription_id
+        )
     subscription_item_id, current_price_id = _resolve_primary_subscription_item(
         subscription_payload
     )
@@ -314,7 +357,10 @@ async def change_billing_plan(
         price_id=current_price_id,
         fallback_tier=fallback_current_tier,
     )
-    if current_tier == target_tier:
+    if (
+        current_tier == target_tier
+        and (current_price_id or "").strip() == target_price_id
+    ):
         sync_service = SubscriptionSyncService(db, stripe_client=stripe_client)
         await sync_service.sync_subscription_payload(
             subscription_payload=subscription_payload,
@@ -376,7 +422,9 @@ async def get_billing_overview(
     subscription = await db.scalar(
         select(BillingSubscription)
         .where(BillingSubscription.user_id == user.id)
-        .order_by(BillingSubscription.updated_at.desc(), BillingSubscription.created_at.desc())
+        .order_by(
+            BillingSubscription.updated_at.desc(), BillingSubscription.created_at.desc()
+        )
         .limit(1)
     )
 
@@ -399,7 +447,9 @@ async def get_billing_overview(
             stripe_price_id=subscription.stripe_price_id,
             current_period_end=subscription.current_period_end,
             cancel_at_period_end=subscription.cancel_at_period_end,
-            pending_tier=_normalize_tier(subscription.pending_tier) if subscription.pending_tier else None,
+            pending_tier=_normalize_tier(subscription.pending_tier)
+            if subscription.pending_tier
+            else None,
             pending_price_id=subscription.pending_price_id,
         )
 
@@ -615,13 +665,30 @@ async def _user_has_paid_subscription_history(*, db: AsyncSession, user_id) -> b
     return row is not None
 
 
-def _price_id_for_tier(tier: str) -> str:
-    normalized = _normalize_tier(tier)
-    return {
+def _price_id_for_tier(*, tier: str, interval: str) -> str:
+    normalized_tier = _normalize_tier(tier)
+    normalized_interval = _normalize_billing_interval(interval)
+    monthly_map = {
         "go": settings.stripe_price_go_monthly.strip(),
         "plus": settings.stripe_price_plus_monthly.strip(),
         "pro": settings.stripe_price_pro_monthly.strip(),
-    }.get(normalized, "")
+    }
+    yearly_map = {
+        "go": settings.stripe_price_go_yearly.strip(),
+        "plus": settings.stripe_price_plus_yearly.strip(),
+        "pro": settings.stripe_price_pro_yearly.strip(),
+    }
+    if normalized_interval == "yearly":
+        return yearly_map.get(normalized_tier) or monthly_map.get(normalized_tier, "")
+    return monthly_map.get(normalized_tier, "")
+
+
+def _promotion_code_for_checkout_tier(tier: str) -> str | None:
+    normalized_tier = _normalize_tier(tier)
+    if normalized_tier not in {"plus", "pro"}:
+        return None
+    resolved = settings.stripe_promotion_code_plus_pro.strip()
+    return resolved or None
 
 
 def _tier_rank(tier: str) -> int:
@@ -680,6 +747,13 @@ def _normalize_tier(raw: str | None) -> str:
     return "free"
 
 
+def _normalize_billing_interval(raw: str | None) -> str:
+    value = (raw or "").strip().lower()
+    if value == "yearly":
+        return "yearly"
+    return "monthly"
+
+
 def _resolve_checkout_return_url(*, request: Request, billing: str) -> str:
     if billing == "cancel":
         base_url = settings.effective_billing_checkout_cancel_url
@@ -706,7 +780,9 @@ def _append_app_return_url(*, base_url: str, app_return_url: str | None) -> str:
     return urlunparse(parsed._replace(query=urlencode(query_map)))
 
 
-def _resolve_frontend_billing_return_url(*, request: Request, billing: str) -> str | None:
+def _resolve_frontend_billing_return_url(
+    *, request: Request, billing: str
+) -> str | None:
     if billing not in {"success", "cancel", "portal"}:
         return None
 

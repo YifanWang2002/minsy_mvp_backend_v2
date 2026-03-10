@@ -63,6 +63,10 @@ def _patch_price_settings(monkeypatch):
     monkeypatch.setattr(settings, "stripe_price_go_monthly", "price_go_monthly")
     monkeypatch.setattr(settings, "stripe_price_plus_monthly", "price_plus_monthly")
     monkeypatch.setattr(settings, "stripe_price_pro_monthly", "price_pro_monthly")
+    monkeypatch.setattr(settings, "stripe_price_go_yearly", "price_go_yearly")
+    monkeypatch.setattr(settings, "stripe_price_plus_yearly", "price_plus_yearly")
+    monkeypatch.setattr(settings, "stripe_price_pro_yearly", "price_pro_yearly")
+    monkeypatch.setattr(settings, "stripe_promotion_code_plus_pro", "promo_plus_pro")
     monkeypatch.setattr(settings, "stripe_publishable_key", "pk_test_123")
 
 
@@ -143,6 +147,7 @@ def test_checkout_session_applies_7day_trial_for_first_paid_user(
     assert payload["session_id"] == "cs_test_1"
     assert captured["trial_days"] == 7
     assert captured["price_id"] == "price_go_monthly"
+    assert captured["promotion_code_id"] is None
     assert db.commit_calls == 1
 
     app.dependency_overrides.clear()
@@ -204,6 +209,7 @@ def test_checkout_session_uses_no_trial_for_returning_paid_user(
 
     assert response.status_code == 200
     assert captured["trial_days"] == 0
+    assert captured["promotion_code_id"] is None
 
     app.dependency_overrides.clear()
 
@@ -275,9 +281,7 @@ def test_checkout_session_rejects_when_remote_active_subscription_exists(
             "status": "active",
             "customer": customer_id,
             "items": {
-                "data": [
-                    {"id": "si_remote_1", "price": {"id": "price_plus_monthly"}}
-                ]
+                "data": [{"id": "si_remote_1", "price": {"id": "price_plus_monthly"}}]
             },
         }
 
@@ -287,7 +291,9 @@ def test_checkout_session_rejects_when_remote_active_subscription_exists(
         def __init__(self, _db, *, stripe_client):
             del _db, stripe_client
 
-        async def sync_subscription_payload(self, *, subscription_payload, fallback_user_id):
+        async def sync_subscription_payload(
+            self, *, subscription_payload, fallback_user_id
+        ):
             sync_calls.append(
                 {
                     "subscription_payload": subscription_payload,
@@ -398,6 +404,72 @@ def test_change_plan_without_active_subscription_redirects_to_checkout(
     assert payload["target_tier"] == "plus"
     assert captured["trial_days"] == 7
     assert captured["price_id"] == "price_plus_monthly"
+    assert captured["promotion_code_id"] == "promo_plus_pro"
+
+    app.dependency_overrides.clear()
+
+
+def test_checkout_session_plus_yearly_uses_yearly_price_and_promotion(
+    client,
+    app,
+    monkeypatch,
+):
+    _patch_price_settings(monkeypatch)
+    user = _fake_user()
+    db = _FakeDbSession()
+    _override_dependencies(app=app, user=user, db=db)
+
+    captured: dict[str, object] = {}
+
+    async def _fake_latest_active(*, db, user_id):
+        del db, user_id
+        return None
+
+    async def _fake_has_paid_history(*, db, user_id):
+        del db, user_id
+        return False
+
+    async def _fake_resolve_customer(*, db, user):
+        del db, user
+        return SimpleNamespace(stripe_customer_id="cus_yearly_plus")
+
+    async def _fake_create_checkout_session(**kwargs):
+        captured.update(kwargs)
+        return {
+            "id": "cs_test_yearly_plus",
+            "url": "https://checkout.stripe.test/session-yearly-plus",
+        }
+
+    monkeypatch.setattr(
+        billing_routes,
+        "_latest_active_subscription_for_user",
+        _fake_latest_active,
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "_user_has_paid_subscription_history",
+        _fake_has_paid_history,
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "_resolve_or_create_customer",
+        _fake_resolve_customer,
+    )
+    monkeypatch.setattr(
+        billing_routes.stripe_client,
+        "create_checkout_session",
+        _fake_create_checkout_session,
+    )
+
+    response = client.post(
+        "/api/v1/billing/checkout-session",
+        json={"plan": "plus", "interval": "yearly"},
+    )
+
+    assert response.status_code == 200
+    assert captured["price_id"] == "price_plus_yearly"
+    assert captured["promotion_code_id"] == "promo_plus_pro"
+    assert captured["trial_days"] == 7
 
     app.dependency_overrides.clear()
 
@@ -473,7 +545,9 @@ def test_change_plan_upgrade_updates_existing_subscription_immediately(
         def __init__(self, _db, *, stripe_client):
             del _db, stripe_client
 
-        async def sync_subscription_payload(self, *, subscription_payload, fallback_user_id):
+        async def sync_subscription_payload(
+            self, *, subscription_payload, fallback_user_id
+        ):
             sync_calls.append(
                 {
                     "subscription_payload": subscription_payload,
@@ -511,6 +585,116 @@ def test_change_plan_upgrade_updates_existing_subscription_immediately(
     assert captured["payment_behavior"] == "pending_if_incomplete"
     assert captured["metadata"] is None
     assert len(sync_calls) == 1
+
+    app.dependency_overrides.clear()
+
+
+def test_change_plan_same_tier_yearly_switch_updates_price(
+    client,
+    app,
+    monkeypatch,
+):
+    _patch_price_settings(monkeypatch)
+    user = _fake_user(tier="plus")
+    db = _FakeDbSession()
+    _override_dependencies(app=app, user=user, db=db)
+
+    async def _fake_latest_active(*, db, user_id):
+        del db, user_id
+        return SimpleNamespace(
+            stripe_subscription_id="sub_plus_interval",
+            tier="plus",
+        )
+
+    async def _fake_retrieve_subscription(_subscription_id):
+        return {
+            "id": "sub_plus_interval",
+            "items": {
+                "data": [
+                    {
+                        "id": "si_plus_interval",
+                        "price": {"id": "price_plus_monthly"},
+                    }
+                ]
+            },
+            "latest_invoice": {"status": "paid"},
+            "current_period_end": 1_893_456_000,
+        }
+
+    captured: dict[str, object] = {}
+
+    async def _fake_update_subscription_price(
+        _subscription_id,
+        *,
+        subscription_item_id,
+        price_id,
+        proration_behavior,
+        payment_behavior,
+        metadata,
+    ):
+        captured.update(
+            {
+                "subscription_item_id": subscription_item_id,
+                "price_id": price_id,
+                "proration_behavior": proration_behavior,
+                "payment_behavior": payment_behavior,
+                "metadata": metadata,
+            }
+        )
+        return {
+            "id": "sub_plus_interval",
+            "status": "active",
+            "items": {
+                "data": [
+                    {
+                        "id": subscription_item_id,
+                        "price": {"id": price_id},
+                    }
+                ]
+            },
+        }
+
+    class _FakeSyncService:
+        def __init__(self, _db, *, stripe_client):
+            del _db, stripe_client
+
+        async def sync_subscription_payload(
+            self, *, subscription_payload, fallback_user_id
+        ):
+            del subscription_payload, fallback_user_id
+            return None
+
+    monkeypatch.setattr(
+        billing_routes,
+        "_latest_active_subscription_for_user",
+        _fake_latest_active,
+    )
+    monkeypatch.setattr(
+        billing_routes.stripe_client,
+        "retrieve_subscription",
+        _fake_retrieve_subscription,
+    )
+    monkeypatch.setattr(
+        billing_routes.stripe_client,
+        "update_subscription_price",
+        _fake_update_subscription_price,
+    )
+    monkeypatch.setattr(billing_routes, "SubscriptionSyncService", _FakeSyncService)
+
+    response = client.post(
+        "/api/v1/billing/change-plan",
+        json={"plan": "plus", "interval": "yearly"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["action"] == "updated"
+    assert payload["current_tier"] == "plus"
+    assert payload["target_tier"] == "plus"
+    assert captured["price_id"] == "price_plus_yearly"
+    assert captured["proration_behavior"] == "always_invoice"
+    assert captured["payment_behavior"] == "pending_if_incomplete"
+    assert captured["metadata"] is None
 
     app.dependency_overrides.clear()
 
@@ -587,7 +771,9 @@ def test_change_plan_downgrade_holds_entitlements_until_period_end_when_paid(
         def __init__(self, _db, *, stripe_client):
             del _db, stripe_client
 
-        async def sync_subscription_payload(self, *, subscription_payload, fallback_user_id):
+        async def sync_subscription_payload(
+            self, *, subscription_payload, fallback_user_id
+        ):
             del subscription_payload, fallback_user_id
             return None
 
@@ -696,11 +882,17 @@ def test_change_plan_state_machine_from_free_to_paid_redirects_checkout(
     assert payload["current_tier"] == "free"
     assert payload["target_tier"] == target_tier
     assert captured["trial_days"] == 7
-    assert captured["price_id"] == {
-        "go": "price_go_monthly",
-        "plus": "price_plus_monthly",
-        "pro": "price_pro_monthly",
-    }[target_tier]
+    assert (
+        captured["price_id"]
+        == {
+            "go": "price_go_monthly",
+            "plus": "price_plus_monthly",
+            "pro": "price_pro_monthly",
+        }[target_tier]
+    )
+    assert captured["promotion_code_id"] == (
+        "promo_plus_pro" if target_tier in {"plus", "pro"} else None
+    )
 
     app.dependency_overrides.clear()
 
@@ -805,7 +997,9 @@ def test_change_plan_state_machine_for_paid_tiers_all_paths(
         def __init__(self, _db, *, stripe_client):
             del _db, stripe_client
 
-        async def sync_subscription_payload(self, *, subscription_payload, fallback_user_id):
+        async def sync_subscription_payload(
+            self, *, subscription_payload, fallback_user_id
+        ):
             sync_calls.append(
                 {
                     "subscription_payload": subscription_payload,
@@ -940,7 +1134,9 @@ def test_change_plan_state_machine_recovers_remote_active_subscription_and_updat
         def __init__(self, _db, *, stripe_client):
             del _db, stripe_client
 
-        async def sync_subscription_payload(self, *, subscription_payload, fallback_user_id):
+        async def sync_subscription_payload(
+            self, *, subscription_payload, fallback_user_id
+        ):
             sync_calls.append(
                 {
                     "subscription_payload": subscription_payload,

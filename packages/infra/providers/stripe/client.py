@@ -76,6 +76,7 @@ class StripeClient:
         client_reference_id: str,
         metadata: dict[str, str] | None = None,
         trial_days: int | None = None,
+        promotion_code_id: str | None = None,
     ) -> dict[str, Any]:
         self._ensure_configured()
         payload = {
@@ -90,6 +91,11 @@ class StripeClient:
             "metadata": metadata or {},
         }
         resolved_trial_days = max(int(trial_days or 0), 0)
+        normalized_promotion_code_id = (
+            promotion_code_id.strip() if isinstance(promotion_code_id, str) else ""
+        )
+        if normalized_promotion_code_id:
+            payload["discounts"] = [{"promotion_code": normalized_promotion_code_id}]
         if resolved_trial_days > 0:
             payload["subscription_data"] = {
                 "trial_period_days": resolved_trial_days,
@@ -119,7 +125,9 @@ class StripeClient:
             payload["flow_data"] = flow_data
         if isinstance(configuration_id, str) and configuration_id.strip():
             payload["configuration"] = configuration_id.strip()
-        created = await asyncio.to_thread(stripe.billing_portal.Session.create, **payload)
+        created = await asyncio.to_thread(
+            stripe.billing_portal.Session.create, **payload
+        )
         return self._as_dict(created)
 
     async def retrieve_subscription(
@@ -173,6 +181,9 @@ class StripeClient:
         metadata: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         self._ensure_configured()
+        normalized_payment_behavior = (
+            payment_behavior.strip() if isinstance(payment_behavior, str) else ""
+        )
         payload: dict[str, Any] = {
             "items": [
                 {
@@ -182,11 +193,13 @@ class StripeClient:
                 }
             ],
             "proration_behavior": proration_behavior,
-            "cancel_at_period_end": False,
             "expand": ["items.data.price", "latest_invoice", "pending_update"],
         }
-        if isinstance(payment_behavior, str) and payment_behavior.strip():
-            payload["payment_behavior"] = payment_behavior.strip()
+        if normalized_payment_behavior:
+            payload["payment_behavior"] = normalized_payment_behavior
+        # Stripe rejects `pending_if_incomplete` when `cancel_at_period_end` is present.
+        if normalized_payment_behavior.lower() != "pending_if_incomplete":
+            payload["cancel_at_period_end"] = False
         if metadata is not None:
             payload["metadata"] = metadata
         updated = await asyncio.to_thread(
@@ -201,7 +214,9 @@ class StripeClient:
         stripe_customer_id: str,
     ) -> dict[str, Any]:
         self._ensure_configured()
-        retrieved = await asyncio.to_thread(stripe.Customer.retrieve, stripe_customer_id)
+        retrieved = await asyncio.to_thread(
+            stripe.Customer.retrieve, stripe_customer_id
+        )
         return self._as_dict(retrieved)
 
     def construct_event(
@@ -212,7 +227,9 @@ class StripeClient:
         webhook_secret: str | None = None,
     ) -> dict[str, Any]:
         self._ensure_configured()
-        resolved_webhook_secret = (webhook_secret or settings.stripe_webhook_secret).strip()
+        resolved_webhook_secret = (
+            webhook_secret or settings.stripe_webhook_secret
+        ).strip()
         if not resolved_webhook_secret:
             raise StripeClientConfigError(
                 "Stripe webhook secret is not configured (STRIPE_WEBHOOK_SECRET).",
