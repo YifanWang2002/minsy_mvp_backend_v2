@@ -86,7 +86,6 @@ class StripeClient:
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id,
-            "allow_promotion_codes": True,
             "payment_method_collection": "always",
             "metadata": metadata or {},
         }
@@ -96,6 +95,8 @@ class StripeClient:
         )
         if normalized_promotion_code_id:
             payload["discounts"] = [{"promotion_code": normalized_promotion_code_id}]
+        else:
+            payload["allow_promotion_codes"] = True
         if resolved_trial_days > 0:
             payload["subscription_data"] = {
                 "trial_period_days": resolved_trial_days,

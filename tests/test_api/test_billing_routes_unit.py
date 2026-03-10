@@ -474,6 +474,71 @@ def test_checkout_session_plus_yearly_uses_yearly_price_and_promotion(
     app.dependency_overrides.clear()
 
 
+def test_checkout_session_retries_without_promotion_code_when_stripe_code_missing(
+    client,
+    app,
+    monkeypatch,
+):
+    _patch_price_settings(monkeypatch)
+    user = _fake_user()
+    db = _FakeDbSession()
+    _override_dependencies(app=app, user=user, db=db)
+
+    checkout_calls: list[dict[str, object]] = []
+
+    async def _fake_latest_active(*, db, user_id):
+        del db, user_id
+        return None
+
+    async def _fake_has_paid_history(*, db, user_id):
+        del db, user_id
+        return False
+
+    async def _fake_resolve_customer(*, db, user):
+        del db, user
+        return SimpleNamespace(stripe_customer_id="cus_retry_plus")
+
+    async def _fake_create_checkout_session(**kwargs):
+        checkout_calls.append(dict(kwargs))
+        if len(checkout_calls) == 1:
+            raise Exception("No such promotion code: promo_plus_pro")
+        return {
+            "id": "cs_retry_plus",
+            "url": "https://checkout.stripe.test/retry-plus",
+        }
+
+    monkeypatch.setattr(
+        billing_routes,
+        "_latest_active_subscription_for_user",
+        _fake_latest_active,
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "_user_has_paid_subscription_history",
+        _fake_has_paid_history,
+    )
+    monkeypatch.setattr(
+        billing_routes,
+        "_resolve_or_create_customer",
+        _fake_resolve_customer,
+    )
+    monkeypatch.setattr(
+        billing_routes.stripe_client,
+        "create_checkout_session",
+        _fake_create_checkout_session,
+    )
+
+    response = client.post("/api/v1/billing/checkout-session", json={"plan": "plus"})
+
+    assert response.status_code == 200
+    assert len(checkout_calls) == 2
+    assert checkout_calls[0]["promotion_code_id"] == "promo_plus_pro"
+    assert checkout_calls[1]["promotion_code_id"] is None
+    assert db.commit_calls == 1
+
+    app.dependency_overrides.clear()
+
+
 def test_change_plan_upgrade_updates_existing_subscription_immediately(
     client,
     app,

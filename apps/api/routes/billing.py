@@ -55,6 +55,11 @@ _ACTIVE_SUBSCRIPTION_STATUSES = (
 _CHECKOUT_TRIAL_DAYS = 7
 
 
+def _is_missing_promotion_code_error(exc: Exception) -> bool:
+    message = str(exc).strip().lower()
+    return "no such promotion code" in message
+
+
 @router.get("/plans", response_model=BillingPlansResponse)
 async def get_billing_plans() -> BillingPlansResponse:
     limits = settings.billing_tier_limits
@@ -176,7 +181,7 @@ async def create_checkout_session(
         user_id=user.id,
     )
 
-    session = await stripe_client.create_checkout_session(
+    session = await _create_checkout_session_for_tier(
         customer_id=customer.stripe_customer_id,
         price_id=price_id,
         success_url=_resolve_checkout_return_url(request=request, billing="success"),
@@ -188,7 +193,7 @@ async def create_checkout_session(
             "target_interval": target_interval,
         },
         trial_days=0 if has_prior_paid_subscription else _CHECKOUT_TRIAL_DAYS,
-        promotion_code_id=_promotion_code_for_checkout_tier(target_tier),
+        target_tier=target_tier,
     )
     await db.commit()
 
@@ -283,7 +288,7 @@ async def change_billing_plan(
                 db=db,
                 user_id=user.id,
             )
-            checkout_session = await stripe_client.create_checkout_session(
+            checkout_session = await _create_checkout_session_for_tier(
                 customer_id=customer.stripe_customer_id,
                 price_id=target_price_id,
                 success_url=_resolve_checkout_return_url(
@@ -299,7 +304,7 @@ async def change_billing_plan(
                     "target_interval": target_interval,
                 },
                 trial_days=0 if has_prior_paid_subscription else _CHECKOUT_TRIAL_DAYS,
-                promotion_code_id=_promotion_code_for_checkout_tier(target_tier),
+                target_tier=target_tier,
             )
             await db.commit()
             checkout_url = str(checkout_session.get("url") or "").strip()
@@ -689,6 +694,50 @@ def _promotion_code_for_checkout_tier(tier: str) -> str | None:
         return None
     resolved = settings.stripe_promotion_code_plus_pro.strip()
     return resolved or None
+
+
+async def _create_checkout_session_for_tier(
+    *,
+    customer_id: str,
+    price_id: str,
+    success_url: str,
+    cancel_url: str,
+    client_reference_id: str,
+    metadata: dict[str, str],
+    trial_days: int,
+    target_tier: str,
+) -> dict:
+    promotion_code_id = _promotion_code_for_checkout_tier(target_tier)
+    try:
+        return await stripe_client.create_checkout_session(
+            customer_id=customer_id,
+            price_id=price_id,
+            success_url=success_url,
+            cancel_url=cancel_url,
+            client_reference_id=client_reference_id,
+            metadata=metadata,
+            trial_days=trial_days,
+            promotion_code_id=promotion_code_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if promotion_code_id and _is_missing_promotion_code_error(exc):
+            logger.warning(
+                "[billing] stripe promotion code missing; retry without promotion code "
+                "tier=%s promotion_code_id=%s",
+                target_tier,
+                promotion_code_id,
+            )
+            return await stripe_client.create_checkout_session(
+                customer_id=customer_id,
+                price_id=price_id,
+                success_url=success_url,
+                cancel_url=cancel_url,
+                client_reference_id=client_reference_id,
+                metadata=metadata,
+                trial_days=trial_days,
+                promotion_code_id=None,
+            )
+        raise
 
 
 def _tier_rank(tier: str) -> int:
