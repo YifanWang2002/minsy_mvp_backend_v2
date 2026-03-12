@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, String
+from sqlalchemy import CheckConstraint, ForeignKey, String, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from packages.infra.db.models.base import Base
@@ -20,6 +21,7 @@ FONT_SCALE_VALUES = ("small", "default", "large")
 DEFAULT_THEME_MODE = "system"
 DEFAULT_LOCALE = "en"
 DEFAULT_FONT_SCALE = "default"
+DEFAULT_ONBOARDING_STATUS: dict[str, str] = {}
 
 
 class UserSetting(Base):
@@ -64,6 +66,12 @@ class UserSetting(Base):
         nullable=False,
         default=DEFAULT_FONT_SCALE,
         server_default=DEFAULT_FONT_SCALE,
+    )
+    onboarding_status: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
     )
 
     user: Mapped[User] = relationship(back_populates="settings")

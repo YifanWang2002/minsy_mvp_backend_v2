@@ -89,13 +89,19 @@ async def _ensure_sessions_phase_constraint() -> None:
     )
     async with engine.begin() as connection:
         await connection.execute(
-            text("UPDATE sessions SET current_phase = 'stress_test' WHERE current_phase = 'backtest'"),
+            text(
+                "UPDATE sessions SET current_phase = 'stress_test' WHERE current_phase = 'backtest'"
+            ),
         )
         await connection.execute(
-            text("UPDATE sessions SET current_phase = 'deployment' WHERE current_phase = 'deploy'"),
+            text(
+                "UPDATE sessions SET current_phase = 'deployment' WHERE current_phase = 'deploy'"
+            ),
         )
         await connection.execute(
-            text("ALTER TABLE sessions DROP CONSTRAINT IF EXISTS ck_sessions_current_phase"),
+            text(
+                "ALTER TABLE sessions DROP CONSTRAINT IF EXISTS ck_sessions_current_phase"
+            ),
         )
         await connection.execute(
             text(
@@ -110,7 +116,9 @@ async def _ensure_sessions_archival_columns() -> None:
     assert engine is not None
     async with engine.begin() as connection:
         await connection.execute(
-            text("ALTER TABLE sessions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL"),
+            text(
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL"
+            ),
         )
         await connection.execute(
             text(
@@ -132,10 +140,14 @@ async def _ensure_trading_runtime_columns() -> None:
             text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS reject_reason TEXT NULL"),
         )
         await connection.execute(
-            text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS provider_updated_at TIMESTAMPTZ NULL"),
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS provider_updated_at TIMESTAMPTZ NULL"
+            ),
         )
         await connection.execute(
-            text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ NULL"),
+            text(
+                "ALTER TABLE orders ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ NULL"
+            ),
         )
         await connection.execute(
             text("ALTER TABLE orders DROP CONSTRAINT IF EXISTS ck_orders_status"),
@@ -147,10 +159,14 @@ async def _ensure_trading_runtime_columns() -> None:
             ),
         )
         await connection.execute(
-            text("ALTER TABLE fills ADD COLUMN IF NOT EXISTS provider_fill_id VARCHAR(120) NULL"),
+            text(
+                "ALTER TABLE fills ADD COLUMN IF NOT EXISTS provider_fill_id VARCHAR(120) NULL"
+            ),
         )
         await connection.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_fills_provider_fill_id ON fills (provider_fill_id)"),
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_fills_provider_fill_id ON fills (provider_fill_id)"
+            ),
         )
 
 
@@ -163,7 +179,9 @@ async def _ensure_trading_event_outbox_constraint() -> None:
     )
     async with engine.begin() as connection:
         await connection.execute(
-            text("ALTER TABLE trading_event_outbox DROP CONSTRAINT IF EXISTS ck_trading_event_outbox_event_type"),
+            text(
+                "ALTER TABLE trading_event_outbox DROP CONSTRAINT IF EXISTS ck_trading_event_outbox_event_type"
+            ),
         )
         await connection.execute(
             text(
@@ -179,16 +197,24 @@ async def _ensure_broker_account_schema() -> None:
     provider_constraint_sql = "provider IN ('alpaca', 'ccxt', 'sandbox')"
     async with engine.begin() as connection:
         await connection.execute(
-            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS exchange_id VARCHAR(64)"),
+            text(
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS exchange_id VARCHAR(64)"
+            ),
         )
         await connection.execute(
-            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS account_uid VARCHAR(128)"),
+            text(
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS account_uid VARCHAR(128)"
+            ),
         )
         await connection.execute(
-            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS is_default BOOLEAN"),
+            text(
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS is_default BOOLEAN"
+            ),
         )
         await connection.execute(
-            text("ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN"),
+            text(
+                "ALTER TABLE broker_accounts ADD COLUMN IF NOT EXISTS is_sandbox BOOLEAN"
+            ),
         )
         await connection.execute(
             text(
@@ -217,7 +243,9 @@ async def _ensure_broker_account_schema() -> None:
             text("UPDATE broker_accounts SET is_sandbox = COALESCE(is_sandbox, false)"),
         )
         await connection.execute(
-            text("UPDATE broker_accounts SET capabilities = COALESCE(capabilities, '{}'::jsonb)"),
+            text(
+                "UPDATE broker_accounts SET capabilities = COALESCE(capabilities, '{}'::jsonb)"
+            ),
         )
 
         # Provider-specific structured field backfills.
@@ -366,12 +394,16 @@ async def _ensure_broker_account_schema() -> None:
             ),
         )
         await connection.execute(
-            text("UPDATE broker_accounts SET is_default = false WHERE status <> 'active'"),
+            text(
+                "UPDATE broker_accounts SET is_default = false WHERE status <> 'active'"
+            ),
         )
 
         # Sync provider check-constraint with model.
         await connection.execute(
-            text("ALTER TABLE broker_accounts DROP CONSTRAINT IF EXISTS ck_broker_accounts_provider"),
+            text(
+                "ALTER TABLE broker_accounts DROP CONSTRAINT IF EXISTS ck_broker_accounts_provider"
+            ),
         )
         await connection.execute(
             text(
@@ -402,7 +434,9 @@ async def _ensure_broker_account_schema() -> None:
 async def _ensure_broker_account_audit_log_constraint() -> None:
     """Ensure audit action constraint covers default-selection events."""
     assert engine is not None
-    action_constraint_sql = "action IN ('create', 'update', 'validate', 'deactivate', 'set_default')"
+    action_constraint_sql = (
+        "action IN ('create', 'update', 'validate', 'deactivate', 'set_default')"
+    )
     async with engine.begin() as connection:
         await connection.execute(
             text(
@@ -427,7 +461,9 @@ async def _ensure_user_billing_columns() -> None:
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_tier VARCHAR(20)"),
         )
         await connection.execute(
-            text("UPDATE users SET current_tier = COALESCE(NULLIF(current_tier, ''), 'free')"),
+            text(
+                "UPDATE users SET current_tier = COALESCE(NULLIF(current_tier, ''), 'free')"
+            ),
         )
         await connection.execute(
             text("ALTER TABLE users ALTER COLUMN current_tier SET DEFAULT 'free'"),
@@ -442,6 +478,35 @@ async def _ensure_user_billing_columns() -> None:
             text(
                 "ALTER TABLE users "
                 f"ADD CONSTRAINT ck_users_current_tier CHECK ({tier_constraint_sql})",
+            ),
+        )
+
+
+async def _ensure_user_settings_schema() -> None:
+    """Ensure user_settings has onboarding status JSON payload."""
+    assert engine is not None
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "ALTER TABLE user_settings "
+                "ADD COLUMN IF NOT EXISTS onboarding_status JSONB",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE user_settings "
+                "SET onboarding_status = COALESCE(onboarding_status, '{}'::jsonb)",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE user_settings "
+                "ALTER COLUMN onboarding_status SET DEFAULT '{}'::jsonb",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE user_settings ALTER COLUMN onboarding_status SET NOT NULL",
             ),
         )
 
@@ -584,6 +649,7 @@ async def init_postgres(*, ensure_schema: bool = True) -> None:
         await _ensure_broker_account_schema()
         await _ensure_broker_account_audit_log_constraint()
         await _ensure_user_billing_columns()
+        await _ensure_user_settings_schema()
         await _ensure_billing_schema()
         await _ensure_sessions_phase_constraint()
         await _ensure_sessions_archival_columns()
