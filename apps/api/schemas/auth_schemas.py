@@ -61,6 +61,8 @@ class UserResponse(BaseModel):
 ThemeModeValue = Literal["light", "dark", "system"]
 LocaleValue = Literal["en", "zh"]
 FontScaleValue = Literal["small", "default", "large"]
+OnboardingSectionValue = Literal["home", "strategies", "portfolio"]
+OnboardingStatusValue = Literal["pending", "completed", "canceled"]
 
 
 class UserPreferencesResponse(BaseModel):
@@ -75,6 +77,19 @@ class UpdateUserPreferencesRequest(BaseModel):
     theme_mode: ThemeModeValue
     locale: LocaleValue
     font_scale: FontScaleValue
+
+
+class OnboardingStatusResponse(BaseModel):
+    home: OnboardingStatusValue
+    strategies: OnboardingStatusValue
+    portfolio: OnboardingStatusValue
+    has_persisted: bool
+    updated_at: datetime | None = None
+
+
+class UpdateOnboardingStatusRequest(BaseModel):
+    section: OnboardingSectionValue
+    status: OnboardingStatusValue
 
 
 class DetailResponse(BaseModel):
