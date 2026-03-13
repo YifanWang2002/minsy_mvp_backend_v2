@@ -88,7 +88,7 @@
     "ref": {
       "type": "string",
       "description": "Reference to a data series. price.close, price.high, volume, or factor outputs like ema_20, macd_12_26_9.histogram",
-      "pattern": "^(price\\.(open|high|low|close|hl2|hlc3|ohlc4|typical)|volume|[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?:\\.[a-z][a-z0-9_]*)?)$"
+      "pattern": "^(price\\.(open|high|low|close|hl2|hlc3|ohlc4|typical)|volume|[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?:\\.[A-Za-z][A-Za-z0-9_]*)?)$"
     },
 
     "operand": {

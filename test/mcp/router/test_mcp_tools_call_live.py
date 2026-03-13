@@ -58,6 +58,62 @@ def _decode_tool_text_payload(result: dict[str, Any]) -> dict[str, Any]:
     return json.loads(text)
 
 
+def _build_valid_strategy_dsl() -> dict[str, Any]:
+    return {
+        "dsl_version": "1.0.0",
+        "strategy": {
+            "name": "Pytest Range Strategy",
+            "description": "Validation probe for strategy_validate_dsl input compatibility.",
+        },
+        "universe": {
+            "market": "forex",
+            "tickers": ["USDJPY"],
+        },
+        "timeframe": "1h",
+        "factors": {
+            "bbands_20_2": {
+                "type": "bbands",
+                "params": {"length": 20, "std": 2.0, "source": "close"},
+                "outputs": ["BBU", "BBM", "BBL"],
+            },
+            "rsi_14": {
+                "type": "rsi",
+                "params": {"length": 14, "source": "close"},
+            },
+        },
+        "trade": {
+            "long": {
+                "entry": {
+                    "condition": {
+                        "cmp": {
+                            "left": {"ref": "rsi_14"},
+                            "op": "lt",
+                            "right": 35,
+                        }
+                    }
+                },
+                "exits": [
+                    {
+                        "type": "signal_exit",
+                        "name": "revert_to_mid",
+                        "condition": {
+                            "cross": {
+                                "a": {"ref": "price.close"},
+                                "op": "cross_above",
+                                "b": {"ref": "bbands_20_2.BBM"},
+                            }
+                        },
+                    }
+                ],
+                "position_sizing": {
+                    "mode": "pct_equity",
+                    "pct": 0.1,
+                },
+            }
+        },
+    }
+
+
 def test_000_accessibility_tools_call_stress_ping() -> None:
     result = _call_tool("stress", "stress_ping")
     assert result.get("isError") is False
@@ -97,3 +153,96 @@ def test_040_tools_call_backtest_get_job_invalid_uuid_returns_structured_error()
     error = payload.get("error")
     assert isinstance(error, dict)
     assert "code" in error
+
+
+def test_050_strategy_validate_dsl_accepts_object_payload() -> None:
+    result = _call_tool(
+        "strategy",
+        "strategy_validate_dsl",
+        {"dsl_json": _build_valid_strategy_dsl()},
+    )
+    assert result.get("isError") is False
+
+    payload = _decode_tool_text_payload(result)
+    assert payload["category"] == "strategy"
+    assert payload["tool"] == "strategy_validate_dsl"
+    assert payload["ok"] is True
+    assert payload.get("errors") == []
+
+
+def test_060_strategy_validate_dsl_auto_recovers_trailing_brace() -> None:
+    dsl_text = json.dumps(
+        _build_valid_strategy_dsl(),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ) + "}"
+    result = _call_tool(
+        "strategy",
+        "strategy_validate_dsl",
+        {"dsl_json": dsl_text},
+    )
+    assert result.get("isError") is False
+
+    payload = _decode_tool_text_payload(result)
+    assert payload["tool"] == "strategy_validate_dsl"
+    assert payload["ok"] is True
+
+
+def test_070_indicator_catalog_exposes_dsl_alias_outputs() -> None:
+    overlap_result = _call_tool(
+        "strategy",
+        "get_indicator_catalog",
+        {"category": "overlap"},
+    )
+    overlap_payload = _decode_tool_text_payload(overlap_result)
+    overlap_categories = overlap_payload.get("categories")
+    assert isinstance(overlap_categories, list) and overlap_categories
+    bbands = None
+    for category in overlap_categories:
+        indicators = category.get("indicators")
+        if not isinstance(indicators, list):
+            continue
+        for indicator in indicators:
+            if indicator.get("indicator") == "bbands":
+                bbands = indicator
+                break
+        if bbands is not None:
+            break
+    assert isinstance(bbands, dict)
+    bbands_outputs = bbands.get("outputs")
+    assert isinstance(bbands_outputs, list) and bbands_outputs
+    assert any(
+        isinstance(item, dict)
+        and item.get("name") == "BBU"
+        and item.get("dsl_alias") == "upper"
+        for item in bbands_outputs
+    )
+
+    momentum_result = _call_tool(
+        "strategy",
+        "get_indicator_catalog",
+        {"category": "momentum"},
+    )
+    momentum_payload = _decode_tool_text_payload(momentum_result)
+    momentum_categories = momentum_payload.get("categories")
+    assert isinstance(momentum_categories, list) and momentum_categories
+    adx = None
+    for category in momentum_categories:
+        indicators = category.get("indicators")
+        if not isinstance(indicators, list):
+            continue
+        for indicator in indicators:
+            if indicator.get("indicator") == "adx":
+                adx = indicator
+                break
+        if adx is not None:
+            break
+    assert isinstance(adx, dict)
+    adx_outputs = adx.get("outputs")
+    assert isinstance(adx_outputs, list) and adx_outputs
+    assert any(
+        isinstance(item, dict)
+        and item.get("name") == "ADX"
+        and item.get("dsl_alias") == "adx"
+        for item in adx_outputs
+    )

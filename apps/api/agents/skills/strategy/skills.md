@@ -134,6 +134,12 @@ Reply in **{{LANG_NAME}}**.
 - Use `get_indicator_catalog` to inspect available factor categories and registry contracts.
 - Use `get_indicator_detail` when you need full skill detail for one or more indicators.
 - `get_indicator_catalog` categories: `overlap`, `momentum`, `volatility`, `volume`, `utils` (exclude `candle`).
+- When `get_indicator_catalog` returns output objects with `dsl_alias`, prefer that alias in DSL `factors[*].outputs` and all `ref` fields.
+- Legacy output names are accepted for compatibility, but canonical aliases are preferred:
+  - `bbands`: `BBU/BBM/BBL` -> `upper/middle/lower`
+  - `macd`: `MACD/MACDs/MACDh` -> `macd_line/signal/histogram`
+  - `stoch`: `STOCHk/STOCHd` -> `k/d`
+  - `adx`: `ADX/DMP/DMN` -> `adx/dmp/dmn`
 - Keep retries deterministic: only update changed JSON fields/patch ops.
 
 ## Strategy Ref Payload

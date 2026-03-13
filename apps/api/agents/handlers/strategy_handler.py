@@ -19,6 +19,12 @@ from apps.api.agents.skills.strategy_skills import (
     build_strategy_dynamic_state,
     build_strategy_static_instructions,
 )
+from apps.api.agents.deployment_defaults import (
+    hydrate_deployment_profile_defaults,
+)
+from packages.domain.trading.services.trading_preference_service import (
+    TradingPreferenceService,
+)
 from packages.shared_settings.schema.settings import settings
 
 
@@ -70,8 +76,6 @@ class StrategyHandler:
             instructions=instructions,
             enriched_input=state_block + user_message,
             tools=_build_strategy_tools(),
-            model=settings.openai_response_model,
-            reasoning={"effort": "low"},
         )
 
     async def post_process(
@@ -80,7 +84,6 @@ class StrategyHandler:
         raw_patches: list[dict[str, Any]],
         db: AsyncSession,
     ) -> PostProcessResult:
-        del db
         artifacts = ctx.session_artifacts
         phase_data = artifacts.setdefault(
             Phase.STRATEGY.value,
@@ -115,10 +118,12 @@ class StrategyHandler:
             confirmed_at = datetime.now(UTC).isoformat()
             profile["strategy_confirmed"] = True
             profile["strategy_last_confirmed_at"] = confirmed_at
-            self._prepare_deployment_artifacts(
+            await self._prepare_deployment_artifacts(
                 artifacts=artifacts,
                 strategy_profile=profile,
                 confirmed_at=confirmed_at,
+                db=db,
+                user_id=ctx.user_id,
             )
             completed = True
             next_phase = Phase.DEPLOYMENT.value
@@ -174,16 +179,24 @@ class StrategyHandler:
             output["strategy_confirmed"] = strategy_confirmed
         return output
 
-    @staticmethod
-    def _prepare_deployment_artifacts(
+    async def _prepare_deployment_artifacts(
+        self,
         *,
         artifacts: dict[str, Any],
         strategy_profile: dict[str, Any],
         confirmed_at: str,
+        db: AsyncSession,
+        user_id: UUID,
     ) -> None:
         strategy_id = str(strategy_profile.get("strategy_id", "")).strip()
         if not strategy_id:
             return
+        preference_view = await TradingPreferenceService(db).get_view(user_id=user_id)
+        deploy_defaults = (
+            dict(preference_view.deploy_defaults)
+            if isinstance(preference_view.deploy_defaults, dict)
+            else {}
+        )
 
         scope_keys = (
             "strategy_name",
@@ -236,34 +249,40 @@ class StrategyHandler:
         deployment_profile.pop("selected_broker_account_id", None)
         deployment_profile.pop("selected_broker_label", None)
         deployment_profile.pop("selected_broker_source", None)
-        deployment_profile.setdefault("planned_capital_allocated", "10000")
-        deployment_profile.setdefault("planned_auto_start", True)
         deployment_profile["deployment_prepared_at"] = confirmed_at
-        deployment_block["profile"] = deployment_profile
-        deployment_block["missing_fields"] = [
-            "selected_broker_account_id",
-            "deployment_confirmation_status",
-        ]
-
         deployment_runtime_raw = deployment_block.get("runtime")
         deployment_runtime = (
             dict(deployment_runtime_raw)
             if isinstance(deployment_runtime_raw, dict)
             else {}
         )
+        deployment_runtime_defaults = {
+            "strategy_id": strategy_id,
+            "strategy_name": str(scope_updates.get("strategy_name", "")).strip() or None,
+            "deployment_status": "blocked",
+            "broker_readiness_status": "unknown",
+            "selected_broker_account_id": None,
+            "selected_broker_label": None,
+            "selected_broker_source": None,
+            "deployment_confirmation_status": "pending",
+            "deployment_summary_snapshot": {},
+            "auto_execute_pending": False,
+            "prepared_at": confirmed_at,
+        }
+        deployment_runtime.update(deployment_runtime_defaults)
+        deployment_profile, deployment_runtime = hydrate_deployment_profile_defaults(
+            profile=deployment_profile,
+            runtime_state=deployment_runtime,
+            deploy_defaults=deploy_defaults,
+        )
+        deployment_block["profile"] = deployment_profile
+        deployment_block["runtime"] = deployment_runtime
+        deployment_block["missing_fields"] = [
+            "selected_broker_account_id",
+            "deployment_confirmation_status",
+        ]
         deployment_runtime.update(
             {
-                "strategy_id": strategy_id,
-                "strategy_name": str(scope_updates.get("strategy_name", "")).strip()
-                or None,
-                "deployment_status": "blocked",
-                "broker_readiness_status": "unknown",
-                "selected_broker_account_id": None,
-                "selected_broker_label": None,
-                "selected_broker_source": None,
-                "deployment_confirmation_status": "pending",
-                "deployment_summary_snapshot": {},
-                "auto_execute_pending": False,
                 "planned_capital_allocated": deployment_profile.get(
                     "planned_capital_allocated",
                     "10000",
@@ -271,10 +290,14 @@ class StrategyHandler:
                 "planned_auto_start": bool(
                     deployment_profile.get("planned_auto_start", True)
                 ),
+                "planned_risk_limits": (
+                    dict(deployment_profile.get("planned_risk_limits"))
+                    if isinstance(deployment_profile.get("planned_risk_limits"), dict)
+                    else {}
+                ),
                 "prepared_at": confirmed_at,
             }
         )
-        deployment_block["runtime"] = deployment_runtime
 
 
 def _has_value(value: Any) -> bool:

@@ -29,6 +29,9 @@ class _TurnStreamState:
     full_text: str = ""
     text_delta_emitted: bool = False
     request_model: str | None = None
+    request_reasoning_effort: str | None = None
+    request_response_verbosity: str | None = None
+    request_max_output_tokens: int | None = None
     completed_model: str | None = None
     completed_usage: dict[str, Any] = field(default_factory=dict)
     stream_error_message: str | None = None

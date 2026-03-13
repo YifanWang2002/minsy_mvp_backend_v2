@@ -31,6 +31,11 @@ class PromptBuilderMixin:
             artifacts=artifacts,
             user_message=payload.message,
         )
+        await self._hydrate_deployment_defaults(
+            artifacts=artifacts,
+            phase=phase_before,
+            user_id=user.id,
+        )
         pre_strategy_instrument_before: str | None = None
         if phase_before == Phase.PRE_STRATEGY.value:
             pre_data = artifacts.get(Phase.PRE_STRATEGY.value)
@@ -40,6 +45,14 @@ class PromptBuilderMixin:
                     value = pre_profile.get("target_instrument")
                     if isinstance(value, str) and value.strip():
                         pre_strategy_instrument_before = value.strip()
+
+        effective_prompt_user_message = await self._maybe_reset_response_chain(
+            session=session,
+            phase=phase_before,
+            phase_turn_count=phase_turn_count,
+            user_message_id=user_message_id,
+            prompt_user_message=prompt_user_message,
+        )
 
         runtime_policy = self._resolve_runtime_policy(
             phase=phase_before,
@@ -57,7 +70,14 @@ class PromptBuilderMixin:
                 "choice_selection": choice_selection,
             },
         )
-        prompt = handler.build_prompt(ctx, prompt_user_message)
+        prompt = handler.build_prompt(ctx, effective_prompt_user_message)
+        prompt = self._apply_execution_policy(
+            session=session,
+            phase=phase_before,
+            payload=payload,
+            prompt=prompt,
+        )
+        prompt = self._enforce_prompt_budget(prompt)
         tools = self._merge_tools(
             base_tools=prompt.tools,
             runtime_policy=runtime_policy,
@@ -74,7 +94,7 @@ class PromptBuilderMixin:
             user_message_id=user_message_id,
             phase_before=phase_before,
             phase_turn_count=phase_turn_count,
-            prompt_user_message=prompt_user_message,
+            prompt_user_message=effective_prompt_user_message,
             handler=handler,
             artifacts=artifacts,
             pre_strategy_instrument_before=pre_strategy_instrument_before,
@@ -82,6 +102,50 @@ class PromptBuilderMixin:
             prompt=prompt,
             tools=tools,
         )
+
+    async def _hydrate_deployment_defaults(
+        self,
+        *,
+        artifacts: dict[str, Any],
+        phase: str,
+        user_id: UUID,
+    ) -> None:
+        if phase != Phase.DEPLOYMENT.value:
+            return
+        from apps.api.agents.deployment_defaults import (
+            hydrate_deployment_profile_defaults,
+        )
+        from packages.domain.trading.services.trading_preference_service import (
+            TradingPreferenceService,
+        )
+
+        deployment_block = artifacts.get(Phase.DEPLOYMENT.value)
+        if not isinstance(deployment_block, dict):
+            return
+        profile = (
+            dict(deployment_block.get("profile"))
+            if isinstance(deployment_block.get("profile"), dict)
+            else {}
+        )
+        runtime_state = (
+            dict(deployment_block.get("runtime"))
+            if isinstance(deployment_block.get("runtime"), dict)
+            else {}
+        )
+
+        preference_view = await TradingPreferenceService(self.db).get_view(user_id=user_id)
+        deploy_defaults = (
+            dict(preference_view.deploy_defaults)
+            if isinstance(preference_view.deploy_defaults, dict)
+            else {}
+        )
+        profile, runtime_state = hydrate_deployment_profile_defaults(
+            profile=profile,
+            runtime_state=runtime_state,
+            deploy_defaults=deploy_defaults,
+        )
+        deployment_block["profile"] = profile
+        deployment_block["runtime"] = runtime_state
 
     def _resolve_runtime_policy(
         self,
@@ -434,6 +498,348 @@ class PromptBuilderMixin:
             tool_mode=tool_mode,
             allowed_tools=allowed_tools or None,
         )
+
+    def _validate_execution_policy_request(self, payload: ChatSendRequest) -> None:
+        if payload.execution_policy is None:
+            return
+
+        normalized = self._normalize_execution_policy_payload(
+            payload.execution_policy.model_dump(mode="json", exclude_none=True),
+        )
+        model = normalized.get("model")
+        if isinstance(model, str):
+            self._assert_allowed_execution_model(model)
+
+    def _apply_execution_policy(
+        self,
+        *,
+        session: Session,
+        phase: str,
+        payload: ChatSendRequest,
+        prompt: Any,
+    ) -> Any:
+        metadata = dict(session.metadata_ or {})
+        phase_defaults = self._build_phase_execution_policy_defaults(phase=phase)
+        global_defaults = self._build_global_execution_policy_defaults()
+        session_defaults = self._normalize_execution_policy_payload(
+            metadata.get(_EXECUTION_POLICY_META_KEY),
+        )
+        turn_overrides = (
+            self._normalize_execution_policy_payload(
+                payload.execution_policy.model_dump(mode="json", exclude_none=True),
+            )
+            if payload.execution_policy is not None
+            else {}
+        )
+
+        resolved: dict[str, Any] = {}
+        for key in (
+            "model",
+            "reasoning_effort",
+            "max_output_tokens",
+            "response_verbosity",
+        ):
+            candidate = turn_overrides.get(key)
+            if candidate is None:
+                candidate = session_defaults.get(key)
+            if candidate is None:
+                candidate = phase_defaults.get(key)
+            if candidate is None:
+                candidate = global_defaults.get(key)
+            resolved[key] = candidate
+
+        resolved_model = str(resolved.get("model") or "").strip()
+        if not resolved_model:
+            resolved_model = settings.openai_response_model.strip()
+        resolved_model = self._coerce_allowed_execution_model(resolved_model)
+        resolved["model"] = resolved_model
+
+        resolved_effort = resolved.get("reasoning_effort")
+        resolved_reasoning: dict[str, Any] | None = None
+        base_reasoning = (
+            dict(prompt.reasoning)
+            if isinstance(getattr(prompt, "reasoning", None), dict)
+            else {}
+        )
+        if isinstance(resolved_effort, str) and resolved_effort in _EXECUTION_POLICY_ALLOWED_EFFORTS:
+            base_reasoning["effort"] = resolved_effort
+        if base_reasoning:
+            resolved_reasoning = base_reasoning
+
+        resolved_max_output_tokens = self._coerce_positive_int(
+            resolved.get("max_output_tokens")
+        )
+        resolved_verbosity = resolved.get("response_verbosity")
+        if (
+            not isinstance(resolved_verbosity, str)
+            or resolved_verbosity not in _EXECUTION_POLICY_ALLOWED_VERBOSITY
+        ):
+            resolved_verbosity = None
+
+        prompt.model = resolved_model
+        prompt.reasoning = resolved_reasoning
+        prompt.max_output_tokens = resolved_max_output_tokens
+        prompt.response_verbosity = resolved_verbosity
+
+        if payload.execution_policy is not None:
+            persisted_defaults = dict(session_defaults)
+            persisted_defaults.update(turn_overrides)
+            if "model" not in persisted_defaults:
+                persisted_defaults["model"] = resolved_model
+            if "reasoning_effort" not in persisted_defaults and isinstance(
+                resolved_effort, str
+            ):
+                persisted_defaults["reasoning_effort"] = resolved_effort
+            if (
+                "max_output_tokens" not in persisted_defaults
+                and resolved_max_output_tokens is not None
+            ):
+                persisted_defaults["max_output_tokens"] = resolved_max_output_tokens
+            if "response_verbosity" not in persisted_defaults and isinstance(
+                resolved_verbosity, str
+            ):
+                persisted_defaults["response_verbosity"] = resolved_verbosity
+            metadata[_EXECUTION_POLICY_META_KEY] = persisted_defaults
+
+        metadata[_EXECUTION_POLICY_LAST_RESOLVED_META_KEY] = {
+            "model": resolved_model,
+            "reasoning_effort": (
+                resolved_reasoning.get("effort")
+                if isinstance(resolved_reasoning, dict)
+                else None
+            ),
+            "max_output_tokens": resolved_max_output_tokens,
+            "response_verbosity": resolved_verbosity,
+            "phase": phase,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        session.metadata_ = metadata
+        return prompt
+
+    @staticmethod
+    def _coerce_positive_int(value: Any) -> int | None:
+        try:
+            if value is None:
+                return None
+            normalized = int(value)
+        except (TypeError, ValueError):
+            return None
+        if normalized <= 0:
+            return None
+        return normalized
+
+    @staticmethod
+    def _normalize_execution_policy_payload(raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            return {}
+        output: dict[str, Any] = {}
+
+        raw_model = raw.get("model")
+        if isinstance(raw_model, str):
+            model = raw_model.strip().lower()
+            if model:
+                output["model"] = model
+
+        raw_effort = raw.get("reasoning_effort")
+        if isinstance(raw_effort, str):
+            effort = raw_effort.strip().lower()
+            if effort in _EXECUTION_POLICY_ALLOWED_EFFORTS:
+                output["reasoning_effort"] = effort
+
+        raw_max_tokens = raw.get("max_output_tokens")
+        try:
+            max_tokens = int(raw_max_tokens) if raw_max_tokens is not None else None
+        except (TypeError, ValueError):
+            max_tokens = None
+        if isinstance(max_tokens, int) and max_tokens > 0:
+            output["max_output_tokens"] = max_tokens
+
+        raw_verbosity = raw.get("response_verbosity")
+        if isinstance(raw_verbosity, str):
+            verbosity = raw_verbosity.strip().lower()
+            if verbosity in _EXECUTION_POLICY_ALLOWED_VERBOSITY:
+                output["response_verbosity"] = verbosity
+
+        return output
+
+    @staticmethod
+    def _build_phase_execution_policy_defaults(*, phase: str) -> dict[str, Any]:
+        defaults: dict[str, dict[str, Any]] = {
+            Phase.KYC.value: {"reasoning_effort": "none"},
+            Phase.PRE_STRATEGY.value: {"reasoning_effort": "none"},
+            Phase.STRATEGY.value: {"reasoning_effort": "low"},
+            Phase.STRESS_TEST.value: {"reasoning_effort": "low"},
+            Phase.DEPLOYMENT.value: {"reasoning_effort": "none"},
+        }
+        return dict(defaults.get(phase, {}))
+
+    @staticmethod
+    def _build_global_execution_policy_defaults() -> dict[str, Any]:
+        model = settings.openai_response_model.strip()
+        return {
+            "model": model if model else "gpt-5.2",
+            "reasoning_effort": "low",
+        }
+
+    def _assert_allowed_execution_model(self, model: str) -> str:
+        normalized = model.strip().lower()
+        allowed = {item.strip().lower() for item in settings.openai_allowed_models if item.strip()}
+        if normalized and normalized in allowed:
+            return normalized
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "EXECUTION_POLICY_MODEL_NOT_ALLOWED",
+                "message": (
+                    f"Model '{model}' is not in OPENAI_ALLOWED_MODELS_JSON allowlist."
+                ),
+                "allowed_models": sorted(allowed),
+            },
+        )
+
+    def _coerce_allowed_execution_model(self, model: str) -> str:
+        normalized = model.strip().lower()
+        allowed = {item.strip().lower() for item in settings.openai_allowed_models if item.strip()}
+        if normalized and normalized in allowed:
+            return normalized
+        fallback = settings.openai_response_model.strip().lower()
+        if fallback and fallback in allowed:
+            return fallback
+        if allowed:
+            return sorted(allowed)[0]
+        return "gpt-5.2"
+
+    def _enforce_prompt_budget(self, prompt: Any) -> Any:
+        input_limit = max(int(settings.openai_prompt_input_max_chars), 1)
+
+        enriched_input = str(getattr(prompt, "enriched_input", "") or "")
+
+        prompt.enriched_input = self._trim_enriched_input_by_budget(
+            enriched_input=enriched_input,
+            limit=input_limit,
+        )
+        return prompt
+
+    def _trim_enriched_input_by_budget(self, *, enriched_input: str, limit: int) -> str:
+        output = enriched_input
+        if len(output) <= limit:
+            return output
+
+        output = self._remove_tagged_section(output, tag="MCP TOOL SNAPSHOTS")
+        if len(output) <= limit:
+            return output
+
+        output = self._remove_lines_by_prefixes(
+            output,
+            prefixes=(
+                "- available_markets:",
+                "- allowed_instruments_for_target_market:",
+                "- deployment_runtime_state:",
+            ),
+        )
+        if len(output) <= limit:
+            return output
+
+        return f"{output[:limit].rstrip()}\n\n[TRUNCATED]"
+
+    @staticmethod
+    def _remove_tagged_section(text: str, *, tag: str) -> str:
+        pattern = re.compile(
+            rf"\[\s*{re.escape(tag)}\s*\][\s\S]*?(?=\n\[[A-Z][^\n]*\]|\Z)",
+            flags=re.IGNORECASE,
+        )
+        return pattern.sub("", text).strip()
+
+    @staticmethod
+    def _remove_lines_by_prefixes(text: str, *, prefixes: tuple[str, ...]) -> str:
+        normalized_prefixes = tuple(prefix.strip().lower() for prefix in prefixes)
+        output_lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip().lower()
+            if any(stripped.startswith(prefix) for prefix in normalized_prefixes):
+                continue
+            output_lines.append(line)
+        return "\n".join(output_lines)
+
+    async def _maybe_reset_response_chain(
+        self,
+        *,
+        session: Session,
+        phase: str,
+        phase_turn_count: int,
+        user_message_id: UUID,
+        prompt_user_message: str,
+    ) -> str:
+        threshold = max(int(settings.openai_chain_reset_turns_per_phase), 1)
+        if (
+            session.previous_response_id is None
+            or phase_turn_count <= threshold
+            or (phase_turn_count - 1) % threshold != 0
+        ):
+            return prompt_user_message
+
+        digest = await self._build_phase_chain_digest(
+            session_id=session.id,
+            phase=phase,
+            exclude_user_message_id=user_message_id,
+        )
+        session.previous_response_id = None
+
+        metadata = dict(session.metadata_ or {})
+        metadata["chain_reset"] = {
+            "phase": phase,
+            "phase_turn_count": phase_turn_count,
+            "threshold": threshold,
+            "reset_at": datetime.now(UTC).isoformat(),
+            "reason": "periodic_phase_chain_reset",
+        }
+        session.metadata_ = metadata
+
+        if not digest:
+            return prompt_user_message
+        return f"{digest}{prompt_user_message}"
+
+    async def _build_phase_chain_digest(
+        self,
+        *,
+        session_id: UUID,
+        phase: str,
+        exclude_user_message_id: UUID,
+    ) -> str:
+        stmt = (
+            select(Message.role, Message.content)
+            .where(
+                Message.session_id == session_id,
+                Message.phase == phase,
+                Message.role.in_(("user", "assistant")),
+                Message.id != exclude_user_message_id,
+            )
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(8)
+        )
+        rows = (await self.db.execute(stmt)).all()
+        if not rows:
+            return ""
+
+        entries: list[tuple[str, str]] = []
+        for role, content in reversed(rows):
+            normalized = self._normalize_carryover_utterance(content)
+            if not normalized:
+                continue
+            entries.append((str(role), normalized))
+
+        if not entries:
+            return ""
+
+        lines = [
+            "[PHASE MEMORY]",
+            "- note: compressed recap after periodic context-chain reset",
+            f"- phase: {phase}",
+        ]
+        for role, content in entries[-6:]:
+            lines.append(f"- {role}: {content}")
+        lines.append("[/PHASE MEMORY]")
+        return "\n".join(lines) + "\n\n"
 
     @staticmethod
     def _build_runtime_policy(payload: ChatSendRequest) -> HandlerRuntimePolicy:

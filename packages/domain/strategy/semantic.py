@@ -28,7 +28,30 @@ _MULTI_OUTPUT_DEFAULTS: dict[str, set[str]] = {
     "macd": {"macd_line", "signal", "histogram"},
     "bbands": {"upper", "middle", "lower"},
     "stoch": {"k", "d"},
+    "adx": {"adx", "dmp", "dmn"},
     "ichimoku": {"tenkan", "kijun", "senkou_a", "senkou_b", "chikou"},
+}
+
+_LEGACY_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
+    "macd": {
+        "MACD": "macd_line",
+        "MACDs": "signal",
+        "MACDh": "histogram",
+    },
+    "bbands": {
+        "BBU": "upper",
+        "BBM": "middle",
+        "BBL": "lower",
+    },
+    "stoch": {
+        "STOCHk": "k",
+        "STOCHd": "d",
+    },
+    "adx": {
+        "ADX": "adx",
+        "DMP": "dmp",
+        "DMN": "dmn",
+    },
 }
 
 _RESERVED_PRICE_REFS: set[str] = {
@@ -93,9 +116,30 @@ def _allowed_outputs_for_factor(
     factor_type: str,
     explicit_outputs: list[str] | None,
 ) -> set[str]:
+    aliases = _LEGACY_OUTPUT_ALIASES.get(factor_type, {})
+    alias_keys = set(aliases.keys())
+    alias_values = set(aliases.values())
+
     if explicit_outputs:
-        return {item for item in explicit_outputs if isinstance(item, str) and item.strip()}
-    return set(_MULTI_OUTPUT_DEFAULTS.get(factor_type, set()))
+        resolved: set[str] = set()
+        for item in explicit_outputs:
+            if not isinstance(item, str):
+                continue
+            name = item.strip()
+            if not name:
+                continue
+            resolved.add(name)
+            alias = aliases.get(name)
+            if alias:
+                resolved.add(alias)
+            # Common legacy-to-canonical fallback: ADX -> adx.
+            lowered = name.lower()
+            if lowered and lowered != name:
+                resolved.add(lowered)
+        return resolved
+
+    defaults = set(_MULTI_OUTPUT_DEFAULTS.get(factor_type, set()))
+    return defaults | alias_keys | alias_values
 
 
 def _to_indicator_params(

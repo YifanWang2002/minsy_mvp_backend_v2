@@ -27,6 +27,7 @@ from packages.domain.backtest.analytics import (
     compute_underwater_curve,
 )
 from packages.domain.exceptions import DomainError
+from packages.domain.billing.quota_service import QuotaExceededError
 from apps.mcp.auth.context_auth import (
     McpContextClaims,
     decode_mcp_context_token,
@@ -60,6 +61,7 @@ def _payload(
     data: dict[str, Any] | None = None,
     error_code: str | None = None,
     error_message: str | None = None,
+    error_details: dict[str, Any] | None = None,
 ) -> str:
     body: dict[str, Any] = {
         "category": "backtest",
@@ -74,10 +76,16 @@ def _payload(
     if not ok:
         resolved_error_code = error_code or "UNKNOWN_ERROR"
         resolved_error_message = error_message or "Unknown error"
-        body["error"] = {
+        error_payload: dict[str, Any] = {
             "code": resolved_error_code,
             "message": resolved_error_message,
         }
+        if isinstance(error_details, dict):
+            for key, value in error_details.items():
+                if key in {"code", "message"}:
+                    continue
+                error_payload[key] = value
+        body["error"] = error_payload
     log_mcp_tool_result(
         category="backtest",
         tool=tool,
@@ -139,7 +147,8 @@ def _view_payload(view: Any) -> dict[str, Any]:
         )
     elif view.status == "failed":
         data["result"] = {
-            "error": view.error or {"code": "BACKTEST_FAILED", "message": "Backtest failed"}
+            "error": view.error
+            or {"code": "BACKTEST_FAILED", "message": "Backtest failed"}
         }
     else:
         data["result"] = None
@@ -250,6 +259,22 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                 ok=False,
                 error_code="BACKTEST_BAR_LIMIT_EXCEEDED",
                 error_message=str(exc),
+            )
+        except QuotaExceededError as exc:
+            return _payload(
+                tool="backtest_create_job",
+                ok=False,
+                error_code=exc.code,
+                error_message=exc.message,
+                error_details={
+                    "status_code": exc.status_code,
+                    "metric": exc.metric,
+                    "tier": exc.tier,
+                    "used": exc.used,
+                    "limit": exc.limit,
+                    "remaining": exc.remaining,
+                    "reset_at": exc.reset_at.isoformat() if exc.reset_at else None,
+                },
             )
         except DomainError as exc:
             return _payload(

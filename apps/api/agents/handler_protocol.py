@@ -56,6 +56,10 @@ class PromptPieces:
     # Reasoning configuration for o-series / gpt-5+ models.
     # Example: {"effort": "none"} or {"effort": "low", "summary": "concise"}
     reasoning: dict[str, Any] | None = None
+    # Optional response token cap for this turn.
+    max_output_tokens: int | None = None
+    # Optional response verbosity, mapped to Responses API `text.verbosity`.
+    response_verbosity: str | None = None
 
 
 @dataclass

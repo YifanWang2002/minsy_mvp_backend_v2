@@ -69,9 +69,31 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     IndicatorCategory.VOLUME.value: "Volume and money-flow indicators.",
     IndicatorCategory.UTILS.value: "Utility/statistical indicators.",
 }
+_INDICATOR_DSL_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
+    "macd": {
+        "MACD": "macd_line",
+        "MACDs": "signal",
+        "MACDh": "histogram",
+    },
+    "bbands": {
+        "BBU": "upper",
+        "BBM": "middle",
+        "BBL": "lower",
+    },
+    "stoch": {
+        "STOCHk": "k",
+        "STOCHd": "d",
+    },
+    "adx": {
+        "ADX": "adx",
+        "DMP": "dmp",
+        "DMN": "dmn",
+    },
+}
 _VALIDATION_RETRY_COUNTER_KEY_PREFIX = "strategy:validation_retry:"
 _VALIDATION_RETRY_COUNTER_TTL_SECONDS = 60 * 10
 _MAX_VALIDATION_FAILURES_PER_REQUEST = 2
+_JSON_RECOVERY_MAX_TRAILING_BRACES = 8
 
 
 def _float_env(name: str, *, default: float, minimum: float) -> float:
@@ -136,13 +158,92 @@ def _payload(
     return to_json(body)
 
 
-def _parse_payload(raw: str) -> dict[str, Any]:
+class JsonPayloadParseError(ValueError):
+    """Raised when DSL payload parsing fails before schema/semantic validation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_value: Any = None,
+        json_error: json.JSONDecodeError | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.raw_value = raw_value
+        self.json_error = json_error
+
+
+def _attempt_recover_payload_from_trailing_braces(
+    *,
+    raw_text: str,
+    json_error: json.JSONDecodeError,
+) -> dict[str, Any] | None:
+    if "extra data" not in json_error.msg.lower():
+        return None
+
+    normalized = raw_text.strip()
+    if not normalized:
+        return None
+
+    trailing = normalized[json_error.pos:].strip()
+    if not trailing or any(ch != "}" for ch in trailing):
+        return None
+
+    candidate = normalized
+    trimmed = 0
+    trim_limit = min(len(trailing), _JSON_RECOVERY_MAX_TRAILING_BRACES)
+    while trimmed < trim_limit:
+        candidate = candidate.rstrip()
+        if not candidate.endswith("}"):
+            break
+        candidate = candidate[:-1].rstrip()
+        trimmed += 1
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            logger.warning(
+                "strategy payload auto-recovered by trimming trailing braces trimmed=%s original_len=%s",
+                trimmed,
+                len(normalized),
+            )
+            return parsed
+    return None
+
+
+def _parse_payload(raw: str | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, str):
+        raise JsonPayloadParseError(
+            "DSL payload must be a JSON object or JSON string.",
+            raw_value=raw,
+        )
+
+    text = raw.strip()
+    if not text:
+        raise JsonPayloadParseError("DSL payload cannot be empty.", raw_value=raw)
+
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON payload: {exc}") from exc
+        recovered = _attempt_recover_payload_from_trailing_braces(
+            raw_text=text,
+            json_error=exc,
+        )
+        if recovered is not None:
+            return recovered
+        raise JsonPayloadParseError(
+            f"Invalid JSON payload: {exc}",
+            raw_value=raw,
+            json_error=exc,
+        ) from exc
     if not isinstance(parsed, dict):
-        raise ValueError("DSL payload must be a JSON object")
+        raise JsonPayloadParseError(
+            "DSL payload must be a JSON object.",
+            raw_value=parsed,
+        )
     return parsed
 
 
@@ -188,6 +289,39 @@ def _preview_value(value: Any, *, limit: int = 220) -> str | None:
     if not compact:
         return None
     return _truncate_text(compact, limit=limit)
+
+
+def _parse_error_to_validation_item(exc: JsonPayloadParseError) -> dict[str, Any]:
+    json_error = exc.json_error
+    code = "INVALID_JSON" if json_error is not None else "INVALID_JSON_TYPE"
+    suggestion = (
+        "Provide one valid JSON object for dsl_json; remove trailing characters or unmatched braces."
+        if json_error is not None
+        else "Pass dsl_json as a JSON object or JSON string."
+    )
+    actual: dict[str, Any] = {
+        "python_type": type(exc.raw_value).__name__,
+    }
+    if json_error is not None:
+        actual.update(
+            {
+                "line": json_error.lineno,
+                "column": json_error.colno,
+                "char": json_error.pos,
+            }
+        )
+    return {
+        "code": code,
+        "message": str(exc),
+        "path": "$",
+        "path_pointer": "/",
+        "stage": "parse",
+        "value": None,
+        "value_preview": _preview_value(exc.raw_value, limit=280),
+        "expected": "JSON object",
+        "actual": actual,
+        "suggestion": suggestion,
+    }
 
 
 def _sanitize_json_like_value(value: Any) -> Any:
@@ -513,7 +647,22 @@ def _indicator_metadata_snapshot(indicator: str) -> dict[str, Any] | None:
     if metadata is None:
         return None
 
-    return {
+    alias_mapping = _INDICATOR_DSL_OUTPUT_ALIASES.get(indicator, {})
+    outputs: list[dict[str, Any]] = []
+    preferred_outputs: list[str] = []
+    for output in metadata.outputs:
+        output_name = output.name
+        alias = alias_mapping.get(output_name)
+        item: dict[str, Any] = {
+            "name": output_name,
+            "description": output.description,
+        }
+        preferred_outputs.append(alias or output_name)
+        if alias and alias != output_name:
+            item["dsl_alias"] = alias
+        outputs.append(item)
+
+    payload: dict[str, Any] = {
         "name": metadata.name,
         "full_name": metadata.full_name,
         "category": metadata.category.value,
@@ -530,15 +679,13 @@ def _indicator_metadata_snapshot(indicator: str) -> dict[str, Any] | None:
             }
             for param in metadata.params
         ],
-        "outputs": [
-            {
-                "name": output.name,
-                "description": output.description,
-            }
-            for output in metadata.outputs
-        ],
+        "outputs": outputs,
+        "dsl_preferred_outputs": preferred_outputs,
         "required_columns": list(metadata.required_columns),
     }
+    if alias_mapping:
+        payload["dsl_output_alias_map"] = dict(alias_mapping)
+    return payload
 
 
 def _visible_catalog_categories() -> list[IndicatorCategory]:
@@ -919,18 +1066,31 @@ def get_indicator_catalog(category: str = "") -> str:
 
 
 async def strategy_validate_dsl(
-    dsl_json: str,
+    dsl_json: str | dict[str, Any],
     session_id: str = "",
     ctx: Context | None = None,
 ) -> str:
     try:
         payload = _parse_payload(dsl_json)
-    except ValueError as exc:
+    except JsonPayloadParseError as exc:
+        error_item = _parse_error_to_validation_item(exc)
+        summary = _build_validation_summary(
+            errors=[error_item],
+            request_id=None,
+            retry_count=None,
+            retry_limit_reached=False,
+            last_signature=None,
+        )
         return _payload(
             tool="strategy_validate_dsl",
             ok=False,
+            data={
+                "errors": [error_item],
+                "validation": summary,
+            },
             error_code="INVALID_JSON",
             error_message=str(exc),
+            error_context=_validation_log_context(summary),
         )
 
     try:
@@ -1041,20 +1201,42 @@ async def strategy_validate_dsl(
 
 
 async def strategy_upsert_dsl(
-    dsl_json: str,
+    dsl_json: str | dict[str, Any],
     strategy_id: str = "",
     session_id: str = "",
     ctx: Context | None = None,
 ) -> str:
+    claims = _resolve_context_claims(ctx)
     try:
-        claims = _resolve_context_claims(ctx)
+        payload = _parse_payload(dsl_json)
+    except JsonPayloadParseError as exc:
+        error_item = _parse_error_to_validation_item(exc)
+        summary = _build_validation_summary(
+            errors=[error_item],
+            request_id=claims.request_id if claims is not None else None,
+            retry_count=None,
+            retry_limit_reached=False,
+            last_signature=None,
+        )
+        return _payload(
+            tool="strategy_upsert_dsl",
+            ok=False,
+            data={
+                "errors": [error_item],
+                "validation": summary,
+            },
+            error_code="INVALID_JSON",
+            error_message=str(exc),
+            error_context=_validation_log_context(summary),
+        )
+
+    try:
         session_uuid = _resolve_session_uuid(
             session_id=session_id,
             claims=claims,
             required=True,
         )
         strategy_uuid = _parse_uuid(strategy_id, "strategy_id") if strategy_id.strip() else None
-        payload = _parse_payload(dsl_json)
     except ValueError as exc:
         return _payload(
             tool="strategy_upsert_dsl",

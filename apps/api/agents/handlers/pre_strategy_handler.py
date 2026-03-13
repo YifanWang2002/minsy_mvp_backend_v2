@@ -159,8 +159,6 @@ class PreStrategyHandler:
             instructions=instructions,
             enriched_input=state_block + user_message,
             tools=_build_pre_strategy_tools(),
-            model=settings.openai_response_model,
-            reasoning={"effort": "none"},
         )
 
     # -- post-process --------------------------------------------------

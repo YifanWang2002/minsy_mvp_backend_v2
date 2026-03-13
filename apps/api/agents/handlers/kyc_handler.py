@@ -20,7 +20,6 @@ from apps.api.agents.skills.kyc_skills import (
     build_kyc_dynamic_state,
     build_kyc_static_instructions,
 )
-from packages.shared_settings.schema.settings import settings
 from packages.infra.db.models.user import UserProfile
 
 _KYC_FIELD_CHOICE_IDS: dict[str, str] = {
@@ -99,8 +98,6 @@ class KYCHandler:
         return PromptPieces(
             instructions=instructions,
             enriched_input=state_block + user_message,
-            model=settings.openai_response_model,
-            reasoning={"effort": "none"},
         )
 
     # -- post-process --------------------------------------------------

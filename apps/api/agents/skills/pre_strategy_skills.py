@@ -356,10 +356,9 @@ def build_pre_strategy_dynamic_state(
     )
 
     allowed_instruments = market_catalog.get(target_market, ())
-    allowed_instruments_str = (
-        ", ".join(allowed_instruments)
-        if allowed_instruments
-        else "none - select target_market first"
+    allowed_instruments_str = _summarize_instrument_candidates(
+        allowed_instruments,
+        empty_fallback="none - select target_market first",
     )
     mapped_market_data_symbol = get_market_data_symbol_for_market_instrument(
         market=target_market,
@@ -420,3 +419,18 @@ def build_pre_strategy_dynamic_state(
         f"- download_eta_hint_minutes: {download_eta_hint_minutes}\n"
         "[/SESSION STATE]\n\n"
     )
+
+
+def _summarize_instrument_candidates(
+    instruments: tuple[str, ...],
+    *,
+    empty_fallback: str,
+    sample_size: int = 16,
+) -> str:
+    if not instruments:
+        return empty_fallback
+    head = list(instruments[:sample_size])
+    sample = ", ".join(head)
+    if len(instruments) <= sample_size:
+        return sample
+    return f"{sample} ... (+{len(instruments) - sample_size} more)"

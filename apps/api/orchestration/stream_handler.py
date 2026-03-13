@@ -15,16 +15,42 @@ class StreamHandlerMixin:
         stream_state: _TurnStreamState,
     ) -> AsyncIterator[str]:
         resolved_model = preparation.prompt.model or settings.openai_response_model
+        resolved_reasoning = (
+            dict(preparation.prompt.reasoning)
+            if isinstance(preparation.prompt.reasoning, dict)
+            else None
+        )
+        resolved_max_output_tokens = (
+            int(preparation.prompt.max_output_tokens)
+            if isinstance(preparation.prompt.max_output_tokens, int)
+            and preparation.prompt.max_output_tokens > 0
+            else None
+        )
+        resolved_response_verbosity = (
+            preparation.prompt.response_verbosity.strip().lower()
+            if isinstance(preparation.prompt.response_verbosity, str)
+            and preparation.prompt.response_verbosity.strip()
+            else None
+        )
         stream_request_kwargs: dict[str, Any] = {
             "model": resolved_model,
             "input_text": preparation.prompt.enriched_input,
             "instructions": preparation.prompt.instructions,
+            "max_output_tokens": resolved_max_output_tokens,
             "previous_response_id": session.previous_response_id,
             "tools": preparation.tools,
             "tool_choice": preparation.prompt.tool_choice,
-            "reasoning": preparation.prompt.reasoning,
+            "reasoning": resolved_reasoning,
+            "response_verbosity": resolved_response_verbosity,
         }
         stream_state.request_model = resolved_model
+        stream_state.request_reasoning_effort = (
+            str(resolved_reasoning.get("effort", "")).strip().lower()
+            if isinstance(resolved_reasoning, dict)
+            else None
+        ) or None
+        stream_state.request_response_verbosity = resolved_response_verbosity
+        stream_state.request_max_output_tokens = resolved_max_output_tokens
         trace_stream_request_kwargs = self._redact_stream_request_kwargs_for_trace(
             stream_request_kwargs
         )

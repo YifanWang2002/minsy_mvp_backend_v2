@@ -71,8 +71,6 @@ class StressTestHandler:
             enriched_input=state_block + user_message,
             tools=_build_backtest_tools(),
             tool_choice=tool_choice,
-            model=settings.openai_response_model,
-            reasoning={"effort": "low"},
         )
 
     async def post_process(

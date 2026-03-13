@@ -233,6 +233,7 @@ class PostProcessorMixin:
         turn_usage = build_turn_usage_snapshot(
             raw_usage=stream_state.completed_usage,
             model=stream_state.completed_model or stream_state.request_model,
+            reasoning_effort=stream_state.request_reasoning_effort,
             response_id=session.previous_response_id,
             at=datetime.now(UTC),
             pricing=settings.openai_pricing,
@@ -269,19 +270,41 @@ class PostProcessorMixin:
                 else None
             )
             if isinstance(raw_usage, dict) and raw_usage:
+                resolved_model = (
+                    str(stream_state.completed_model or stream_state.request_model or "").strip()
+                    or "unknown"
+                )
                 usage_reconcile_payload = {
                     "user_id": str(session.user_id),
                     "assistant_message_id": str(assistant_message.id),
                     "session_id": str(session.id),
                     "phase": preparation.phase_before,
                     "response_id": session.previous_response_id,
-                    "model": stream_state.completed_model or stream_state.request_model,
+                    "model": resolved_model,
+                    "resolved_model": resolved_model,
+                    "reasoning_effort": stream_state.request_reasoning_effort,
                     "raw_usage": raw_usage,
+                    "reasoning_tokens": (
+                        int(turn_usage.get("reasoning_tokens") or 0)
+                        if isinstance(turn_usage, dict)
+                        else 0
+                    ),
+                    "cached_input_tokens": (
+                        int(turn_usage.get("cached_input_tokens") or 0)
+                        if isinstance(turn_usage, dict)
+                        else 0
+                    ),
+                    "cost_breakdown": (
+                        dict(turn_usage.get("cost_breakdown"))
+                        if isinstance(turn_usage, dict)
+                        and isinstance(turn_usage.get("cost_breakdown"), dict)
+                        else None
+                    ),
                 }
                 await usage_service.record_ai_tokens_from_openai_usage(
                     user_id=session.user_id,
                     raw_usage=raw_usage,
-                    model=stream_state.completed_model or stream_state.request_model,
+                    model=resolved_model,
                     source="chat_turn",
                     reference_type="assistant_message",
                     reference_id=str(assistant_message.id),
@@ -289,6 +312,24 @@ class PostProcessorMixin:
                         "session_id": str(session.id),
                         "phase": preparation.phase_before,
                         "response_id": session.previous_response_id,
+                        "resolved_model": resolved_model,
+                        "reasoning_effort": stream_state.request_reasoning_effort,
+                        "reasoning_tokens": (
+                            int(turn_usage.get("reasoning_tokens") or 0)
+                            if isinstance(turn_usage, dict)
+                            else 0
+                        ),
+                        "cached_input_tokens": (
+                            int(turn_usage.get("cached_input_tokens") or 0)
+                            if isinstance(turn_usage, dict)
+                            else 0
+                        ),
+                        "cost_breakdown": (
+                            dict(turn_usage.get("cost_breakdown"))
+                            if isinstance(turn_usage, dict)
+                            and isinstance(turn_usage.get("cost_breakdown"), dict)
+                            else None
+                        ),
                     },
                 )
                 usage_persisted = True
@@ -308,7 +349,21 @@ class PostProcessorMixin:
                         or stream_state.completed_model
                         or stream_state.request_model
                     ),
+                    "resolved_model": (
+                        str(turn_usage.get("resolved_model") or "").strip()
+                        or str(turn_usage.get("model") or "").strip()
+                        or stream_state.completed_model
+                        or stream_state.request_model
+                    ),
+                    "reasoning_effort": stream_state.request_reasoning_effort,
                     "raw_usage": fallback_usage,
+                    "reasoning_tokens": int(turn_usage.get("reasoning_tokens") or 0),
+                    "cached_input_tokens": int(turn_usage.get("cached_input_tokens") or 0),
+                    "cost_breakdown": (
+                        dict(turn_usage.get("cost_breakdown"))
+                        if isinstance(turn_usage.get("cost_breakdown"), dict)
+                        else None
+                    ),
                     "usage_source": "turn_usage_snapshot_fallback",
                 }
                 await usage_service.record_ai_tokens_from_openai_usage(
@@ -322,6 +377,15 @@ class PostProcessorMixin:
                         "session_id": str(session.id),
                         "phase": preparation.phase_before,
                         "response_id": session.previous_response_id,
+                        "resolved_model": usage_reconcile_payload.get("resolved_model"),
+                        "reasoning_effort": stream_state.request_reasoning_effort,
+                        "reasoning_tokens": int(turn_usage.get("reasoning_tokens") or 0),
+                        "cached_input_tokens": int(turn_usage.get("cached_input_tokens") or 0),
+                        "cost_breakdown": (
+                            dict(turn_usage.get("cost_breakdown"))
+                            if isinstance(turn_usage.get("cost_breakdown"), dict)
+                            else None
+                        ),
                         "usage_source": "turn_usage_snapshot_fallback",
                     },
                 )

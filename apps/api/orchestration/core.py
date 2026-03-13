@@ -144,6 +144,7 @@ class OrchestratorCoreMixin:
         session = await self._resolve_session(
             user_id=user.id, session_id=payload.session_id
         )
+        self._validate_execution_policy_request(payload)
         await self._enforce_strategy_only_boundary(session=session)
         phase_before = session.current_phase
         turn_id = self._resolve_turn_id(payload.client_turn_id)

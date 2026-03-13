@@ -13,6 +13,29 @@ _DEFAULT_MULTI_OUTPUTS: dict[str, tuple[str, ...]] = {
     "macd": ("macd_line", "signal", "histogram"),
     "bbands": ("upper", "middle", "lower"),
     "stoch": ("k", "d"),
+    "adx": ("adx", "dmp", "dmn"),
+}
+
+_OUTPUT_COLUMN_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "macd": {
+        "macd_line": ("MACD",),
+        "signal": ("MACDs",),
+        "histogram": ("MACDh",),
+    },
+    "bbands": {
+        "upper": ("BBU",),
+        "middle": ("BBM",),
+        "lower": ("BBL",),
+    },
+    "stoch": {
+        "k": ("STOCHk",),
+        "d": ("STOCHd",),
+    },
+    "adx": {
+        "adx": ("ADX",),
+        "dmp": ("DMP",),
+        "dmn": ("DMN",),
+    },
 }
 
 
@@ -123,10 +146,16 @@ def _attach_factor_result(
     )
 
     for source_column, output_name in output_names:
-        frame[f"{factor_id}.{output_name}"] = pd.to_numeric(
+        numeric_series = pd.to_numeric(
             result[source_column],
             errors="coerce",
         )
+        frame[f"{factor_id}.{output_name}"] = numeric_series
+        for alias in _alias_output_names(
+            factor_type=factor_type,
+            output_name=output_name,
+        ):
+            frame[f"{factor_id}.{alias}"] = numeric_series
 
 
 def _resolve_output_names(
@@ -150,6 +179,8 @@ def _resolve_output_names(
         mapped = _map_bbands_columns(result_columns)
     elif factor_type == "stoch":
         mapped = _map_stoch_columns(result_columns)
+    elif factor_type == "adx":
+        mapped = _map_adx_columns(result_columns)
     else:
         mapped = {}
 
@@ -214,3 +245,31 @@ def _map_stoch_columns(columns: list[str]) -> dict[str, str]:
         elif key.endswith("d") or "stochd" in key:
             mapping["d"] = original
     return mapping
+
+
+def _map_adx_columns(columns: list[str]) -> dict[str, str]:
+    normalized = _normalize_tokens(columns)
+    mapping: dict[str, str] = {}
+    for key, original in normalized.items():
+        if key == "adx":
+            mapping["adx"] = original
+        elif key in {"dmp", "plusdi", "pdi"}:
+            mapping["dmp"] = original
+        elif key in {"dmn", "minusdi", "mdi"}:
+            mapping["dmn"] = original
+    return mapping
+
+
+def _alias_output_names(*, factor_type: str, output_name: str) -> tuple[str, ...]:
+    aliases_by_factor = _OUTPUT_COLUMN_ALIASES.get(factor_type)
+    if not aliases_by_factor:
+        return tuple()
+
+    aliases = set(aliases_by_factor.get(output_name, tuple()))
+    for canonical_name, extra_aliases in aliases_by_factor.items():
+        if output_name in extra_aliases:
+            aliases.add(canonical_name)
+            aliases.update(alias for alias in extra_aliases if alias != output_name)
+            break
+    aliases.discard(output_name)
+    return tuple(sorted(aliases))
