@@ -97,6 +97,10 @@ class Settings(BaseSettings):
         default_factory=dict,
         alias="OPENAI_PRICING_JSON",
     )
+    openai_allowed_models_json: list[str] = Field(
+        default_factory=lambda: ["gpt-5.2", "gpt-5.4"],
+        alias="OPENAI_ALLOWED_MODELS_JSON",
+    )
     stripe_publishable_key: str = Field(default="", alias="STRIPE_PUBLISHABLE_KEY")
     stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
@@ -157,6 +161,14 @@ class Settings(BaseSettings):
     auth_rate_limit: int = Field(default=30, alias="AUTH_RATE_LIMIT")
     auth_rate_window: int = Field(default=60, alias="AUTH_RATE_WINDOW")
     openai_response_model: str = Field(default="gpt-5.2", alias="OPENAI_RESPONSE_MODEL")
+    openai_chain_reset_turns_per_phase: int = Field(
+        default=8,
+        alias="OPENAI_CHAIN_RESET_TURNS_PER_PHASE",
+    )
+    openai_prompt_input_max_chars: int = Field(
+        default=32_000,
+        alias="OPENAI_PROMPT_INPUT_MAX_CHARS",
+    )
     mcp_server_url_strategy_dev: str = Field(
         default="https://dev.minsyai.com/strategy/mcp",
         alias="MCP_SERVER_URL_STRATEGY_DEV",
@@ -755,6 +767,23 @@ class Settings(BaseSettings):
             return json.loads(normalized)
         return {}
 
+    @field_validator("openai_allowed_models_json", mode="before")
+    @classmethod
+    def _parse_openai_allowed_models_json(
+        cls,
+        value: object,
+    ) -> object:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return []
+            if normalized.startswith("["):
+                return json.loads(normalized)
+            return [item.strip() for item in normalized.split(",") if item.strip()]
+        return []
+
     @field_validator(
         "billing_pricing_json",
         "billing_config_json",
@@ -813,6 +842,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "BILLING_USAGE_PERSIST_SILENT_WINDOW_SECONDS must be >= 1."
             )
+        return value
+
+    @field_validator(
+        "openai_chain_reset_turns_per_phase",
+        "openai_prompt_input_max_chars",
+    )
+    @classmethod
+    def _validate_positive_openai_limits(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("OpenAI prompt/chain limits must be >= 1.")
         return value
 
     @field_validator("postgres_backup_retention_count")
@@ -1441,29 +1480,48 @@ class Settings(BaseSettings):
         return normalized
 
     @property
+    def openai_allowed_models(self) -> tuple[str, ...]:
+        values: list[str] = []
+        for raw in self.openai_allowed_models_json:
+            if not isinstance(raw, str):
+                continue
+            model = raw.strip()
+            if not model or model in values:
+                continue
+            values.append(model)
+        if (
+            self.openai_response_model.strip()
+            and self.openai_response_model.strip() not in values
+        ):
+            values.append(self.openai_response_model.strip())
+        if not values:
+            return ("gpt-5.2", "gpt-5.4")
+        return tuple(values)
+
+    @property
     def billing_tier_limits(self) -> dict[str, dict[str, int]]:
         default_limits: dict[str, dict[str, int]] = {
             "free": {
                 "ai_tokens_monthly_total": 100_000,
-                "cpu_tokens_monthly_total": 20,
+                "cpu_tokens_monthly_total": 30,
                 "strategies_current_count": 5,
                 "deployments_running_count": 1,
             },
             "go": {
                 "ai_tokens_monthly_total": 350_000,
-                "cpu_tokens_monthly_total": 70,
+                "cpu_tokens_monthly_total": 105,
                 "strategies_current_count": 15,
                 "deployments_running_count": 3,
             },
             "plus": {
                 "ai_tokens_monthly_total": 1_000_000,
-                "cpu_tokens_monthly_total": 200,
+                "cpu_tokens_monthly_total": 300,
                 "strategies_current_count": 30,
                 "deployments_running_count": 5,
             },
             "pro": {
                 "ai_tokens_monthly_total": 3_000_000,
-                "cpu_tokens_monthly_total": 600,
+                "cpu_tokens_monthly_total": 900,
                 "strategies_current_count": 100,
                 "deployments_running_count": 20,
             },

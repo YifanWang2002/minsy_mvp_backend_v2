@@ -286,6 +286,7 @@ def _build_stream_kwargs(
     tools: list[dict[str, Any]] | None,
     tool_choice: dict[str, Any] | None,
     reasoning: dict[str, Any] | None,
+    response_verbosity: str | None,
 ) -> dict[str, Any]:
     stream_kwargs: dict[str, Any] = {
         "model": model,
@@ -302,6 +303,8 @@ def _build_stream_kwargs(
     for key, value in optional_fields.items():
         if value is not None:
             stream_kwargs[key] = value
+    if isinstance(response_verbosity, str) and response_verbosity.strip():
+        stream_kwargs["text"] = {"verbosity": response_verbosity.strip().lower()}
     return stream_kwargs
 
 
@@ -330,6 +333,7 @@ class ResponsesEventStreamer(Protocol):
         tools: list[dict[str, Any]] | None = None,
         tool_choice: dict[str, Any] | None = None,
         reasoning: dict[str, Any] | None = None,
+        response_verbosity: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield response stream events as plain dicts."""
 
@@ -351,6 +355,7 @@ class OpenAIResponsesEventStreamer:
         tools: list[dict[str, Any]] | None = None,
         tool_choice: dict[str, Any] | None = None,
         reasoning: dict[str, Any] | None = None,
+        response_verbosity: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         stream_kwargs = _build_stream_kwargs(
             model=model,
@@ -361,6 +366,7 @@ class OpenAIResponsesEventStreamer:
             tools=tools,
             tool_choice=tool_choice,
             reasoning=reasoning,
+            response_verbosity=response_verbosity,
         )
 
         max_attempts = 3

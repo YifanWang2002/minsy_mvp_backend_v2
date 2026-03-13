@@ -65,6 +65,7 @@ class WeightedAiUsageBreakdown:
     """Raw OpenAI tokens + weighted internal tokens for quota accounting."""
 
     input_tokens: int
+    cached_input_tokens: int
     reasoning_tokens: int
     output_tokens: int
     raw_total_tokens: int
@@ -316,6 +317,8 @@ class UsageService:
                 "output_per_token_usd": weighted.output_per_token_usd,
                 "usd_per_internal_token": weighted.usd_per_internal_token,
                 "estimated_cost_usd": weighted.estimated_cost_usd,
+                "cached_input_tokens": weighted.cached_input_tokens,
+                "reasoning_tokens": weighted.reasoning_tokens,
                 "raw_total_tokens": weighted.raw_total_tokens,
                 "weighted_total_tokens": weighted.weighted_total_tokens,
             },
@@ -412,10 +415,19 @@ def compute_weighted_ai_usage_from_openai(
 ) -> WeightedAiUsageBreakdown:
     usage_map = dict(raw_usage) if isinstance(raw_usage, Mapping) else {}
     input_tokens = _to_int(usage_map.get("input_tokens") or usage_map.get("prompt_tokens"))
+    cached_input_tokens = _to_int(usage_map.get("cached_input_tokens"))
+    if cached_input_tokens <= 0:
+        input_details = usage_map.get("input_tokens_details")
+        if isinstance(input_details, Mapping):
+            cached_input_tokens = _to_int(input_details.get("cached_tokens"))
     output_tokens = _to_int(
         usage_map.get("output_tokens") or usage_map.get("completion_tokens")
     )
-    reasoning_tokens = 0
+    reasoning_tokens = _to_int(usage_map.get("reasoning_tokens"))
+    if reasoning_tokens <= 0:
+        output_details = usage_map.get("output_tokens_details")
+        if isinstance(output_details, Mapping):
+            reasoning_tokens = _to_int(output_details.get("reasoning_tokens"))
     raw_total_tokens = input_tokens + output_tokens
 
     resolved_model = str(model or "").strip() or "default"
@@ -441,6 +453,7 @@ def compute_weighted_ai_usage_from_openai(
 
     return WeightedAiUsageBreakdown(
         input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
         reasoning_tokens=reasoning_tokens,
         output_tokens=output_tokens,
         raw_total_tokens=raw_total_tokens,

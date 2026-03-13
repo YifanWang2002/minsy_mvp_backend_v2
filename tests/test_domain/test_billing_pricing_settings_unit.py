@@ -93,6 +93,10 @@ def test_defaults_include_go_tier_and_price(monkeypatch) -> None:
         limits["go"]["ai_tokens_monthly_total"]
         > limits["free"]["ai_tokens_monthly_total"]
     )
+    assert limits["free"]["cpu_tokens_monthly_total"] == 30
+    assert limits["go"]["cpu_tokens_monthly_total"] == 105
+    assert limits["plus"]["cpu_tokens_monthly_total"] == 300
+    assert limits["pro"]["cpu_tokens_monthly_total"] == 900
     assert model["go_price_usd"] == 8.0
 
 

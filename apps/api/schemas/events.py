@@ -240,6 +240,7 @@ class TradingPreferenceResponse(BaseModel):
     approval_channel: str
     approval_timeout_seconds: int
     approval_scope: str
+    deploy_defaults: dict[str, Any] = Field(default_factory=dict)
 
 
 class TradeApprovalRequestResponse(BaseModel):

@@ -33,3 +33,26 @@ def test_turn_usage_snapshot_falls_back_to_default_when_base_model_missing() -> 
 
     assert snapshot is not None
     assert snapshot["cost_usd"] == 0.02
+
+
+def test_turn_usage_snapshot_includes_reasoning_cached_and_cost_breakdown() -> None:
+    snapshot = build_turn_usage_snapshot(
+        raw_usage={
+            "input_tokens": 200,
+            "output_tokens": 80,
+            "input_tokens_details": {"cached_tokens": 120},
+            "output_tokens_details": {"reasoning_tokens": 30},
+        },
+        model="gpt-5.4-2026-03-01",
+        reasoning_effort="high",
+        response_id="resp_789",
+        pricing={"gpt-5.4": {"input_per_token": 0.001, "output_per_token": 0.002}},
+        cost_tracking_enabled=True,
+    )
+
+    assert snapshot is not None
+    assert snapshot["resolved_model"] == "gpt-5.4-2026-03-01"
+    assert snapshot["reasoning_effort"] == "high"
+    assert snapshot["cached_input_tokens"] == 120
+    assert snapshot["reasoning_tokens"] == 30
+    assert snapshot["cost_breakdown"]["cached_input_pricing_mode"] == "raw_input_equivalent"

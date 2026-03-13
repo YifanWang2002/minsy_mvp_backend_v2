@@ -39,6 +39,25 @@ class RuntimePolicy(BaseModel):
         return normalized
 
 
+class ExecutionPolicy(BaseModel):
+    """Per-turn model and response controls for OpenAI execution."""
+
+    model: str | None = Field(default=None, min_length=1, max_length=128)
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=128_000)
+    response_verbosity: Literal["low", "medium", "high"] | None = None
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
+
+
 class ChatSendRequest(BaseModel):
     """Send one user message to orchestrator."""
 
@@ -46,6 +65,7 @@ class ChatSendRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     client_turn_id: str | None = Field(default=None, max_length=96)
     runtime_policy: RuntimePolicy | None = None
+    execution_policy: ExecutionPolicy | None = None
 
     @field_validator("message")
     @classmethod
@@ -288,6 +308,7 @@ class TradingPreferencesUpdateRequest(BaseModel):
     approval_channel: Literal["telegram", "discord", "slack", "whatsapp"] | None = None
     approval_timeout_seconds: int | None = Field(default=None, ge=1, le=86_400)
     approval_scope: Literal["open_only", "open_and_close"] | None = None
+    deploy_defaults: dict[str, Any] | None = None
 
 
 class TradeApprovalDecisionRequest(BaseModel):

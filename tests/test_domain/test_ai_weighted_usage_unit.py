@@ -27,7 +27,8 @@ def test_weighted_ai_usage_respects_input_output_price_gap() -> None:
     # Cost = 1000*0.002 + 500*0.004 = 4.0, unit=1.0/1000=0.001 => 4000
     assert usage.weighted_total_tokens == 4_000
     assert usage.estimated_cost_usd == 4.0
-    assert usage.reasoning_tokens == 0
+    assert usage.reasoning_tokens == 100
+    assert usage.cached_input_tokens == 0
     assert usage.output_tokens == 500
 
 
@@ -72,4 +73,22 @@ def test_weighted_ai_usage_resolves_versioned_model_name_to_base_pricing() -> No
     assert usage.input_per_token_usd == 0.001
     assert usage.output_per_token_usd == 0.002
     assert usage.estimated_cost_usd == 0.2
+    assert usage.weighted_total_tokens == 400
+
+
+def test_weighted_ai_usage_keeps_cached_tokens_observable_without_discount() -> None:
+    usage = compute_weighted_ai_usage_from_openai(
+        raw_usage={
+            "input_tokens": 200,
+            "output_tokens": 100,
+            "input_tokens_details": {"cached_tokens": 150},
+        },
+        model="gpt-5.4",
+        pricing={"gpt-5.4": {"input_per_token": 0.001, "output_per_token": 0.002}},
+        billing_cost_model={"ai_usage_unit_usd": 0.001},
+    )
+
+    # Cost still uses full input_tokens (no cached discount in current policy).
+    assert usage.cached_input_tokens == 150
+    assert usage.estimated_cost_usd == 0.4
     assert usage.weighted_total_tokens == 400

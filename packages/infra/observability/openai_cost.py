@@ -70,15 +70,42 @@ def normalize_openai_usage(raw_usage: Mapping[str, Any] | None) -> dict[str, int
     total_tokens = _to_non_negative_int(raw_usage.get("total_tokens"))
     if total_tokens == 0:
         total_tokens = input_tokens + output_tokens
+    details_input = raw_usage.get("input_tokens_details")
+    details_output = raw_usage.get("output_tokens_details")
+    cached_input_tokens = (
+        _to_non_negative_int(raw_usage.get("cached_input_tokens"))
+        or _extract_usage_detail_tokens(details_input, "cached_tokens")
+    )
+    reasoning_tokens = (
+        _to_non_negative_int(raw_usage.get("reasoning_tokens"))
+        or _extract_usage_detail_tokens(details_output, "reasoning_tokens")
+    )
 
-    if input_tokens == 0 and output_tokens == 0 and total_tokens == 0:
+    if (
+        input_tokens == 0
+        and output_tokens == 0
+        and total_tokens == 0
+        and reasoning_tokens == 0
+        and cached_input_tokens == 0
+    ):
         return None
 
-    return {
+    normalized = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
     }
+    if reasoning_tokens > 0:
+        normalized["reasoning_tokens"] = reasoning_tokens
+    if cached_input_tokens > 0:
+        normalized["cached_input_tokens"] = cached_input_tokens
+    return normalized
+
+
+def _extract_usage_detail_tokens(raw_details: Any, key: str) -> int:
+    if not isinstance(raw_details, Mapping):
+        return 0
+    return _to_non_negative_int(raw_details.get(key))
 
 
 def _extract_model_pricing(
@@ -132,7 +159,8 @@ def build_turn_usage_snapshot(
     *,
     raw_usage: Mapping[str, Any] | None,
     model: str | None,
-    response_id: str | None,
+    response_id: str | None = None,
+    reasoning_effort: str | None = None,
     at: datetime | None = None,
     pricing: Mapping[str, Any] | None = None,
     cost_tracking_enabled: bool = True,
@@ -145,10 +173,19 @@ def build_turn_usage_snapshot(
     resolved_model = (model or "").strip() or "unknown"
     snapshot: dict[str, Any] = {
         "model": resolved_model,
+        "resolved_model": resolved_model,
         "input_tokens": normalized["input_tokens"],
         "output_tokens": normalized["output_tokens"],
         "total_tokens": normalized["total_tokens"],
     }
+    reasoning_tokens = _to_non_negative_int(normalized.get("reasoning_tokens"))
+    cached_input_tokens = _to_non_negative_int(normalized.get("cached_input_tokens"))
+    if reasoning_tokens > 0:
+        snapshot["reasoning_tokens"] = reasoning_tokens
+    if cached_input_tokens > 0:
+        snapshot["cached_input_tokens"] = cached_input_tokens
+    if isinstance(reasoning_effort, str) and reasoning_effort.strip():
+        snapshot["reasoning_effort"] = reasoning_effort.strip().lower()
     if isinstance(response_id, str) and response_id.strip():
         snapshot["response_id"] = response_id.strip()
     snapshot["at"] = _to_at_timestamp(at)
@@ -163,6 +200,18 @@ def build_turn_usage_snapshot(
             + snapshot["output_tokens"] * output_per_token
         )
         snapshot["cost_usd"] = round(cost_usd, 6)
+        snapshot["cost_breakdown"] = {
+            "input_tokens": snapshot["input_tokens"],
+            "output_tokens": snapshot["output_tokens"],
+            "cached_input_tokens": cached_input_tokens,
+            "reasoning_tokens": reasoning_tokens,
+            "input_per_token_usd": round(input_per_token, 10),
+            "output_per_token_usd": round(output_per_token, 10),
+            "input_cost_usd": round(snapshot["input_tokens"] * input_per_token, 6),
+            "output_cost_usd": round(snapshot["output_tokens"] * output_per_token, 6),
+            "total_cost_usd": round(cost_usd, 6),
+            "cached_input_pricing_mode": "raw_input_equivalent",
+        }
 
     return snapshot
 

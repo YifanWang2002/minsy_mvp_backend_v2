@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import time
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -422,63 +427,91 @@ async def get_billing_overview(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BillingOverviewResponse:
-    normalized_tier = _normalize_tier(user.current_tier)
-
-    subscription = await db.scalar(
-        select(BillingSubscription)
-        .where(BillingSubscription.user_id == user.id)
-        .order_by(
-            BillingSubscription.updated_at.desc(), BillingSubscription.created_at.desc()
-        )
-        .limit(1)
-    )
-
-    if subscription is None:
-        subscription_response = BillingSubscriptionResponse(
-            status="inactive",
-            tier=normalized_tier,
-            stripe_subscription_id=None,
-            stripe_price_id=None,
-            current_period_end=None,
-            cancel_at_period_end=False,
-            pending_tier=None,
-            pending_price_id=None,
-        )
-    else:
-        subscription_response = BillingSubscriptionResponse(
-            status=subscription.status,
-            tier=_normalize_tier(subscription.tier),
-            stripe_subscription_id=subscription.stripe_subscription_id,
-            stripe_price_id=subscription.stripe_price_id,
-            current_period_end=subscription.current_period_end,
-            cancel_at_period_end=subscription.cancel_at_period_end,
-            pending_tier=_normalize_tier(subscription.pending_tier)
-            if subscription.pending_tier
-            else None,
-            pending_price_id=subscription.pending_price_id,
-        )
-
-    quota_service = QuotaService(UsageService(db))
-    snapshots = await quota_service.list_usage_overview(
+    return await _build_billing_overview_response(
+        db=db,
         user_id=user.id,
-        tier=normalized_tier,
+        current_tier=user.current_tier,
     )
-    quota_rows = [
-        BillingQuotaMetricResponse(
-            metric=item.metric,
-            used=item.used,
-            limit=item.limit,
-            remaining=item.remaining,
-            reset_at=item.reset_at,
-        )
-        for item in snapshots
-    ]
 
-    return BillingOverviewResponse(
-        tier=normalized_tier,
-        subscription=subscription_response,
-        quotas=quota_rows,
-        cost_model=settings.billing_cost_model,
+
+@router.get("/overview/stream")
+async def stream_billing_overview(
+    request: Request,
+    poll_seconds: float = Query(default=3.0, ge=0.5, le=30.0),
+    heartbeat_seconds: float = Query(default=90.0, ge=15.0, le=300.0),
+    max_events: int | None = Query(default=None, ge=1, le=2000),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Push billing overview snapshots whenever quota/tier state changes."""
+
+    async def _event_stream() -> AsyncIterator[str]:
+        emitted = 0
+        event_seq = 0
+        last_signature: str | None = None
+        last_heartbeat_at = time.monotonic()
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            db.expire_all()
+            current_tier = await db.scalar(
+                select(User.current_tier).where(User.id == user.id)
+            )
+            if current_tier is None:
+                break
+
+            overview = await _build_billing_overview_response(
+                db=db,
+                user_id=user.id,
+                current_tier=str(current_tier),
+            )
+            signature = _billing_overview_signature(overview)
+            now_iso = datetime.now(UTC).isoformat()
+
+            if signature != last_signature:
+                event_seq += 1
+                event_name = "snapshot" if last_signature is None else "quota_changed"
+                payload = {
+                    "server_time": now_iso,
+                    "overview": overview.model_dump(mode="json"),
+                }
+                yield (
+                    f"id: {event_seq}\n"
+                    f"event: {event_name}\n"
+                    f"data: {json.dumps(payload, ensure_ascii=True)}\n\n"
+                )
+                last_signature = signature
+                last_heartbeat_at = time.monotonic()
+                emitted += 1
+                if max_events is not None and emitted >= max_events:
+                    break
+            else:
+                now_monotonic = time.monotonic()
+                if now_monotonic - last_heartbeat_at >= heartbeat_seconds:
+                    heartbeat = {"server_time": now_iso}
+                    yield f"event: heartbeat\ndata: {json.dumps(heartbeat, ensure_ascii=True)}\n\n"
+                    last_heartbeat_at = now_monotonic
+                    emitted += 1
+                    if max_events is not None and emitted >= max_events:
+                        break
+
+            # Do not keep idle-in-transaction sessions during SSE sleeps.
+            await db.rollback()
+            await asyncio.sleep(poll_seconds)
+
+        if max_events is not None:
+            yield f"event: stream_end\ndata: {json.dumps({'events': emitted}, ensure_ascii=True)}\n\n"
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -558,6 +591,96 @@ async def billing_return_page(request: Request) -> HTMLResponse:
         app_return_url=app_return_url,
     )
     return HTMLResponse(content=html, status_code=status.HTTP_200_OK)
+
+
+async def _build_billing_overview_response(
+    *,
+    db: AsyncSession,
+    user_id,
+    current_tier: str | None,
+) -> BillingOverviewResponse:
+    normalized_tier = _normalize_tier(current_tier)
+
+    subscription = await db.scalar(
+        select(BillingSubscription)
+        .where(BillingSubscription.user_id == user_id)
+        .order_by(
+            BillingSubscription.updated_at.desc(),
+            BillingSubscription.created_at.desc(),
+        )
+        .limit(1)
+    )
+
+    if subscription is None:
+        subscription_response = BillingSubscriptionResponse(
+            status="inactive",
+            tier=normalized_tier,
+            stripe_subscription_id=None,
+            stripe_price_id=None,
+            current_period_end=None,
+            cancel_at_period_end=False,
+            pending_tier=None,
+            pending_price_id=None,
+        )
+    else:
+        subscription_response = BillingSubscriptionResponse(
+            status=subscription.status,
+            tier=_normalize_tier(subscription.tier),
+            stripe_subscription_id=subscription.stripe_subscription_id,
+            stripe_price_id=subscription.stripe_price_id,
+            current_period_end=subscription.current_period_end,
+            cancel_at_period_end=subscription.cancel_at_period_end,
+            pending_tier=_normalize_tier(subscription.pending_tier)
+            if subscription.pending_tier
+            else None,
+            pending_price_id=subscription.pending_price_id,
+        )
+
+    quota_service = QuotaService(UsageService(db))
+    snapshots = await quota_service.list_usage_overview(
+        user_id=user_id,
+        tier=normalized_tier,
+    )
+    quota_rows = [
+        BillingQuotaMetricResponse(
+            metric=item.metric,
+            used=item.used,
+            limit=item.limit,
+            remaining=item.remaining,
+            reset_at=item.reset_at,
+        )
+        for item in snapshots
+    ]
+
+    return BillingOverviewResponse(
+        tier=normalized_tier,
+        subscription=subscription_response,
+        quotas=quota_rows,
+        cost_model=settings.billing_cost_model,
+    )
+
+
+def _billing_overview_signature(overview: BillingOverviewResponse) -> str:
+    payload = {
+        "tier": overview.tier,
+        "subscription": {
+            "status": overview.subscription.status,
+            "tier": overview.subscription.tier,
+            "pending_tier": overview.subscription.pending_tier,
+            "cancel_at_period_end": overview.subscription.cancel_at_period_end,
+        },
+        "quotas": [
+            {
+                "metric": row.metric,
+                "used": int(row.used),
+                "limit": int(row.limit),
+                "remaining": int(row.remaining),
+                "reset_at": row.reset_at.isoformat() if row.reset_at else None,
+            }
+            for row in overview.quotas
+        ],
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _resolve_request_language(request: Request) -> str:
