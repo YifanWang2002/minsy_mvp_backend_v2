@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -19,6 +21,7 @@ _UPDATABLE_FIELDS: frozenset[str] = frozenset(
         "approval_channel",
         "approval_timeout_seconds",
         "approval_scope",
+        "deploy_defaults",
     }
 )
 
@@ -30,6 +33,7 @@ class TradingPreferenceView:
     approval_channel: str
     approval_timeout_seconds: int
     approval_scope: str
+    deploy_defaults: dict[str, Any]
 
     @property
     def open_approval_required(self) -> bool:
@@ -59,12 +63,17 @@ class TradingPreferenceService:
 
     async def get_view(self, *, user_id: UUID) -> TradingPreferenceView:
         row = await self.get_or_create(user_id=user_id)
+        try:
+            deploy_defaults = _normalize_deploy_defaults(row.deploy_defaults)
+        except ValueError:
+            deploy_defaults = {}
         return TradingPreferenceView(
             user_id=row.user_id,
             execution_mode=str(row.execution_mode),
             approval_channel=str(row.approval_channel),
             approval_timeout_seconds=int(row.approval_timeout_seconds),
             approval_scope=str(row.approval_scope),
+            deploy_defaults=deploy_defaults,
         )
 
     async def update(self, *, user_id: UUID, updates: dict[str, object]) -> TradingPreferenceView:
@@ -99,6 +108,90 @@ class TradingPreferenceService:
                     raise ValueError("approval_timeout_seconds must be > 0.")
                 row.approval_timeout_seconds = timeout
                 continue
+            if key == "deploy_defaults":
+                row.deploy_defaults = _normalize_deploy_defaults(raw_value)
+                continue
 
         await self.db.flush()
         return await self.get_view(user_id=user_id)
+
+
+def _normalize_deploy_defaults(raw_value: Any) -> dict[str, Any]:
+    if raw_value is None:
+        return {}
+    if not isinstance(raw_value, dict):
+        raise ValueError("deploy_defaults must be a JSON object.")
+
+    normalized: dict[str, Any] = {}
+
+    capital = _normalize_decimal_text(raw_value.get("capital_allocated"), allow_zero=False)
+    if capital is not None:
+        normalized["capital_allocated"] = capital
+
+    max_position_size_pct = _normalize_percentage(raw_value.get("max_position_size_pct"))
+    if max_position_size_pct is not None:
+        normalized["max_position_size_pct"] = max_position_size_pct
+
+    stop_loss_pct = _normalize_percentage(raw_value.get("stop_loss_pct"), allow_zero=True)
+    if stop_loss_pct is not None:
+        normalized["stop_loss_pct"] = stop_loss_pct
+
+    max_daily_drawdown_pct = _normalize_percentage(
+        raw_value.get("max_daily_drawdown_pct"),
+        allow_zero=True,
+    )
+    if max_daily_drawdown_pct is not None:
+        normalized["max_daily_drawdown_pct"] = max_daily_drawdown_pct
+
+    auto_start = _normalize_bool(raw_value.get("auto_start"))
+    if auto_start is not None:
+        normalized["auto_start"] = auto_start
+
+    risk_limits = raw_value.get("risk_limits")
+    if isinstance(risk_limits, dict):
+        normalized["risk_limits"] = dict(risk_limits)
+
+    return normalized
+
+
+def _normalize_decimal_text(value: Any, *, allow_zero: bool) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("deploy_defaults.capital_allocated must be a valid decimal.") from exc
+    if parsed < 0 or (parsed == 0 and not allow_zero):
+        comparator = ">= 0" if allow_zero else "> 0"
+        raise ValueError(f"deploy_defaults.capital_allocated must be {comparator}.")
+    return format(parsed.normalize(), "f")
+
+
+def _normalize_percentage(value: Any, *, allow_zero: bool = False) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("deploy_defaults percentage fields must be numeric.") from exc
+    if parsed < 0 or (parsed == 0 and not allow_zero):
+        comparator = ">= 0" if allow_zero else "> 0"
+        raise ValueError(f"deploy_defaults percentage fields must be {comparator}.")
+    if parsed > 100:
+        raise ValueError("deploy_defaults percentage fields must be <= 100.")
+    return round(parsed, 6)
+
+
+def _normalize_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return None

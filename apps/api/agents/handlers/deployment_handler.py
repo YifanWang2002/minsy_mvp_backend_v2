@@ -15,6 +15,11 @@ from apps.api.agents.handler_protocol import (
     PromptPieces,
 )
 from apps.api.agents.phases import Phase
+from apps.api.agents.deployment_defaults import (
+    hydrate_deployment_profile_defaults,
+    merge_risk_limits_with_defaults,
+    normalize_decimal_text,
+)
 from apps.api.agents.skills.deployment_skills import (
     REQUIRED_FIELDS,
     VALID_BROKER_READINESS_VALUES,
@@ -24,8 +29,10 @@ from apps.api.agents.skills.deployment_skills import (
     build_deployment_static_instructions,
 )
 from packages.domain.trading.broker_capability_policy import capability_supports_market
+from packages.domain.trading.services.trading_preference_service import (
+    TradingPreferenceService,
+)
 from packages.infra.trading.broker_account_store import ensure_builtin_sandbox_account
-from packages.shared_settings.schema.settings import settings
 
 
 class DeploymentHandler:
@@ -55,6 +62,11 @@ class DeploymentHandler:
         phase_data = ctx.session_artifacts.get(Phase.DEPLOYMENT.value, {})
         profile = dict(phase_data.get("profile", {}))
         runtime_state = dict(phase_data.get("runtime", {}))
+        profile, runtime_state = hydrate_deployment_profile_defaults(
+            profile=profile,
+            runtime_state=runtime_state,
+            deploy_defaults=runtime_state.get("deploy_defaults"),
+        )
         missing = self._compute_missing(profile)
 
         instructions = build_deployment_static_instructions(language=ctx.language)
@@ -71,8 +83,6 @@ class DeploymentHandler:
         return PromptPieces(
             instructions=instructions,
             enriched_input=state_block + user_message,
-            model=settings.openai_response_model,
-            reasoning={"effort": "none"},
         )
 
     async def post_process(
@@ -88,6 +98,17 @@ class DeploymentHandler:
         )
         profile = self._ensure_profile_defaults(dict(phase_data.get("profile", {})))
         runtime_state = self._ensure_runtime_defaults(dict(phase_data.get("runtime", {})))
+        preference_view = await TradingPreferenceService(db).get_view(user_id=ctx.user_id)
+        deploy_defaults = (
+            dict(preference_view.deploy_defaults)
+            if isinstance(preference_view.deploy_defaults, dict)
+            else {}
+        )
+        profile, runtime_state = hydrate_deployment_profile_defaults(
+            profile=profile,
+            runtime_state=runtime_state,
+            deploy_defaults=deploy_defaults,
+        )
         previous_confirmation = self._normalize_confirmation_status(
             profile.get("deployment_confirmation_status")
         )
@@ -125,6 +146,11 @@ class DeploymentHandler:
             choice_selection=ctx.turn_context.get("choice_selection"),
             db=db,
             user_id=ctx.user_id,
+        )
+        profile, runtime_state = hydrate_deployment_profile_defaults(
+            profile=profile,
+            runtime_state=runtime_state,
+            deploy_defaults=deploy_defaults,
         )
         self._sync_selected_broker_details(profile=profile, runtime_state=runtime_state)
 
@@ -166,6 +192,8 @@ class DeploymentHandler:
             if isinstance(profile.get("planned_risk_limits"), dict)
             else {}
         )
+        if deploy_defaults:
+            runtime_state["deploy_defaults"] = deploy_defaults
 
         missing = self._compute_missing(profile)
 
@@ -754,6 +782,8 @@ class DeploymentHandler:
 
         if self._normalize_broker_readiness_status(profile.get("broker_readiness_status")) == "ready":
             if self._normalize_uuid_text(profile.get("selected_broker_account_id")) is not None:
+                if not self._has_deployment_inputs_ready(profile):
+                    return "blocked"
                 return "ready"
         return "blocked"
 
@@ -816,6 +846,11 @@ class DeploymentHandler:
                 blockers = [str(item).strip() for item in raw_blockers if str(item).strip()]
         if blockers:
             summary["blockers"] = blockers
+        if not self._has_deployment_inputs_ready(profile):
+            summary.setdefault("blockers", [])
+            summary["blockers"].append(
+                "Deployment defaults are incomplete. Capital and position size defaults must be prepared before execution."
+            )
         return summary
 
     def _build_broker_choice_prompt(
@@ -923,6 +958,7 @@ class DeploymentHandler:
                 profile.get("deployment_confirmation_status")
             )
             == "confirmed"
+            and self._has_deployment_inputs_ready(profile)
         )
 
     def _can_accept_confirmation(self, profile: dict[str, Any]) -> bool:
@@ -931,6 +967,7 @@ class DeploymentHandler:
             == "ready"
             and self._normalize_uuid_text(profile.get("selected_broker_account_id"))
             is not None
+            and self._has_deployment_inputs_ready(profile)
         )
 
     def _find_selected_broker_account(
@@ -1027,10 +1064,25 @@ class DeploymentHandler:
         normalized["deployment_confirmation_status"] = self._normalize_confirmation_status(
             normalized.get("deployment_confirmation_status")
         )
-        normalized.setdefault("planned_capital_allocated", "0")
-        normalized.setdefault("planned_auto_start", True)
-        if not isinstance(normalized.get("planned_risk_limits"), dict):
-            normalized["planned_risk_limits"] = {}
+        normalized["planned_capital_allocated"] = (
+            normalize_decimal_text(
+                normalized.get("planned_capital_allocated"),
+                allow_zero=False,
+            )
+            or "10000"
+        )
+        normalized_auto_start = _coerce_bool(normalized.get("planned_auto_start"))
+        normalized["planned_auto_start"] = (
+            normalized_auto_start if normalized_auto_start is not None else True
+        )
+        normalized["planned_risk_limits"] = merge_risk_limits_with_defaults(
+            base_risk_limits=(
+                normalized.get("planned_risk_limits")
+                if isinstance(normalized.get("planned_risk_limits"), dict)
+                else {}
+            ),
+            deploy_defaults=normalized.get("deploy_defaults"),
+        )
         return normalized
 
     def _ensure_runtime_defaults(self, runtime_state: dict[str, Any]) -> dict[str, Any]:
@@ -1038,12 +1090,67 @@ class DeploymentHandler:
         normalized.setdefault("deployment_status", "blocked")
         normalized.setdefault("broker_readiness_status", "unknown")
         normalized.setdefault("deployment_confirmation_status", "pending")
-        normalized.setdefault("planned_capital_allocated", "0")
-        normalized.setdefault("planned_auto_start", True)
-        normalized.setdefault("planned_risk_limits", {})
+        normalized["planned_capital_allocated"] = (
+            normalize_decimal_text(
+                normalized.get("planned_capital_allocated"),
+                allow_zero=False,
+            )
+            or "10000"
+        )
+        normalized_auto_start = _coerce_bool(normalized.get("planned_auto_start"))
+        normalized["planned_auto_start"] = (
+            normalized_auto_start if normalized_auto_start is not None else True
+        )
+        normalized["planned_risk_limits"] = merge_risk_limits_with_defaults(
+            base_risk_limits=(
+                normalized.get("planned_risk_limits")
+                if isinstance(normalized.get("planned_risk_limits"), dict)
+                else {}
+            ),
+            deploy_defaults=normalized.get("deploy_defaults"),
+        )
         normalized.setdefault("deployment_summary_snapshot", {})
         normalized.setdefault("auto_execute_pending", False)
         return normalized
+
+    def _has_deployment_inputs_ready(self, profile: dict[str, Any]) -> bool:
+        capital = normalize_decimal_text(
+            profile.get("planned_capital_allocated"),
+            allow_zero=False,
+        )
+        if capital is None:
+            return False
+        risk_limits = (
+            dict(profile.get("planned_risk_limits"))
+            if isinstance(profile.get("planned_risk_limits"), dict)
+            else {}
+        )
+        try:
+            order_qty = float(risk_limits.get("order_qty"))
+        except (TypeError, ValueError):
+            order_qty = 0.0
+        if order_qty > 0:
+            return True
+
+        try:
+            max_position_pct = float(risk_limits.get("max_position_size_pct"))
+        except (TypeError, ValueError):
+            max_position_pct = 0.0
+        if max_position_pct > 0:
+            return True
+
+        position_sizing = risk_limits.get("position_sizing_override")
+        if not isinstance(position_sizing, dict):
+            return False
+        mode = str(position_sizing.get("mode") or "").strip().lower()
+        if mode != "pct_equity":
+            return False
+        pct = position_sizing.get("pct")
+        try:
+            pct_value = float(pct)
+        except (TypeError, ValueError):
+            return False
+        return pct_value > 0
 
 
 def _coerce_json_object(value: Any) -> dict[str, Any] | None:

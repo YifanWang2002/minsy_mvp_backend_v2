@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from packages.infra.db.models.base import Base
@@ -66,6 +67,12 @@ class TradingPreference(Base):
         nullable=False,
         default="open_only",
         server_default="open_only",
+    )
+    deploy_defaults: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
     )
 
     user: Mapped[User] = relationship(back_populates="trading_preference")

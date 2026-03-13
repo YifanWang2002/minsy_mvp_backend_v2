@@ -511,6 +511,36 @@ async def _ensure_user_settings_schema() -> None:
         )
 
 
+async def _ensure_trading_preferences_schema() -> None:
+    """Ensure trading_preferences includes deploy_defaults JSON payload."""
+    assert engine is not None
+    async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "ALTER TABLE trading_preferences "
+                "ADD COLUMN IF NOT EXISTS deploy_defaults JSONB",
+            ),
+        )
+        await connection.execute(
+            text(
+                "UPDATE trading_preferences "
+                "SET deploy_defaults = COALESCE(deploy_defaults, '{}'::jsonb)",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE trading_preferences "
+                "ALTER COLUMN deploy_defaults SET DEFAULT '{}'::jsonb",
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE trading_preferences "
+                "ALTER COLUMN deploy_defaults SET NOT NULL",
+            ),
+        )
+
+
 async def _ensure_billing_schema() -> None:
     """Ensure billing tables include replay-safe webhook and usage idempotency constraints."""
     assert engine is not None
@@ -650,6 +680,7 @@ async def init_postgres(*, ensure_schema: bool = True) -> None:
         await _ensure_broker_account_audit_log_constraint()
         await _ensure_user_billing_columns()
         await _ensure_user_settings_schema()
+        await _ensure_trading_preferences_schema()
         await _ensure_billing_schema()
         await _ensure_sessions_phase_constraint()
         await _ensure_sessions_archival_columns()
@@ -688,6 +719,8 @@ async def init_db(drop_existing: bool = False) -> None:
     await _ensure_broker_account_schema()
     await _ensure_broker_account_audit_log_constraint()
     await _ensure_user_billing_columns()
+    await _ensure_user_settings_schema()
+    await _ensure_trading_preferences_schema()
     await _ensure_billing_schema()
     await _ensure_sessions_phase_constraint()
     await _ensure_sessions_archival_columns()

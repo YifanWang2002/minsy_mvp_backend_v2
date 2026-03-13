@@ -145,6 +145,36 @@ def _non_negative_decimal(value: Any) -> Decimal:
     return parsed.quantize(Decimal("0.01"))
 
 
+def _positive_float_or_none(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _normalize_deployment_risk_limits(
+    risk_limits: dict[str, Any] | None,
+) -> dict[str, Any]:
+    normalized = dict(risk_limits) if isinstance(risk_limits, dict) else {}
+    if isinstance(normalized.get("position_sizing_override"), dict):
+        return normalized
+
+    max_position_size_pct = _positive_float_or_none(normalized.get("max_position_size_pct"))
+    if max_position_size_pct is None:
+        return normalized
+
+    normalized["position_sizing_override"] = {
+        "mode": "pct_equity",
+        "pct": round(max_position_size_pct / 100.0, 6),
+    }
+    return normalized
+
+
 def _normalize_reservation_statuses(
     statuses: tuple[str, ...] | list[str] | None,
 ) -> tuple[str, ...]:
@@ -738,6 +768,7 @@ async def create_deployment(
         auto_resolution=auto_capital_resolution,
     )
     resolved_capital_allocated = capital_resolution.amount
+    resolved_risk_limits = _normalize_deployment_risk_limits(risk_limits)
     resolved_runtime_state = dict(runtime_state) if isinstance(runtime_state, dict) else {}
     resolved_runtime_state["capital_resolution"] = {
         "source": capital_resolution.source,
@@ -756,7 +787,7 @@ async def create_deployment(
         user_id=user_id,
         mode=mode,
         status="pending",
-        risk_limits=risk_limits,
+        risk_limits=resolved_risk_limits,
         capital_allocated=resolved_capital_allocated,
     )
     db.add(deployment)
