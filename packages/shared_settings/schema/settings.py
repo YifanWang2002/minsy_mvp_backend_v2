@@ -17,6 +17,9 @@ from pydantic_settings import (
 )
 
 _ALLOWED_ENV_PROFILES: frozenset[str] = frozenset({"dev", "prod"})
+_ALLOWED_INCREMENTAL_EXECUTION_MODES: frozenset[str] = frozenset(
+    {"disabled", "local_collector", "remote_importer"}
+)
 
 
 def _normalize_env_profile(raw: str | None) -> str:
@@ -581,6 +584,106 @@ class Settings(BaseSettings):
     market_data_sync_request_start_interval_seconds: float = Field(
         default=0.15,
         alias="MARKET_DATA_SYNC_REQUEST_START_INTERVAL_SECONDS",
+    )
+    market_data_incremental_execution_mode: str = Field(
+        default="disabled",
+        alias="MARKET_DATA_INCREMENTAL_EXECUTION_MODE",
+    )
+    market_data_incremental_sync_enabled: bool = Field(
+        default=False,
+        alias="MARKET_DATA_INCREMENTAL_SYNC_ENABLED",
+    )
+    market_data_incremental_sync_cron_hour: int = Field(
+        default=4,
+        alias="MARKET_DATA_INCREMENTAL_SYNC_CRON_HOUR",
+    )
+    market_data_incremental_sync_cron_minute: int = Field(
+        default=30,
+        alias="MARKET_DATA_INCREMENTAL_SYNC_CRON_MINUTE",
+    )
+    market_data_incremental_receiver_enabled: bool = Field(
+        default=True,
+        alias="MARKET_DATA_INCREMENTAL_RECEIVER_ENABLED",
+    )
+    market_data_incremental_remote_base_url: str = Field(
+        default="",
+        alias="MARKET_DATA_INCREMENTAL_REMOTE_BASE_URL",
+    )
+    market_data_incremental_remote_timeout_seconds: float = Field(
+        default=20.0,
+        alias="MARKET_DATA_INCREMENTAL_REMOTE_TIMEOUT_SECONDS",
+    )
+    market_data_incremental_hmac_key_id: str = Field(
+        default="local-sync",
+        alias="MARKET_DATA_INCREMENTAL_HMAC_KEY_ID",
+    )
+    market_data_incremental_hmac_secret: str = Field(
+        default="",
+        alias="MARKET_DATA_INCREMENTAL_HMAC_SECRET",
+    )
+    market_data_incremental_hmac_max_skew_seconds: int = Field(
+        default=300,
+        alias="MARKET_DATA_INCREMENTAL_HMAC_MAX_SKEW_SECONDS",
+    )
+    market_data_incremental_gcs_bucket: str = Field(
+        default="",
+        alias="MARKET_DATA_INCREMENTAL_GCS_BUCKET",
+    )
+    market_data_incremental_gcs_prefix: str = Field(
+        default="incremental",
+        alias="MARKET_DATA_INCREMENTAL_GCS_PREFIX",
+    )
+    market_data_incremental_safety_lag_minutes: int = Field(
+        default=2,
+        alias="MARKET_DATA_INCREMENTAL_SAFETY_LAG_MINUTES",
+    )
+    ibkr_gateway_host: str = Field(
+        default="host.docker.internal",
+        alias="IBKR_GATEWAY_HOST",
+    )
+    ibkr_gateway_port: int = Field(
+        default=4002,
+        alias="IBKR_GATEWAY_PORT",
+    )
+    ibkr_gateway_client_id: int = Field(
+        default=410,
+        alias="IBKR_GATEWAY_CLIENT_ID",
+    )
+    ibkr_gateway_timeout_seconds: float = Field(
+        default=10.0,
+        alias="IBKR_GATEWAY_TIMEOUT_SECONDS",
+    )
+    ibkr_forex_what_to_show: str = Field(
+        default="MIDPOINT",
+        alias="IBKR_FOREX_WHAT_TO_SHOW",
+    )
+    ibkr_futures_what_to_show: str = Field(
+        default="TRADES",
+        alias="IBKR_FUTURES_WHAT_TO_SHOW",
+    )
+    ibkr_futures_exchange_map_json: dict[str, str] = Field(
+        default_factory=dict,
+        alias="IBKR_FUTURES_EXCHANGE_MAP_JSON",
+    )
+    pre_strategy_regime_lookback_bars: int = Field(
+        default=500,
+        alias="PRE_STRATEGY_REGIME_LOOKBACK_BARS",
+    )
+    pre_strategy_regime_min_bars: int = Field(
+        default=150,
+        alias="PRE_STRATEGY_REGIME_MIN_BARS",
+    )
+    pre_strategy_regime_cache_ttl_seconds: int = Field(
+        default=600,
+        alias="PRE_STRATEGY_REGIME_CACHE_TTL_SECONDS",
+    )
+    pre_strategy_regime_pivot_window: int = Field(
+        default=5,
+        alias="PRE_STRATEGY_REGIME_PIVOT_WINDOW",
+    )
+    pre_strategy_regime_image_max_bars: int = Field(
+        default=240,
+        alias="PRE_STRATEGY_REGIME_IMAGE_MAX_BARS",
     )
     ccxt_market_data_enabled: bool = Field(
         default=True,
@@ -1187,6 +1290,115 @@ class Settings(BaseSettings):
                 "MARKET_DATA_SYNC_REQUEST_START_INTERVAL_SECONDS must be >= 0."
             )
         return float(value)
+
+    @field_validator("market_data_incremental_execution_mode")
+    @classmethod
+    def _validate_market_data_incremental_execution_mode(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in _ALLOWED_INCREMENTAL_EXECUTION_MODES:
+            allowed = ", ".join(sorted(_ALLOWED_INCREMENTAL_EXECUTION_MODES))
+            raise ValueError(
+                "MARKET_DATA_INCREMENTAL_EXECUTION_MODE must be one of: "
+                f"{allowed}."
+            )
+        return normalized
+
+    @field_validator(
+        "market_data_incremental_sync_cron_hour",
+        "market_data_incremental_sync_cron_minute",
+    )
+    @classmethod
+    def _validate_market_data_incremental_cron(cls, value: int, info) -> int:
+        raw = int(value)
+        if info.field_name == "market_data_incremental_sync_cron_hour":
+            if raw < 0 or raw > 23:
+                raise ValueError(
+                    "MARKET_DATA_INCREMENTAL_SYNC_CRON_HOUR must be in [0, 23]."
+                )
+        else:
+            if raw < 0 or raw > 59:
+                raise ValueError(
+                    "MARKET_DATA_INCREMENTAL_SYNC_CRON_MINUTE must be in [0, 59]."
+                )
+        return raw
+
+    @field_validator(
+        "market_data_incremental_remote_timeout_seconds",
+        "ibkr_gateway_timeout_seconds",
+    )
+    @classmethod
+    def _validate_market_data_incremental_timeouts(cls, value: float) -> float:
+        if float(value) <= 0:
+            raise ValueError("Incremental timeout settings must be > 0.")
+        return float(value)
+
+    @field_validator("market_data_incremental_hmac_max_skew_seconds")
+    @classmethod
+    def _validate_market_data_incremental_hmac_max_skew(cls, value: int) -> int:
+        raw = int(value)
+        if raw < 1:
+            raise ValueError(
+                "MARKET_DATA_INCREMENTAL_HMAC_MAX_SKEW_SECONDS must be >= 1."
+            )
+        return raw
+
+    @field_validator("market_data_incremental_safety_lag_minutes")
+    @classmethod
+    def _validate_market_data_incremental_safety_lag_minutes(cls, value: int) -> int:
+        raw = int(value)
+        if raw < 0:
+            raise ValueError("MARKET_DATA_INCREMENTAL_SAFETY_LAG_MINUTES must be >= 0.")
+        return raw
+
+    @field_validator("ibkr_gateway_port")
+    @classmethod
+    def _validate_ibkr_gateway_port(cls, value: int) -> int:
+        raw = int(value)
+        if raw < 1 or raw > 65535:
+            raise ValueError("IBKR_GATEWAY_PORT must be in [1, 65535].")
+        return raw
+
+    @field_validator("ibkr_gateway_client_id")
+    @classmethod
+    def _validate_ibkr_gateway_client_id(cls, value: int) -> int:
+        raw = int(value)
+        if raw < 0:
+            raise ValueError("IBKR_GATEWAY_CLIENT_ID must be >= 0.")
+        return raw
+
+    @field_validator("ibkr_forex_what_to_show", "ibkr_futures_what_to_show")
+    @classmethod
+    def _validate_ibkr_what_to_show(cls, value: str) -> str:
+        normalized = str(value).strip().upper()
+        if not normalized:
+            raise ValueError("IBKR whatToShow values cannot be empty.")
+        return normalized
+
+    @field_validator("ibkr_futures_exchange_map_json", mode="before")
+    @classmethod
+    def _parse_ibkr_futures_exchange_map_json(cls, value: object) -> object:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {}
+            parsed = json.loads(text)
+            if not isinstance(parsed, dict):
+                raise ValueError("IBKR_FUTURES_EXCHANGE_MAP_JSON must be a JSON object.")
+            return parsed
+        return value
+
+    @field_validator(
+        "pre_strategy_regime_lookback_bars",
+        "pre_strategy_regime_min_bars",
+        "pre_strategy_regime_cache_ttl_seconds",
+        "pre_strategy_regime_pivot_window",
+        "pre_strategy_regime_image_max_bars",
+    )
+    @classmethod
+    def _validate_pre_strategy_regime_numeric_settings(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("PRE_STRATEGY regime numeric settings must be >= 1.")
+        return value
 
     @field_validator("ccxt_market_data_timeout_seconds")
     @classmethod

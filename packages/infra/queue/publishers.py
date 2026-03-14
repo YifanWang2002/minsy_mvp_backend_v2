@@ -118,6 +118,15 @@ def enqueue_market_data_sync_job(job_id: UUID | str) -> str:
     return str(result.id)
 
 
+def enqueue_market_data_incremental_import_job(job_id: UUID | str) -> str:
+    result = celery_app.send_task(
+        "market_data.import_incremental_batch",
+        args=(str(job_id),),
+        queue="market_data",
+    )
+    return str(result.id)
+
+
 def configure_default_job_queue_ports() -> None:
     """Wire domain queue ports to Celery enqueue functions."""
 

@@ -11,18 +11,29 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from sqlalchemy import select
 
+from apps.worker.common.celery_base import celery_app
+from packages.domain.market_data.incremental.local_sync_service import (
+    run_local_incremental_sync,
+)
+from packages.domain.market_data.incremental.remote_import_service import (
+    import_incremental_manifest,
+)
 from packages.domain.market_data.refresh_dedupe import reserve_market_data_refresh_slot
-from packages.shared_settings.schema.settings import settings
-from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
 from packages.domain.market_data.runtime import market_data_runtime
 from packages.domain.market_data.sync_service import (
     execute_market_data_sync_job_with_fresh_session,
 )
 from packages.infra.db import session as db_module
 from packages.infra.db.models.market_data_error_event import MarketDataErrorEvent
+from packages.infra.db.models.market_data_incremental_import_job import (
+    MarketDataIncrementalImportJob,
+)
 from packages.infra.observability.logger import logger
-from apps.worker.common.celery_base import celery_app
+from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
+from packages.infra.providers.trading.adapters.base import QuoteSnapshot
+from packages.shared_settings.schema.settings import settings
 
 
 def _normalize_error_info(exc: Exception) -> tuple[str, int | None, str]:
@@ -119,6 +130,26 @@ def _bars_are_ready(
         timeframe=timeframe,
         bars=bars,
     )
+
+
+def _ordered_unique_bars(rows: list[Any]) -> list[Any]:
+    deduped: dict[int, Any] = {}
+    for row in rows:
+        ts = getattr(row, "timestamp", None)
+        if not isinstance(ts, datetime):
+            continue
+        deduped[int(ts.astimezone(UTC).timestamp() * 1000)] = row
+    return [deduped[key] for key in sorted(deduped)]
+
+
+def _merge_history_rows(*, target_bars: int, groups: list[list[Any]]) -> list[Any]:
+    merged: list[Any] = []
+    for rows in groups:
+        merged.extend(rows)
+    ordered = _ordered_unique_bars(merged)
+    if len(ordered) > target_bars:
+        ordered = ordered[-target_bars:]
+    return ordered
 
 
 def _aggregate_bars_from_source(
@@ -384,10 +415,102 @@ async def _ensure_symbol_history_once(
     provider = AlpacaRestProvider()
     try:
         summary: dict[str, Any] = {}
+        requested_tf = _normalize_timeframe(requested_timeframe)
+        target_1m = _history_target_bars(
+            "1m",
+            min_bars=min_bars if requested_tf == "1m" else None,
+        )
+        existing_1m = market_data_runtime.get_recent_bars(
+            market=market,
+            symbol=symbol,
+            timeframe="1m",
+            limit=target_1m,
+        )
+
+        base_1m = _ordered_unique_bars(existing_1m)
+        if _bars_are_ready(
+            market=market,
+            timeframe="1m",
+            bars=base_1m,
+            target_bars=target_1m,
+        ):
+            hydrated_1m = market_data_runtime.restore_bars(
+                market=market,
+                symbol=symbol,
+                timeframe="1m",
+                bars=base_1m,
+            )
+            base_1m = _ordered_unique_bars(hydrated_1m)
+            summary["1m"] = {
+                "status": "ready",
+                "bars": len(base_1m),
+                "target_bars": target_1m,
+                "source": "runtime",
+            }
+        else:
+            try:
+                fetched_1m = await _fetch_timeframe_history(
+                    provider=provider,
+                    market=market,
+                    symbol=symbol,
+                    timeframe="1m",
+                    target_bars=target_1m,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[market-data-worker] history warmup failed market=%s symbol=%s timeframe=%s error=%s",
+                    market,
+                    symbol,
+                    "1m",
+                    type(exc).__name__,
+                )
+                await _record_market_data_error_event(
+                    market=market,
+                    symbol=symbol,
+                    endpoint="fetch_recent_bars",
+                    exc=exc,
+                    metadata={"timeframe": "1m", "target_bars": target_1m},
+                )
+                hydrated_1m = market_data_runtime.restore_bars(
+                    market=market,
+                    symbol=symbol,
+                    timeframe="1m",
+                    bars=existing_1m,
+                )
+                base_1m = _ordered_unique_bars(hydrated_1m)
+                summary["1m"] = {
+                    "status": "error",
+                    "bars": len(base_1m),
+                    "target_bars": target_1m,
+                    "source": "runtime",
+                }
+            else:
+                merged_1m = _merge_history_rows(
+                    target_bars=target_1m,
+                    groups=[existing_1m, fetched_1m],
+                )
+                hydrated_1m = market_data_runtime.hydrate_bars(
+                    market=market,
+                    symbol=symbol,
+                    timeframe="1m",
+                    bars=merged_1m,
+                )
+                base_1m = _ordered_unique_bars(hydrated_1m)
+                summary["1m"] = {
+                    "status": "hydrated" if hydrated_1m else "empty",
+                    "bars": len(base_1m),
+                    "target_bars": target_1m,
+                    "source": "direct",
+                }
+
         for timeframe in _history_timeframes(requested_timeframe):
+            if timeframe == "1m":
+                continue
+
+            is_requested_timeframe = timeframe == requested_tf
             target_bars = _history_target_bars(
                 timeframe,
-                min_bars=min_bars if timeframe == _normalize_timeframe(requested_timeframe) else None,
+                min_bars=min_bars if is_requested_timeframe else None,
             )
             existing = market_data_runtime.get_recent_bars(
                 market=market,
@@ -411,49 +534,89 @@ async def _ensure_symbol_history_once(
                     "status": "ready",
                     "bars": len(restored),
                     "target_bars": target_bars,
+                    "source": "runtime",
                 }
                 continue
 
-            try:
-                fetched = await _fetch_timeframe_history(
-                    provider=provider,
-                    market=market,
-                    symbol=symbol,
-                    timeframe=timeframe,
+            derived = _aggregate_bars_from_source(
+                source_bars=base_1m,
+                source_timeframe="1m",
+                target_timeframe=timeframe,
+                target_bars=target_bars,
+            )
+            merged = _merge_history_rows(
+                target_bars=target_bars,
+                groups=[existing, derived],
+            )
+            used_direct_fill = False
+            direct_rows: list[Any] = []
+            direct_error = False
+
+            if is_requested_timeframe and not _bars_are_ready(
+                market=market,
+                timeframe=timeframe,
+                bars=merged,
+                target_bars=target_bars,
+            ):
+                try:
+                    direct_rows = await _fetch_timeframe_history(
+                        provider=provider,
+                        market=market,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        target_bars=target_bars,
+                    )
+                    used_direct_fill = True
+                except Exception as exc:  # noqa: BLE001
+                    direct_error = True
+                    logger.warning(
+                        "[market-data-worker] history fill failed market=%s symbol=%s timeframe=%s error=%s",
+                        market,
+                        symbol,
+                        timeframe,
+                        type(exc).__name__,
+                    )
+                    await _record_market_data_error_event(
+                        market=market,
+                        symbol=symbol,
+                        endpoint="fetch_recent_bars",
+                        exc=exc,
+                        metadata={"timeframe": timeframe, "target_bars": target_bars},
+                    )
+
+            if direct_rows:
+                merged = _merge_history_rows(
                     target_bars=target_bars,
+                    groups=[merged, direct_rows],
                 )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "[market-data-worker] history warmup failed market=%s symbol=%s timeframe=%s error=%s",
-                    market,
-                    symbol,
-                    timeframe,
-                    type(exc).__name__,
-                )
-                await _record_market_data_error_event(
-                    market=market,
-                    symbol=symbol,
-                    endpoint="fetch_recent_bars",
-                    exc=exc,
-                    metadata={"timeframe": timeframe, "target_bars": target_bars},
-                )
-                summary[timeframe] = {
-                    "status": "error",
-                    "bars": len(existing),
-                    "target_bars": target_bars,
-                }
-                continue
 
             hydrated = market_data_runtime.hydrate_bars(
                 market=market,
                 symbol=symbol,
                 timeframe=timeframe,
-                bars=fetched,
+                bars=merged,
             )
+            if _bars_are_ready(
+                market=market,
+                timeframe=timeframe,
+                bars=hydrated,
+                target_bars=target_bars,
+            ):
+                status = "hydrated_direct" if used_direct_fill else "hydrated_derived"
+            elif hydrated:
+                status = "partial_direct" if used_direct_fill else "partial"
+            elif direct_error:
+                status = "error"
+            else:
+                status = "empty"
+
             summary[timeframe] = {
-                "status": "hydrated" if hydrated else "empty",
+                "status": status,
                 "bars": len(hydrated),
                 "target_bars": target_bars,
+                "derived_bars": len(derived),
+                "direct_bars": len(direct_rows),
+                "source": "derived+direct" if used_direct_fill else "derived",
             }
         return summary
     finally:
@@ -514,25 +677,6 @@ async def _refresh_symbol_once(
         latest_bar = None
 
         try:
-            quote = await provider.fetch_quote(symbol=symbol, market=market)
-        except Exception as exc:  # noqa: BLE001
-            errors += 1
-            logger.warning(
-                "[market-data-worker] quote refresh failed market=%s symbol=%s error=%s",
-                market,
-                symbol,
-                type(exc).__name__,
-            )
-            await _record_market_data_error_event(
-                market=market,
-                symbol=symbol,
-                endpoint="fetch_quote",
-                exc=exc,
-            )
-        if quote is not None:
-            market_data_runtime.upsert_quote(market=market, symbol=symbol, quote=quote)
-
-        try:
             latest_bar = await provider.fetch_latest_1m_bar(symbol=symbol, market=market)
         except Exception as exc:  # noqa: BLE001
             errors += 1
@@ -550,6 +694,33 @@ async def _refresh_symbol_once(
             )
         if latest_bar is not None:
             market_data_runtime.ingest_1m_bar(market=market, symbol=symbol, bar=latest_bar)
+            quote = QuoteSnapshot(
+                symbol=symbol.strip().upper(),
+                bid=None,
+                ask=None,
+                last=latest_bar.close,
+                timestamp=latest_bar.timestamp,
+                raw={"source": "latest_1m_bar"},
+            )
+        else:
+            try:
+                quote = await provider.fetch_quote(symbol=symbol, market=market)
+            except Exception as exc:  # noqa: BLE001
+                errors += 1
+                logger.warning(
+                    "[market-data-worker] quote refresh failed market=%s symbol=%s error=%s",
+                    market,
+                    symbol,
+                    type(exc).__name__,
+                )
+                await _record_market_data_error_event(
+                    market=market,
+                    symbol=symbol,
+                    endpoint="fetch_quote",
+                    exc=exc,
+                )
+        if quote is not None:
+            market_data_runtime.upsert_quote(market=market, symbol=symbol, quote=quote)
 
         status = "ok"
         if errors > 0 and (quote is not None or latest_bar is not None):
@@ -665,7 +836,10 @@ def refresh_active_subscriptions_task() -> dict[str, int]:
         if not reserve_market_data_refresh_slot(market, symbol):
             deduped += 1
             continue
-        refresh_symbol_task.apply_async(args=(market, symbol), queue="market_data")
+        refresh_symbol_task.apply_async(
+            args=(market, symbol, "1m", None),
+            queue="market_data",
+        )
         scheduled += 1
     total = len(subscriptions)
     market_data_runtime.record_refresh_scheduler_metrics(
@@ -728,3 +902,94 @@ def enqueue_market_data_sync_job(job_id: UUID | str) -> str:
 
     result = sync_missing_ranges_task.apply_async(args=(str(job_id),), queue="market_data")
     return str(result.id)
+
+
+@celery_app.task(name="market_data.run_incremental_sync")
+def run_incremental_sync_task() -> dict[str, Any]:
+    """Run local-only incremental sync collector."""
+    if settings.market_data_incremental_execution_mode != "local_collector":
+        return {
+            "status": "skipped_not_local_collector",
+            "execution_mode": settings.market_data_incremental_execution_mode,
+        }
+    if not settings.market_data_incremental_sync_enabled:
+        return {
+            "status": "disabled",
+            "execution_mode": settings.market_data_incremental_execution_mode,
+        }
+    logger.info(
+        "[market-data-worker] run incremental sync mode=%s",
+        settings.market_data_incremental_execution_mode,
+    )
+    result = asyncio.run(run_local_incremental_sync())
+    return result.to_dict()
+
+
+async def _run_incremental_import_job_once(job_uuid: UUID) -> dict[str, Any]:
+    if db_module.AsyncSessionLocal is None:
+        await db_module.init_postgres(ensure_schema=False)
+    assert db_module.AsyncSessionLocal is not None
+
+    async with db_module.AsyncSessionLocal() as db:
+        job = await db.scalar(
+            select(MarketDataIncrementalImportJob).where(
+                MarketDataIncrementalImportJob.id == job_uuid
+            )
+        )
+        if job is None:
+            raise ValueError(f"Incremental import job not found: {job_uuid}")
+        if job.status == "completed":
+            return {
+                "job_id": str(job.id),
+                "status": job.status,
+                "file_count": int(job.file_count or 0),
+                "processed_files": int(job.processed_files or 0),
+                "rows_written": int(job.rows_written or 0),
+            }
+
+        job.status = "running"
+        job.started_at = datetime.now(UTC)
+        job.error_message = None
+        await db.commit()
+
+        try:
+            summary = await import_incremental_manifest(
+                db,
+                bucket=job.bucket,
+                manifest_object=job.manifest_object,
+            )
+            job.status = "completed"
+            job.processed_files = int(summary.files_processed)
+            job.rows_written = int(summary.rows_written)
+            job.completed_at = datetime.now(UTC)
+            job.error_message = None
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001
+            await db.rollback()
+            job = await db.scalar(
+                select(MarketDataIncrementalImportJob).where(
+                    MarketDataIncrementalImportJob.id == job_uuid
+                )
+            )
+            if job is not None:
+                job.status = "failed"
+                job.error_message = f"{type(exc).__name__}: {exc}"
+                job.completed_at = datetime.now(UTC)
+                await db.commit()
+            raise
+
+        return {
+            "job_id": str(job.id),
+            "status": job.status,
+            "file_count": int(job.file_count or 0),
+            "processed_files": int(job.processed_files or 0),
+            "rows_written": int(job.rows_written or 0),
+        }
+
+
+@celery_app.task(name="market_data.import_incremental_batch")
+def import_incremental_batch_task(job_id: str) -> dict[str, Any]:
+    """Import one uploaded incremental parquet batch from GCS into remote parquet store."""
+    job_uuid = UUID(job_id)
+    logger.info("[market-data-worker] import incremental batch job_id=%s", job_uuid)
+    return asyncio.run(_run_incremental_import_job_once(job_uuid))

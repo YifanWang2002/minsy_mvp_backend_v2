@@ -54,6 +54,7 @@ def _import_all_models() -> None:
     import packages.infra.db.models.manual_trade_action  # noqa: F401
     import packages.infra.db.models.market_data_catalog  # noqa: F401
     import packages.infra.db.models.market_data_error_event  # noqa: F401
+    import packages.infra.db.models.market_data_incremental_import_job  # noqa: F401
     import packages.infra.db.models.market_data_sync_chunk  # noqa: F401
     import packages.infra.db.models.market_data_sync_job  # noqa: F401
     import packages.infra.db.models.notification_delivery_attempt  # noqa: F401

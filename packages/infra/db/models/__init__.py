@@ -15,6 +15,9 @@ from packages.infra.db.models.fill import Fill
 from packages.infra.db.models.manual_trade_action import ManualTradeAction
 from packages.infra.db.models.market_data_catalog import MarketDataCatalog
 from packages.infra.db.models.market_data_error_event import MarketDataErrorEvent
+from packages.infra.db.models.market_data_incremental_import_job import (
+    MarketDataIncrementalImportJob,
+)
 from packages.infra.db.models.market_data_sync_chunk import MarketDataSyncChunk
 from packages.infra.db.models.market_data_sync_job import MarketDataSyncJob
 from packages.infra.db.models.notification_delivery_attempt import (
@@ -63,6 +66,7 @@ __all__ = [
     "Fill",
     "ManualTradeAction",
     "MarketDataCatalog",
+    "MarketDataIncrementalImportJob",
     "MarketDataSyncChunk",
     "MarketDataErrorEvent",
     "MarketDataSyncJob",

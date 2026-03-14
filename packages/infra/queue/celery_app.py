@@ -188,6 +188,22 @@ def _build_beat_schedule(*, enabled: bool) -> dict[str, dict[str, object]]:
             "schedule": timedelta(seconds=settings.trading_approval_expire_scan_interval_seconds),
         }
 
+    if (
+        settings.market_data_incremental_sync_enabled
+        and settings.market_data_incremental_execution_mode == "local_collector"
+    ):
+        beat_schedule["market_data.run_incremental_sync"] = {
+            "task": "market_data.run_incremental_sync",
+            "schedule": crontab(
+                hour=settings.market_data_incremental_sync_cron_hour,
+                minute=settings.market_data_incremental_sync_cron_minute,
+            ),
+            "options": {
+                # Skip stale daily ticks to avoid catch-up storms after downtime.
+                "expires": 3600,
+            },
+        }
+
     return beat_schedule
 
 

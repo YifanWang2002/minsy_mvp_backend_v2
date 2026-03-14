@@ -11,6 +11,8 @@ x-backend-common: &backend-common
     - ./env:/app/env:ro
     - ./data:/app/data
     - ./runtime:/app/runtime
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   depends_on:
     postgres:
       condition: service_healthy

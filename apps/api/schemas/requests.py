@@ -289,6 +289,25 @@ class MarketDataSubscriptionRequest(BaseModel):
         return normalized
 
 
+class MarketDataIncrementalImportRequest(BaseModel):
+    """Notify remote VM to import one uploaded incremental batch."""
+
+    run_id: str = Field(min_length=1, max_length=128)
+    bucket: str = Field(min_length=1, max_length=255)
+    prefix: str = Field(min_length=1, max_length=512)
+    manifest_object: str = Field(min_length=1, max_length=1024)
+    file_count: int = Field(default=0, ge=0)
+    total_rows: int = Field(default=0, ge=0)
+
+    @field_validator("run_id", "bucket", "prefix", "manifest_object")
+    @classmethod
+    def validate_non_empty_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("field cannot be empty.")
+        return normalized
+
+
 class NotificationPreferencesUpdateRequest(BaseModel):
     """Patch payload for notification preference toggles."""
 

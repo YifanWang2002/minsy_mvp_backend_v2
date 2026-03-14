@@ -4,28 +4,45 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.dependencies import get_db, require_market_data_incremental_service_auth
 from apps.api.middleware.auth import get_current_user
 from apps.api.schemas.events import (
     MarketDataBarResponse,
     MarketDataBarsResponse,
+    MarketDataIncrementalImportJobResponse,
+    MarketDataInventoryResponse,
     MarketDataQuoteResponse,
     MarketDataSubscriptionResponse,
 )
-from apps.api.schemas.requests import MarketDataSubscriptionRequest
-from apps.api.dependencies import get_db
-from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
-from packages.domain.market_data.refresh_dedupe import reserve_market_data_refresh_slot
+from apps.api.schemas.requests import (
+    MarketDataIncrementalImportRequest,
+    MarketDataSubscriptionRequest,
+)
+from apps.api.services.market_data_incremental_service import (
+    build_incremental_inventory,
+    create_or_get_incremental_import_job,
+    get_incremental_import_job,
+)
+from apps.api.services.trading_queue_service import (
+    enqueue_market_data_incremental_import,
+    enqueue_market_data_refresh,
+)
 from packages.domain.market_data.aggregator import bucket_start_timestamp
+from packages.domain.market_data.refresh_dedupe import reserve_market_data_refresh_slot
 from packages.domain.market_data.runtime import RuntimeBar, market_data_runtime
 from packages.infra.db.models.market_data_error_event import MarketDataErrorEvent
-from packages.infra.providers.trading.adapters.base import QuoteSnapshot
+from packages.infra.db.models.market_data_incremental_import_job import (
+    MarketDataIncrementalImportJob,
+)
 from packages.infra.db.models.user import User
-from apps.api.services.trading_queue_service import enqueue_market_data_refresh
+from packages.infra.providers.market_data.alpaca_rest import AlpacaRestProvider
+from packages.infra.providers.trading.adapters.base import QuoteSnapshot
 from packages.shared_settings.schema.settings import settings
 
 router = APIRouter(prefix="/market-data", tags=["market-data"])
@@ -179,7 +196,6 @@ async def _build_live_bar(
         open_price = bucket_components[0].open
         high_price = max(bar.high for bar in bucket_components)
         low_price = min(bar.low for bar in bucket_components)
-        close_price = bucket_components[-1].close
         volume = sum(bar.volume for bar in bucket_components)
     else:
         previous_close = historical_bars[-1].close if historical_bars else float(last_price)
@@ -187,7 +203,6 @@ async def _build_live_bar(
         open_price = seed_price
         high_price = seed_price
         low_price = seed_price
-        close_price = seed_price
         volume = 0.0
 
     live_price = float(last_price)
@@ -345,7 +360,11 @@ async def subscribe_symbols(
         market=normalized_market,
     )
     for symbol in delta.added_symbols:
-        enqueue_market_data_refresh(market=normalized_market, symbol=symbol)
+        enqueue_market_data_refresh(
+            market=normalized_market,
+            symbol=symbol,
+            requested_timeframe="1m",
+        )
     return MarketDataSubscriptionResponse(
         subscriber_id=subscriber_id,
         added_symbols=list(delta.added_symbols),
@@ -468,3 +487,79 @@ async def get_market_data_health(
             for row in latest_rows
         ],
     }
+
+
+def _to_incremental_import_job_response(
+    job: MarketDataIncrementalImportJob,
+    *,
+    deduplicated: bool = False,
+) -> MarketDataIncrementalImportJobResponse:
+    return MarketDataIncrementalImportJobResponse(
+        import_job_id=job.id,
+        run_id=job.run_id,
+        status=job.status,
+        file_count=int(job.file_count or 0),
+        processed_files=int(job.processed_files or 0),
+        rows_written=int(job.rows_written or 0),
+        requested_at=job.requested_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        error_message=job.error_message,
+        deduplicated=deduplicated,
+    )
+
+
+@router.get(
+    "/inventory",
+    response_model=MarketDataInventoryResponse,
+)
+async def get_incremental_inventory(
+    _: dict[str, str] = Depends(require_market_data_incremental_service_auth),
+    db: AsyncSession = Depends(get_db),
+) -> MarketDataInventoryResponse:
+    payload = await build_incremental_inventory(db)
+    return MarketDataInventoryResponse.model_validate(payload)
+
+
+@router.post(
+    "/incremental-imports",
+    response_model=MarketDataIncrementalImportJobResponse,
+)
+async def create_incremental_import_job(
+    payload: MarketDataIncrementalImportRequest,
+    _: dict[str, str] = Depends(require_market_data_incremental_service_auth),
+    db: AsyncSession = Depends(get_db),
+) -> MarketDataIncrementalImportJobResponse:
+    job, deduplicated = await create_or_get_incremental_import_job(
+        db,
+        run_id=payload.run_id,
+        bucket=payload.bucket,
+        prefix=payload.prefix,
+        manifest_object=payload.manifest_object,
+        file_count=payload.file_count,
+    )
+    await db.commit()
+    if deduplicated:
+        return _to_incremental_import_job_response(job, deduplicated=True)
+
+    task_id = enqueue_market_data_incremental_import(job.id)
+    _ = task_id
+    return _to_incremental_import_job_response(job, deduplicated=False)
+
+
+@router.get(
+    "/incremental-imports/{job_id}",
+    response_model=MarketDataIncrementalImportJobResponse,
+)
+async def read_incremental_import_job(
+    job_id: UUID,
+    _: dict[str, str] = Depends(require_market_data_incremental_service_auth),
+    db: AsyncSession = Depends(get_db),
+) -> MarketDataIncrementalImportJobResponse:
+    job = await get_incremental_import_job(db, job_id=job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "IMPORT_JOB_NOT_FOUND", "message": "Incremental import job not found."},
+        )
+    return _to_incremental_import_job_response(job)

@@ -538,6 +538,63 @@ class MarketDataSubscriptionResponse(BaseModel):
     active_symbols: list[str] = Field(default_factory=list)
 
 
+class MarketDataCoverageWindowResponse(BaseModel):
+    """Coverage window payload."""
+
+    start: datetime
+    end: datetime
+    duration_days: float
+
+
+class MarketDataTimeframeCoverageResponse(BaseModel):
+    """Per-timeframe coverage bounds."""
+
+    start: datetime
+    end: datetime
+
+
+class MarketDataInventorySymbolResponse(BaseModel):
+    """One symbol inventory item."""
+
+    symbol: str
+    session: str
+    coverage: MarketDataCoverageWindowResponse
+    available_raw_timeframes: list[str] = Field(default_factory=list)
+    timeframe_coverage: dict[str, MarketDataTimeframeCoverageResponse] = Field(
+        default_factory=dict
+    )
+
+
+class MarketDataInventoryMarketResponse(BaseModel):
+    """One market inventory block."""
+
+    market: str
+    symbols: list[MarketDataInventorySymbolResponse] = Field(default_factory=list)
+
+
+class MarketDataInventoryResponse(BaseModel):
+    """Inventory snapshot for local incremental collector."""
+
+    generated_at: datetime
+    markets: list[MarketDataInventoryMarketResponse] = Field(default_factory=list)
+
+
+class MarketDataIncrementalImportJobResponse(BaseModel):
+    """Incremental import job status response."""
+
+    import_job_id: UUID
+    run_id: str
+    status: str
+    file_count: int
+    processed_files: int
+    rows_written: int
+    requested_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
+    deduplicated: bool = False
+
+
 class SignalResponse(BaseModel):
     """Live signal event payload."""
 
