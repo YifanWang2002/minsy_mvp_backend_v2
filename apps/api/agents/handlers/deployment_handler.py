@@ -15,6 +15,7 @@ from apps.api.agents.handler_protocol import (
     PromptPieces,
 )
 from apps.api.agents.phases import Phase
+from apps.api.i18n import is_zh_locale
 from apps.api.agents.deployment_defaults import (
     hydrate_deployment_profile_defaults,
     merge_risk_limits_with_defaults,
@@ -249,9 +250,32 @@ class DeploymentHandler:
             return self._build_broker_choice_prompt(
                 profile=profile,
                 runtime_state=runtime_state,
+                language=ctx.language,
             )
 
         if target_field == "deployment_confirmation_status":
+            if is_zh_locale(ctx.language):
+                return {
+                    "type": "choice_prompt",
+                    "choice_id": "deployment_confirmation_status",
+                    "question": "执行前请先确认这份部署摘要。",
+                    "subtitle": (
+                        "请核对 broker、市场、标的、周期、资金与风控参数。"
+                        "确认后代理将继续执行部署工具。"
+                    ),
+                    "options": [
+                        {
+                            "id": "confirmed",
+                            "label": "确认部署",
+                            "subtitle": "继续创建并启动部署。",
+                        },
+                        {
+                            "id": "needs_changes",
+                            "label": "先修改",
+                            "subtitle": "先调整 broker 或部署参数。",
+                        },
+                    ],
+                }
             return {
                 "type": "choice_prompt",
                 "choice_id": "deployment_confirmation_status",
@@ -286,7 +310,7 @@ class DeploymentHandler:
         }
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
-        if ctx.language == "zh":
+        if is_zh_locale(ctx.language):
             return (
                 "进入部署阶段：先检查可用 broker 与策略市场是否匹配，"
                 "再让用户确认 deployment summary，确认后才执行部署工具。"
@@ -858,6 +882,7 @@ class DeploymentHandler:
         *,
         profile: dict[str, Any],
         runtime_state: dict[str, Any],
+        language: str,
     ) -> dict[str, Any] | None:
         broker_status = self._normalize_broker_readiness_status(
             profile.get("broker_readiness_status")
@@ -894,6 +919,14 @@ class DeploymentHandler:
                 )
             if len(options) < 2:
                 return None
+            if is_zh_locale(language):
+                return {
+                    "type": "choice_prompt",
+                    "choice_id": "selected_broker_account_id",
+                    "question": "请选择本次部署要使用的已连接 broker。",
+                    "subtitle": "当前策略市场对应多个可用 broker，请先选择一个再继续部署。",
+                    "options": options,
+                }
             return {
                 "type": "choice_prompt",
                 "choice_id": "selected_broker_account_id",
@@ -909,39 +942,64 @@ class DeploymentHandler:
 
         if broker_status in {"no_broker", "blocked"}:
             subtitle = (
+                "前往 设置 > Broker Connectors 绑定 broker 并按提示完成凭证配置。"
+                "若策略市场是 us_stocks 或 crypto，也可在聊天中创建内置 sandbox 账户。"
+            ) if is_zh_locale(language) else (
                 "Open Settings > Broker Connectors, choose a broker, and follow the "
                 "credential prompts. You can also create the built-in sandbox account "
                 "from chat if this strategy targets us_stocks or crypto."
             )
             options = []
             if strategy_market in {"us_stocks", "crypto"}:
-                options.append(
-                    {
-                        "id": "create_builtin_sandbox",
-                        "label": "Use built-in sandbox",
-                        "subtitle": "Create or reactivate the platform sandbox broker.",
-                    }
-                )
+                if is_zh_locale(language):
+                    options.append(
+                        {
+                            "id": "create_builtin_sandbox",
+                            "label": "使用内置 sandbox",
+                            "subtitle": "创建或重新激活平台 sandbox broker。",
+                        }
+                    )
+                else:
+                    options.append(
+                        {
+                            "id": "create_builtin_sandbox",
+                            "label": "Use built-in sandbox",
+                            "subtitle": "Create or reactivate the platform sandbox broker.",
+                        }
+                    )
             options.append(
                 {
                     "id": "open_broker_connectors",
-                    "label": "Open Broker Connectors",
-                    "subtitle": "Go to Settings > Broker Connectors to bind a broker.",
+                    "label": "打开 Broker Connectors"
+                    if is_zh_locale(language)
+                    else "Open Broker Connectors",
+                    "subtitle": (
+                        "前往 设置 > Broker Connectors 绑定 broker。"
+                        if is_zh_locale(language)
+                        else "Go to Settings > Broker Connectors to bind a broker."
+                    ),
                 }
             )
             options.append(
                 {
                     "id": "modify_strategy_scope",
-                    "label": "Modify strategy scope",
-                    "subtitle": "Change the market or instrument if needed.",
+                    "label": "修改策略范围" if is_zh_locale(language) else "Modify strategy scope",
+                    "subtitle": (
+                        "如有需要，先修改市场或标的。"
+                        if is_zh_locale(language)
+                        else "Change the market or instrument if needed."
+                    ),
                 }
+            )
+            question = (
+                "当前没有可用于本次部署的兼容 broker。你希望如何继续？"
+                if is_zh_locale(language)
+                else "No compatible broker is ready for this deployment. How would you like to proceed?"
             )
             return {
                 "type": "choice_prompt",
                 "choice_id": "selected_broker_account_id",
-                "question": (
-                    "No compatible broker is ready for this deployment. How would you like to proceed?"
-                ),
+                "question": question,
                 "subtitle": subtitle,
                 "options": options,
             }

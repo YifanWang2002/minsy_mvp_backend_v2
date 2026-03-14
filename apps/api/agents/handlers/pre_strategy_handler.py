@@ -14,13 +14,13 @@ from apps.api.agents.handler_protocol import (
     PromptPieces,
 )
 from apps.api.agents.phases import Phase
+from apps.api.i18n import is_zh_locale
 from apps.api.agents.skills.pre_strategy_skills import (
     REQUIRED_FIELDS,
     build_pre_strategy_dynamic_state,
     build_pre_strategy_static_instructions,
     format_instrument_label,
     get_instruments_for_market,
-    get_market_data_symbol_for_market_instrument,
     get_market_for_instrument,
     get_pre_strategy_market_instrument_map,
     get_pre_strategy_valid_values,
@@ -35,6 +35,12 @@ _MARKET_DISPLAY_LABELS: dict[str, str] = {
     "crypto": "Crypto",
     "forex": "Forex",
     "futures": "Futures",
+}
+_MARKET_DISPLAY_LABELS_ZH: dict[str, str] = {
+    "us_stocks": "美股",
+    "crypto": "加密",
+    "forex": "外汇",
+    "futures": "期货",
 }
 _OPPORTUNITY_FREQUENCY_ORDER: tuple[str, ...] = (
     "few_per_month",
@@ -54,11 +60,23 @@ _MARKET_OPTION_SUBTITLES: dict[str, str] = {
     "forex": "Major FX currency pairs",
     "futures": "Global index futures",
 }
+_MARKET_OPTION_SUBTITLES_ZH: dict[str, str] = {
+    "us_stocks": "美股股票与 ETF",
+    "crypto": "主流加密现货交易对",
+    "forex": "主流外汇货币对",
+    "futures": "全球指数期货",
+}
 _OPPORTUNITY_FREQUENCY_LABELS: dict[str, str] = {
     "few_per_month": "Few per month",
     "few_per_week": "Few per week",
     "daily": "Daily",
     "multiple_per_day": "Multiple per day",
+}
+_OPPORTUNITY_FREQUENCY_LABELS_ZH: dict[str, str] = {
+    "few_per_month": "每月少量",
+    "few_per_week": "每周几次",
+    "daily": "每天",
+    "multiple_per_day": "每天多次",
 }
 _OPPORTUNITY_FREQUENCY_SUBTITLES: dict[str, str] = {
     "few_per_month": "1-3 setups each month",
@@ -66,11 +84,23 @@ _OPPORTUNITY_FREQUENCY_SUBTITLES: dict[str, str] = {
     "daily": "At least one setup per day",
     "multiple_per_day": "Several intraday setups",
 }
+_OPPORTUNITY_FREQUENCY_SUBTITLES_ZH: dict[str, str] = {
+    "few_per_month": "每月约 1-3 次机会",
+    "few_per_week": "每周若干次机会",
+    "daily": "每天至少一次机会",
+    "multiple_per_day": "日内多次机会",
+}
 _HOLDING_PERIOD_LABELS: dict[str, str] = {
     "intraday_scalp": "Intraday Scalp",
     "intraday": "Intraday",
     "swing_days": "Swing Days",
     "position_weeks_plus": "Position Weeks+",
+}
+_HOLDING_PERIOD_LABELS_ZH: dict[str, str] = {
+    "intraday_scalp": "超短线",
+    "intraday": "日内",
+    "swing_days": "波段数天",
+    "position_weeks_plus": "持有数周+",
 }
 _HOLDING_PERIOD_SUBTITLES: dict[str, str] = {
     "intraday_scalp": "Seconds to minutes",
@@ -78,17 +108,35 @@ _HOLDING_PERIOD_SUBTITLES: dict[str, str] = {
     "swing_days": "Hold for a few days",
     "position_weeks_plus": "Hold for weeks or longer",
 }
+_HOLDING_PERIOD_SUBTITLES_ZH: dict[str, str] = {
+    "intraday_scalp": "秒级到分钟级",
+    "intraday": "当日开平",
+    "swing_days": "持有数天",
+    "position_weeks_plus": "持有数周或更久",
+}
 _FALLBACK_QUESTION_BY_FIELD: dict[str, str] = {
     "target_market": "Which market do you want to trade?",
     "target_instrument": "Which instrument do you want to focus on?",
     "opportunity_frequency_bucket": "How often do you want trade opportunities?",
     "holding_period_bucket": "What holding period style do you prefer?",
 }
+_FALLBACK_QUESTION_BY_FIELD_ZH: dict[str, str] = {
+    "target_market": "你想交易哪个市场？",
+    "target_instrument": "你想聚焦哪个交易标的？",
+    "opportunity_frequency_bucket": "你期望交易机会出现的频率是？",
+    "holding_period_bucket": "你偏好的持仓周期是？",
+}
 _FALLBACK_SUBTITLE_BY_FIELD: dict[str, str] = {
     "target_market": "Choose one market so I can scope symbols correctly.",
     "target_instrument": "Pick one primary symbol for setup design.",
     "opportunity_frequency_bucket": "This controls signal cadence and strategy style.",
     "holding_period_bucket": "This controls entry and exit horizon.",
+}
+_FALLBACK_SUBTITLE_BY_FIELD_ZH: dict[str, str] = {
+    "target_market": "请选择一个市场，我才能正确限定可用标的。",
+    "target_instrument": "请选择一个主要标的用于策略设计。",
+    "opportunity_frequency_bucket": "这会影响信号节奏与策略风格。",
+    "holding_period_bucket": "这会影响入场与出场周期。",
 }
 _PRE_STRATEGY_FALLBACK_MARKET_DATA_TOOLS: tuple[str, ...] = (
     "check_symbol_available",
@@ -101,6 +149,82 @@ _CRYPTO_QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "USD", "BTC", "ETH", 
 _DATA_RESOLUTION_AWAITING_USER_CHOICE = "awaiting_user_choice"
 _DATA_RESOLUTION_DOWNLOAD_STARTED = "download_started"
 _DATA_RESOLUTION_LOCAL_READY = "local_ready"
+
+
+def _pick_text(
+    *,
+    language: str,
+    en_table: dict[str, str],
+    zh_table: dict[str, str],
+    key: str,
+    default: str,
+) -> str:
+    if is_zh_locale(language):
+        return zh_table.get(key, default)
+    return en_table.get(key, default)
+
+
+def _market_display_label(*, market: str, language: str) -> str:
+    default = market.replace("_", " ").title()
+    return _pick_text(
+        language=language,
+        en_table=_MARKET_DISPLAY_LABELS,
+        zh_table=_MARKET_DISPLAY_LABELS_ZH,
+        key=market,
+        default=default,
+    )
+
+
+def _market_option_subtitle(*, market: str, language: str) -> str:
+    return _pick_text(
+        language=language,
+        en_table=_MARKET_OPTION_SUBTITLES,
+        zh_table=_MARKET_OPTION_SUBTITLES_ZH,
+        key=market,
+        default=market,
+    )
+
+
+def _opportunity_label(*, value: str, language: str) -> str:
+    default = value.replace("_", " ").title()
+    return _pick_text(
+        language=language,
+        en_table=_OPPORTUNITY_FREQUENCY_LABELS,
+        zh_table=_OPPORTUNITY_FREQUENCY_LABELS_ZH,
+        key=value,
+        default=default,
+    )
+
+
+def _opportunity_subtitle(*, value: str, language: str) -> str:
+    return _pick_text(
+        language=language,
+        en_table=_OPPORTUNITY_FREQUENCY_SUBTITLES,
+        zh_table=_OPPORTUNITY_FREQUENCY_SUBTITLES_ZH,
+        key=value,
+        default=value,
+    )
+
+
+def _holding_label(*, value: str, language: str) -> str:
+    default = value.replace("_", " ").title()
+    return _pick_text(
+        language=language,
+        en_table=_HOLDING_PERIOD_LABELS,
+        zh_table=_HOLDING_PERIOD_LABELS_ZH,
+        key=value,
+        default=default,
+    )
+
+
+def _holding_subtitle(*, value: str, language: str) -> str:
+    return _pick_text(
+        language=language,
+        en_table=_HOLDING_PERIOD_SUBTITLES,
+        zh_table=_HOLDING_PERIOD_SUBTITLES_ZH,
+        key=value,
+        default=value,
+    )
 
 
 class PreStrategyHandler:
@@ -236,8 +360,9 @@ class PreStrategyHandler:
                 filtered = [
                     {
                         "id": market,
-                        "label": _MARKET_DISPLAY_LABELS.get(
-                            market, market.replace("_", " ").title()
+                        "label": _market_display_label(
+                            market=market,
+                            language=ctx.language,
                         ),
                         "subtitle": market,
                     }
@@ -382,13 +507,22 @@ class PreStrategyHandler:
         payload: dict[str, Any] = {
             "type": "choice_prompt",
             "choice_id": target_field,
-            "question": _FALLBACK_QUESTION_BY_FIELD.get(
-                target_field,
-                "Please choose one option.",
+            "question": _pick_text(
+                language=ctx.language,
+                en_table=_FALLBACK_QUESTION_BY_FIELD,
+                zh_table=_FALLBACK_QUESTION_BY_FIELD_ZH,
+                key=target_field,
+                default="Please choose one option.",
             ),
             "options": options,
         }
-        subtitle = _FALLBACK_SUBTITLE_BY_FIELD.get(target_field)
+        subtitle = _pick_text(
+            language=ctx.language,
+            en_table=_FALLBACK_SUBTITLE_BY_FIELD,
+            zh_table=_FALLBACK_SUBTITLE_BY_FIELD_ZH,
+            key=target_field,
+            default="",
+        )
         if isinstance(subtitle, str) and subtitle.strip():
             payload["subtitle"] = subtitle.strip()
         return payload
@@ -399,7 +533,7 @@ class PreStrategyHandler:
         return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS), "runtime": {}}
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
-        if ctx.language == "zh":
+        if is_zh_locale(ctx.language):
             return (
                 "接下来进入策略准备阶段。告诉我你想交易的市场和标的，"
                 "比如“美股 us_stocks + SPY”或“加密 crypto + BTCUSD”。"
@@ -519,11 +653,14 @@ class PreStrategyHandler:
             return [
                 {
                     "id": market,
-                    "label": _MARKET_DISPLAY_LABELS.get(
-                        market,
-                        market.replace("_", " ").title(),
+                    "label": _market_display_label(
+                        market=market,
+                        language=ctx.language,
                     ),
-                    "subtitle": _MARKET_OPTION_SUBTITLES.get(market, market),
+                    "subtitle": _market_option_subtitle(
+                        market=market,
+                        language=ctx.language,
+                    ),
                 }
                 for market in market_order
             ]
@@ -535,11 +672,14 @@ class PreStrategyHandler:
             return [
                 {
                     "id": value,
-                    "label": _OPPORTUNITY_FREQUENCY_LABELS.get(
-                        value,
-                        value.replace("_", " ").title(),
+                    "label": _opportunity_label(
+                        value=value,
+                        language=ctx.language,
                     ),
-                    "subtitle": _OPPORTUNITY_FREQUENCY_SUBTITLES.get(value, value),
+                    "subtitle": _opportunity_subtitle(
+                        value=value,
+                        language=ctx.language,
+                    ),
                 }
                 for value in _OPPORTUNITY_FREQUENCY_ORDER
             ]
@@ -548,11 +688,14 @@ class PreStrategyHandler:
             return [
                 {
                     "id": value,
-                    "label": _HOLDING_PERIOD_LABELS.get(
-                        value,
-                        value.replace("_", " ").title(),
+                    "label": _holding_label(
+                        value=value,
+                        language=ctx.language,
                     ),
-                    "subtitle": _HOLDING_PERIOD_SUBTITLES.get(value, value),
+                    "subtitle": _holding_subtitle(
+                        value=value,
+                        language=ctx.language,
+                    ),
                 }
                 for value in _HOLDING_PERIOD_ORDER
             ]

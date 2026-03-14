@@ -14,6 +14,7 @@ from apps.api.agents.handler_protocol import (
     PromptPieces,
 )
 from apps.api.agents.phases import Phase
+from apps.api.i18n import is_zh_locale
 from apps.api.agents.skills.kyc_skills import (
     REQUIRED_FIELDS,
     VALID_VALUES,
@@ -37,6 +38,16 @@ _KYC_SUBTITLES: dict[str, str] = {
     "risk_tolerance": "Choose the risk level that fits your style.",
     "return_expectation": "Choose the return goal you are aiming for.",
 }
+_KYC_QUESTIONS_ZH: dict[str, str] = {
+    "trading_years_bucket": "你有多少年交易经验？",
+    "risk_tolerance": "你的风险偏好是什么？",
+    "return_expectation": "你的收益目标偏好是什么？",
+}
+_KYC_SUBTITLES_ZH: dict[str, str] = {
+    "trading_years_bucket": "请选择最接近你的经验档位。",
+    "risk_tolerance": "请选择最符合你的风险承受水平。",
+    "return_expectation": "请选择你当前的收益目标。",
+}
 _KYC_OPTION_META: dict[str, dict[str, tuple[str, str]]] = {
     "trading_years_bucket": {
         "years_0_1": ("0-1 years", "New or early-stage experience"),
@@ -57,6 +68,38 @@ _KYC_OPTION_META: dict[str, dict[str, tuple[str, str]]] = {
         "high_growth": ("High growth", "Pursue maximum growth potential"),
     },
 }
+_KYC_OPTION_META_ZH: dict[str, dict[str, tuple[str, str]]] = {
+    "trading_years_bucket": {
+        "years_0_1": ("0-1 年", "刚入门或仍在早期阶段"),
+        "years_1_3": ("1-3 年", "已有一定市场周期经验"),
+        "years_3_5": ("3-5 年", "中级偏熟练交易经验"),
+        "years_5_plus": ("5 年以上", "长期且较充分的交易经验"),
+    },
+    "risk_tolerance": {
+        "conservative": ("保守", "优先保护本金"),
+        "moderate": ("中等", "平衡风险与收益"),
+        "aggressive": ("激进", "接受更高风险换取更高回报"),
+        "very_aggressive": ("非常激进", "可承受最高风险波动"),
+    },
+    "return_expectation": {
+        "capital_preservation": ("保本", "优先控制回撤"),
+        "balanced_growth": ("平衡增长", "追求稳健长期复利"),
+        "growth": ("增长", "目标更强的账户增长"),
+        "high_growth": ("高增长", "追求更高增长潜力"),
+    },
+}
+
+
+def _kyc_question(*, field: str, language: str) -> str:
+    if is_zh_locale(language):
+        return _KYC_QUESTIONS_ZH.get(field, "请选择一个选项。")
+    return _KYC_QUESTIONS.get(field, "Please choose one option.")
+
+
+def _kyc_subtitle(*, field: str, language: str) -> str:
+    if is_zh_locale(language):
+        return _KYC_SUBTITLES_ZH.get(field, "")
+    return _KYC_SUBTITLES.get(field, "")
 
 
 class KYCHandler:
@@ -151,7 +194,6 @@ class KYCHandler:
         payload: dict[str, Any],
         ctx: PhaseContext,
     ) -> dict[str, Any] | None:
-        del ctx
         if payload.get("type") != "choice_prompt":
             return payload
 
@@ -175,17 +217,23 @@ class KYCHandler:
             and option.get("id") in allowed
         ]
         if len(filtered) < 2:
-            filtered = self._build_options_for_field(target_field)
+            filtered = self._build_options_for_field(
+                target_field,
+                language=ctx.language,
+            )
 
         result = dict(payload)
         result["options"] = filtered
         if not isinstance(result.get("question"), str) or not result["question"].strip():
-            result["question"] = _KYC_QUESTIONS.get(
-                target_field,
-                "Please choose one option.",
+            result["question"] = _kyc_question(
+                field=target_field,
+                language=ctx.language,
             )
         if not isinstance(result.get("subtitle"), str) or not result["subtitle"].strip():
-            subtitle = _KYC_SUBTITLES.get(target_field)
+            subtitle = _kyc_subtitle(
+                field=target_field,
+                language=ctx.language,
+            )
             if isinstance(subtitle, str) and subtitle.strip():
                 result["subtitle"] = subtitle
         return result
@@ -196,7 +244,6 @@ class KYCHandler:
         missing_fields: list[str],
         ctx: PhaseContext,
     ) -> dict[str, Any] | None:
-        del ctx
         target_field = next(
             (field for field in missing_fields if field in REQUIRED_FIELDS),
             None,
@@ -204,17 +251,26 @@ class KYCHandler:
         if target_field is None:
             return None
 
-        options = self._build_options_for_field(target_field)
+        options = self._build_options_for_field(
+            target_field,
+            language=ctx.language,
+        )
         if len(options) < 2:
             return None
 
         payload: dict[str, Any] = {
             "type": "choice_prompt",
             "choice_id": _KYC_FIELD_CHOICE_IDS.get(target_field, target_field),
-            "question": _KYC_QUESTIONS.get(target_field, "Please choose one option."),
+            "question": _kyc_question(
+                field=target_field,
+                language=ctx.language,
+            ),
             "options": options,
         }
-        subtitle = _KYC_SUBTITLES.get(target_field)
+        subtitle = _kyc_subtitle(
+            field=target_field,
+            language=ctx.language,
+        )
         if isinstance(subtitle, str) and subtitle.strip():
             payload["subtitle"] = subtitle
         return payload
@@ -225,7 +281,7 @@ class KYCHandler:
         return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)}
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
-        if ctx.language == "zh":
+        if is_zh_locale(ctx.language):
             return "接下来我们先完成 KYC 画像：我会快速确认你的交易经验、风险偏好和收益预期。"
         return (
             "Next, we will complete your KYC profile: "
@@ -308,8 +364,13 @@ class KYCHandler:
             return normalized
         return None
 
-    def _build_options_for_field(self, field: str) -> list[dict[str, str]]:
-        options = _KYC_OPTION_META.get(field)
+    def _build_options_for_field(
+        self,
+        field: str,
+        *,
+        language: str = "en",
+    ) -> list[dict[str, str]]:
+        options = _KYC_OPTION_META_ZH.get(field) if is_zh_locale(language) else _KYC_OPTION_META.get(field)
         if not isinstance(options, dict):
             return []
         return [
