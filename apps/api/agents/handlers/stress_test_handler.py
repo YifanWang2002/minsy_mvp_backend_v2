@@ -13,6 +13,7 @@ from apps.api.agents.handler_protocol import (
     PromptPieces,
 )
 from apps.api.agents.phases import Phase
+from apps.api.i18n import is_zh_locale
 from apps.api.agents.skills.stress_test_skills import (
     REQUIRED_FIELDS,
     VALID_DECISION_VALUES,
@@ -142,7 +143,7 @@ class StressTestHandler:
         return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)}
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
-        if ctx.language == "zh":
+        if is_zh_locale(ctx.language):
             return "当前版本不启用 stress_test 阶段：将回到策略阶段继续回测与迭代。"
         return (
             "Stress-test phase is currently disabled in this version: "

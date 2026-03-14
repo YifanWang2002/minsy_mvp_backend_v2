@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.i18n import is_zh_locale
 from apps.api.agents.handler_protocol import (
     PhaseContext,
     PostProcessResult,
@@ -89,7 +90,7 @@ class StubHandler:
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
         phase_label = self._phase_name.replace("_", " ").title()
-        if ctx.language == "zh":
+        if is_zh_locale(ctx.language):
             return f"接下来进入 {phase_label} 阶段。请继续告诉我你的目标，我会逐步完成该阶段。"
         return (
             f"Next, we are entering the {phase_label} phase. "

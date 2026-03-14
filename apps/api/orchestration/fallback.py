@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from apps.api.i18n import is_zh_locale
+
 from .shared import *  # noqa: F403
 
 
@@ -46,7 +48,7 @@ class FallbackMixin:
         }
         session.metadata_ = metadata
 
-        if language == "zh":
+        if is_zh_locale(language):
             hint = (
                 "提示：当前策略迭代轮次已较多。你可以考虑更换策略方向或重置一次。"
                 "（占位逻辑：后续将接入真实绩效阈值判断）"
@@ -70,7 +72,7 @@ class FallbackMixin:
         language: str,
     ) -> str:
         field = missing_fields[0] if missing_fields else ""
-        is_zh = isinstance(language, str) and language.strip().lower().startswith("zh")
+        is_zh = is_zh_locale(language)
 
         if is_zh:
             prompts = {

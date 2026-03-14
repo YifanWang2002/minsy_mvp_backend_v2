@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from apps.api.i18n import is_zh_locale
+
 from .shared import *  # noqa: F403
 from .carryover import CarryoverMixin
 from .fallback import FallbackMixin
@@ -586,7 +588,7 @@ class OrchestratorCoreMixin:
 
 def _default_deployment_auto_message(*, language: str) -> str:
     """Generate the auto follow-up message for deployment phase."""
-    if language.startswith("zh"):
+    if is_zh_locale(language):
         return (
             "用户已确认策略并准备部署。"
             "请先做 broker readiness 预检，必要时引导绑定或创建 builtin sandbox，"
@@ -601,7 +603,7 @@ def _default_deployment_auto_message(*, language: str) -> str:
 
 def _default_deployment_execute_message(*, language: str) -> str:
     """Generate the auto follow-up message after deployment confirmation."""
-    if language.startswith("zh"):
+    if is_zh_locale(language):
         return (
             "用户已经确认本次 deployment summary。"
             "请使用当前已确认的 broker 和参数继续执行创建/启动 paper deployment。"

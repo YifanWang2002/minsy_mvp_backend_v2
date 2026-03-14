@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.dependencies import get_db, get_responses_event_streamer
+from apps.api.i18n import resolve_user_locale
 from apps.api.middleware.auth import get_current_user
 from apps.api.orchestration import ChatOrchestrator
 from apps.api.orchestration.chat_debug_trace import (
@@ -92,6 +93,11 @@ async def send_message_stream(
     language: str = Query("en", description="ISO 639-1 language code from frontend"),
 ) -> StreamingResponse:
     """Stream a chat turn via the OpenAI Responses API (SSE)."""
+    resolved_language = await resolve_user_locale(
+        db,
+        user_id=user.id,
+        fallback=language,
+    )
     trace = build_chat_debug_trace(
         default_enabled=settings.chat_debug_trace_enabled,
         default_mode=settings.chat_debug_trace_mode,
@@ -101,7 +107,12 @@ async def send_message_stream(
     )
 
     orchestrator = ChatOrchestrator(db)
-    stream = orchestrator.handle_message_stream(user, payload, streamer, language=language)
+    stream = orchestrator.handle_message_stream(
+        user,
+        payload,
+        streamer,
+        language=resolved_language,
+    )
 
     async def traced_stream():
         token = set_chat_debug_trace(trace)
@@ -130,7 +141,8 @@ async def send_message_stream(
                         "path": str(request.url.path),
                         "method": request.method,
                         "client_host": client_host,
-                        "language": language,
+                        "language_requested": language,
+                        "language": resolved_language,
                         "query_params": dict(request.query_params),
                         "user_id": str(user.id),
                         "payload": payload.model_dump(mode="json"),

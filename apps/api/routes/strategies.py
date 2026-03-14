@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from apps.api.orchestration import ChatOrchestrator
 from apps.api.agents.phases import Phase, can_transition
+from apps.api.i18n import is_zh_locale, resolve_user_locale
 from apps.api.middleware.auth import get_current_user
 from apps.api.schemas.events import (
     StrategyBacktestSummary,
@@ -343,6 +344,11 @@ async def confirm_strategy(
     db: AsyncSession = Depends(get_db),
     streamer: ResponsesEventStreamer = Depends(get_responses_event_streamer),
 ) -> StrategyConfirmResponse:
+    resolved_language = await resolve_user_locale(
+        db,
+        user_id=user.id,
+        fallback=payload.language,
+    )
     session = await _load_active_session_for_confirm(
         db=db,
         session_id=payload.session_id,
@@ -408,7 +414,7 @@ async def confirm_strategy(
             streamer=streamer,
             auto_start_backtest=payload.auto_start_backtest,
             auto_message=payload.auto_message,
-            language=payload.language,
+            language=resolved_language,
             strategy_id=str(receipt.strategy_id),
         )
     )
@@ -640,7 +646,7 @@ async def _run_auto_backtest_followup(
 
 
 def _default_auto_message(*, language: str, strategy_id: str) -> str:
-    if language.startswith("zh"):
+    if is_zh_locale(language):
         return (
             "用户已经确认了策略细节，"
             f"策略已存储为 strategy_id {strategy_id}。"
