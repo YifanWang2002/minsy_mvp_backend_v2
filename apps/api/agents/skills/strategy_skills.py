@@ -69,8 +69,24 @@ def _normalize_phase_stage(stage: str | None) -> str:
     return stage.strip()
 
 
+def _normalize_prompt_profile(profile: str | None) -> str:
+    if not isinstance(profile, str):
+        return "full_bootstrap"
+    normalized = profile.strip().lower()
+    if normalized == "compact":
+        return normalized
+    if normalized == "full_bootstrap":
+        return normalized
+    return "full_bootstrap"
+
+
 @lru_cache(maxsize=32)
-def _build_strategy_static_instructions_cached(*, language: str, phase_stage: str) -> str:
+def _build_strategy_static_instructions_cached(
+    *,
+    language: str,
+    phase_stage: str,
+    prompt_profile: str,
+) -> str:
     template = _load_md(_STRATEGY_SKILLS_MD)
     ui_knowledge = _load_md(_UTILS_SKILLS_MD)
     patch_knowledge = (
@@ -79,8 +95,9 @@ def _build_strategy_static_instructions_cached(*, language: str, phase_stage: st
         else ""
     )
     stage_addendum = _load_optional_stage_addendum(phase_stage)
-    dsl_spec = _load_optional_md(_DSL_SPEC_MD)
-    dsl_schema = _load_optional_md(_DSL_SCHEMA_JSON) if phase_stage == "schema_only" else ""
+    include_full_dsl = prompt_profile == "full_bootstrap"
+    dsl_spec = _load_optional_md(_DSL_SPEC_MD) if include_full_dsl else ""
+    dsl_schema = _load_optional_md(_DSL_SCHEMA_JSON) if include_full_dsl else ""
 
     rendered = _render_template(
         template,
@@ -109,13 +126,16 @@ def build_strategy_static_instructions(
     *,
     language: str = "en",
     phase_stage: str | None = None,
+    prompt_profile: str | None = None,
 ) -> str:
     """Build static strategy instructions from markdown templates."""
     normalized_language = language.strip().lower() if isinstance(language, str) else "en"
     normalized_stage = _normalize_phase_stage(phase_stage)
+    normalized_prompt_profile = _normalize_prompt_profile(prompt_profile)
     return _build_strategy_static_instructions_cached(
         language=normalized_language or "en",
         phase_stage=normalized_stage,
+        prompt_profile=normalized_prompt_profile,
     )
 
 

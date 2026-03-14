@@ -19,6 +19,7 @@ from apps.api.agents.skills.strategy_skills import (
     build_strategy_dynamic_state,
     build_strategy_static_instructions,
 )
+from apps.api.i18n import is_zh_locale
 from apps.api.agents.deployment_defaults import (
     hydrate_deployment_profile_defaults,
 )
@@ -64,6 +65,7 @@ class StrategyHandler:
         instructions = build_strategy_static_instructions(
             language=ctx.language,
             phase_stage=ctx.runtime_policy.phase_stage,
+            prompt_profile=ctx.turn_context.get("strategy_prompt_profile"),
         )
         state_block = build_strategy_dynamic_state(
             missing_fields=missing,
@@ -151,7 +153,7 @@ class StrategyHandler:
         return {"profile": {}, "missing_fields": list(REQUIRED_FIELDS)}
 
     def build_phase_entry_guidance(self, ctx: PhaseContext) -> str | None:
-        if ctx.language == "zh":
+        if is_zh_locale(ctx.language):
             return "进入策略阶段：先验证 DSL 并生成 strategy_draft_id 供前端渲染确认，确认保存后继续在本阶段完成回测与迭代。"
         return (
             "Entering strategy phase: validate a full DSL and hand off strategy_draft_id "

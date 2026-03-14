@@ -60,15 +60,22 @@ class PromptBuilderMixin:
             user_runtime_policy=user_runtime_policy,
         )
         choice_selection = self._extract_choice_selection_from_message(payload.message)
+        strategy_prompt_profile = self._resolve_strategy_prompt_profile(
+            session=session,
+            phase=phase_before,
+        )
+        turn_context: dict[str, Any] = {
+            "choice_selection": choice_selection,
+        }
+        if strategy_prompt_profile is not None:
+            turn_context["strategy_prompt_profile"] = strategy_prompt_profile
         ctx = PhaseContext(
             user_id=user.id,
             session_artifacts=artifacts,
             session_id=session.id,
             language=language,
             runtime_policy=runtime_policy,
-            turn_context={
-                "choice_selection": choice_selection,
-            },
+            turn_context=turn_context,
         )
         prompt = handler.build_prompt(ctx, effective_prompt_user_message)
         prompt = self._apply_execution_policy(
@@ -102,6 +109,19 @@ class PromptBuilderMixin:
             prompt=prompt,
             tools=tools,
         )
+
+    @staticmethod
+    def _resolve_strategy_prompt_profile(
+        *,
+        session: Session,
+        phase: str,
+    ) -> str | None:
+        if phase != Phase.STRATEGY.value:
+            return None
+        metadata = session.metadata_ if isinstance(session.metadata_, dict) else {}
+        if bool(metadata.get("strategy_full_prompt_seeded")):
+            return "compact"
+        return "full_bootstrap"
 
     async def _hydrate_deployment_defaults(
         self,

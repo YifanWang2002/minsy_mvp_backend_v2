@@ -419,6 +419,10 @@ class PostProcessorMixin:
                 preparation=preparation,
                 usage_reconcile_payload=usage_reconcile_payload,
             )
+        self._mark_strategy_full_prompt_seeded(
+            session=session,
+            preparation=preparation,
+        )
         self._update_stream_recovery(
             session=session,
             turn_id=turn_id,
@@ -493,6 +497,29 @@ class PostProcessorMixin:
                 "assistant_message_id": str(assistant_message.id),
             },
         )
+
+    @staticmethod
+    def _mark_strategy_full_prompt_seeded(
+        *,
+        session: Session,
+        preparation: _TurnPreparation,
+    ) -> None:
+        if preparation.phase_before != Phase.STRATEGY.value:
+            return
+        turn_context = preparation.ctx.turn_context
+        prompt_profile = (
+            str(turn_context.get("strategy_prompt_profile", "")).strip().lower()
+            if isinstance(turn_context, dict)
+            else ""
+        )
+        if prompt_profile != "full_bootstrap":
+            return
+        metadata = dict(session.metadata_ or {})
+        if bool(metadata.get("strategy_full_prompt_seeded")):
+            return
+        metadata["strategy_full_prompt_seeded"] = True
+        metadata["strategy_full_prompt_seeded_at"] = datetime.now(UTC).isoformat()
+        session.metadata_ = metadata
 
     async def _handle_usage_persist_failure(
         self,
