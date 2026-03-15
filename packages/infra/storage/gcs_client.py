@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from packages.shared_settings.schema.settings import settings
+
 
 class GcsClient:
     """Thin adapter around google-cloud-storage."""
@@ -13,7 +15,21 @@ class GcsClient:
             from google.cloud import storage  # type: ignore[import-not-found]
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError("google-cloud-storage package is not installed") from exc
-        self._client = storage.Client()
+        credentials_path = settings.google_application_credentials.strip()
+        project = settings.google_cloud_project.strip() or settings.gcp_project.strip() or None
+        if credentials_path:
+            resolved = Path(credentials_path).expanduser().resolve()
+            if not resolved.is_file():
+                raise RuntimeError(
+                    "GOOGLE_APPLICATION_CREDENTIALS file does not exist: "
+                    f"{resolved}"
+                )
+            self._client = storage.Client.from_service_account_json(
+                str(resolved),
+                project=project,
+            )
+            return
+        self._client = storage.Client(project=project)
 
     def upload_file(
         self,

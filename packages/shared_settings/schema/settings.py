@@ -637,6 +637,18 @@ class Settings(BaseSettings):
         default=2,
         alias="MARKET_DATA_INCREMENTAL_SAFETY_LAG_MINUTES",
     )
+    google_application_credentials: str = Field(
+        default="",
+        alias="GOOGLE_APPLICATION_CREDENTIALS",
+    )
+    google_cloud_project: str = Field(
+        default="",
+        alias="GOOGLE_CLOUD_PROJECT",
+    )
+    gcp_project: str = Field(
+        default="",
+        alias="GCP_PROJECT",
+    )
     ibkr_gateway_host: str = Field(
         default="host.docker.internal",
         alias="IBKR_GATEWAY_HOST",

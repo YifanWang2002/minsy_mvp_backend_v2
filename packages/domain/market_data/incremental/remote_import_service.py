@@ -58,6 +58,7 @@ async def import_incremental_manifest(
             continue
         market = str(item.get("market") or "").strip().lower()
         symbol = str(item.get("symbol") or "").strip().upper()
+        session = str(item.get("session") or "").strip().lower()
         timeframe = str(item.get("timeframe") or "").strip().lower()
         object_name = str(item.get("gcs_object") or "").strip()
         if not market or not symbol or not timeframe or not object_name:
@@ -76,11 +77,12 @@ async def import_incremental_manifest(
             market=market,
             symbol=symbol,
             timeframe=timeframe,
+            session=session,
             rows=frame,
         )
         rows_written += int(write_result.rows_written)
         processed += 1
-        touched_symbols.add((market, symbol))
+        touched_symbols.add((market, symbol, session))
 
     # Re-sync catalog once after all appends.
     await scan_and_sync_catalog(db, loader.data_dir)

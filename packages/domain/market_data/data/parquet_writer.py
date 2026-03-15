@@ -25,6 +25,7 @@ def append_ohlcv_rows(
     market: str,
     symbol: str,
     timeframe: str,
+    session: str | None = None,
     rows: pd.DataFrame,
 ) -> ParquetAppendResult:
     """Append rows to yearly parquet shards and drop duplicate timestamps."""
@@ -45,7 +46,9 @@ def append_ohlcv_rows(
     if prepared.empty:
         return ParquetAppendResult(rows_input=0, rows_written=0, files_touched=0)
 
-    session = loader.MARKET_SESSION_MAP.get(market_key, "eth")
+    session_key = str(session or "").strip().lower()
+    if session_key not in {"rth", "eth"}:
+        session_key = loader.MARKET_SESSION_MAP.get(market_key, "eth")
     market_dir = loader.data_dir / market_key
     market_dir.mkdir(parents=True, exist_ok=True)
     file_timeframe = loader.FILE_TIMEFRAME_MAP[timeframe_key]
@@ -55,7 +58,7 @@ def append_ohlcv_rows(
     files_touched = 0
 
     for year, year_rows in prepared.groupby(prepared["timestamp"].dt.year):
-        file_path = market_dir / f"{symbol_key}_{file_timeframe}_{session}_{int(year)}.parquet"
+        file_path = market_dir / f"{symbol_key}_{file_timeframe}_{session_key}_{int(year)}.parquet"
         merged, added = _merge_with_existing(file_path=file_path, rows=year_rows)
         merged.to_parquet(file_path, index=False)
         rows_written += added

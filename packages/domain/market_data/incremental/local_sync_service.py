@@ -293,7 +293,12 @@ def _coverage_end_for_symbol(item: dict[str, Any]) -> datetime | None:
     return None
 
 
-async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
+async def run_local_incremental_sync(
+    *,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+    respect_session_gate: bool = True,
+) -> LocalIncrementalSyncResult:
     now_utc = datetime.now(UTC)
     run_id = now_utc.strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     if settings.market_data_incremental_execution_mode != "local_collector":
@@ -315,7 +320,18 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
     gcs_client = GcsClient()
     api_client = _RemoteIncrementalApiClient()
     safety_lag = timedelta(minutes=max(int(settings.market_data_incremental_safety_lag_minutes), 0))
-    effective_end = (now_utc - safety_lag).replace(second=0, microsecond=0)
+    default_end = (now_utc - safety_lag).replace(second=0, microsecond=0)
+    if window_end is None:
+        effective_end = default_end
+    else:
+        effective_end = window_end.astimezone(UTC).replace(second=0, microsecond=0)
+        if effective_end > default_end:
+            effective_end = default_end
+    forced_start = (
+        window_start.astimezone(UTC).replace(second=0, microsecond=0)
+        if window_start is not None
+        else None
+    )
     symbols_seen = 0
     symbols_synced = 0
     files_uploaded = 0
@@ -351,6 +367,9 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
                 if not symbol:
                     skipped_uptodate += 1
                     continue
+                session = str(symbol_item.get("session") or "eth").strip().lower()
+                if session not in {"rth", "eth"}:
+                    session = "eth"
                 try:
                     is_open = market_is_open_for_incremental(market=market, now=now_utc)
                     provider = resolve_provider_for_market(market)
@@ -363,7 +382,7 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
                     skipped_uptodate += 1
                     continue
 
-                if not is_open:
+                if respect_session_gate and not is_open:
                     skipped_closed += 1
                     continue
 
@@ -372,6 +391,8 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
                     # Conservative bootstrap range for unknown coverage.
                     coverage_end = effective_end - timedelta(days=1)
                 start = (coverage_end + timedelta(minutes=1)).replace(second=0, microsecond=0)
+                if forced_start is not None:
+                    start = max(start, forced_start)
                 if start >= effective_end:
                     skipped_uptodate += 1
                     continue
@@ -396,12 +417,12 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
                     continue
 
                 frame_5m = _aggregate_5m(frame_1m)
-                symbol_dir = stage_dir / market / symbol
+                symbol_dir = stage_dir / market / symbol / session
                 symbol_dir.mkdir(parents=True, exist_ok=True)
                 file_1m = symbol_dir / "1m.parquet"
                 frame_1m.to_parquet(file_1m, index=False)
 
-                object_1m = f"{prefix}/{market}/{symbol}/1m.parquet"
+                object_1m = f"{prefix}/{market}/{symbol}/{session}/1m.parquet"
                 await asyncio.to_thread(
                     gcs_client.upload_file,
                     local_path=file_1m,
@@ -420,7 +441,7 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
                         "market": market,
                         "symbol": symbol,
                         "timeframe": "1m",
-                        "session": symbol_item.get("session", "eth"),
+                        "session": session,
                         "gcs_object": object_1m,
                         "row_count": int(len(frame_1m)),
                         "start": start_iso,
@@ -430,7 +451,7 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
                 if not frame_5m.empty:
                     file_5m = symbol_dir / "5m.parquet"
                     frame_5m.to_parquet(file_5m, index=False)
-                    object_5m = f"{prefix}/{market}/{symbol}/5m.parquet"
+                    object_5m = f"{prefix}/{market}/{symbol}/{session}/5m.parquet"
                     await asyncio.to_thread(
                         gcs_client.upload_file,
                         local_path=file_5m,
@@ -445,7 +466,7 @@ async def run_local_incremental_sync() -> LocalIncrementalSyncResult:
                             "market": market,
                             "symbol": symbol,
                             "timeframe": "5m",
-                            "session": symbol_item.get("session", "eth"),
+                            "session": session,
                             "gcs_object": object_5m,
                             "row_count": int(len(frame_5m)),
                             "start": frame_5m["timestamp"].min().isoformat(),
