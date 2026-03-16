@@ -7,6 +7,9 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import numpy as np
+import pandas as pd
+
 from apps.mcp.domains.market_data import tools as market_tools
 from packages.infra.providers.trading.adapters.base import OhlcvBar, QuoteSnapshot
 
@@ -485,3 +488,228 @@ async def test_080_market_data_fetch_missing_ranges_normalizes_provider_aliases(
     assert payload["estimated_wait_seconds"] == 15
     assert payload["recommended_poll_interval_seconds"] == 5
     assert payload["recommended_next_poll_seconds"] == 5
+
+
+def _build_sample_regime_frame(rows: int = 600) -> pd.DataFrame:
+    index = pd.date_range("2026-01-01", periods=rows, freq="5min", tz="UTC")
+    x = np.linspace(0, 24, rows)
+    close = 100 + np.sin(x) * 2 + np.linspace(0, 6, rows)
+    open_ = close + np.cos(x) * 0.2
+    high = np.maximum(open_, close) + 0.5
+    low = np.minimum(open_, close) - 0.5
+    volume = 1_000 + np.sin(x * 2.2) * 120 + np.linspace(0, 40, rows)
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        },
+        index=index,
+    )
+
+
+def _build_hourly_regime_frame(rows: int, *, start: str = "2025-01-01T00:00:00Z") -> pd.DataFrame:
+    index = pd.date_range(start, periods=rows, freq="1h", tz="UTC")
+    x = np.linspace(0, 12, rows)
+    close = 150 + np.sin(x) * 1.2 + np.linspace(0, 3, rows)
+    open_ = close + np.cos(x) * 0.1
+    high = np.maximum(open_, close) + 0.3
+    low = np.minimum(open_, close) - 0.3
+    volume = 800 + np.sin(x * 1.5) * 80 + np.linspace(0, 20, rows)
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        },
+        index=index,
+    )
+
+
+async def test_090_pre_strategy_get_regime_snapshot_builds_snapshot_and_cache(
+    monkeypatch: Any,
+) -> None:
+    frame = _build_sample_regime_frame()
+
+    async def _fake_resolve_regime_frame(**kwargs: Any) -> tuple[pd.DataFrame, str, str]:
+        del kwargs
+        return frame.copy(), "fallback_local", "local_parquet"
+
+    monkeypatch.setattr(market_tools, "_resolve_regime_frame", _fake_resolve_regime_frame)
+
+    result = await market_tools.pre_strategy_get_regime_snapshot(
+        market="crypto",
+        symbol="BTCUSD",
+        opportunity_frequency_bucket="daily",
+        holding_period_bucket="swing_days",
+        lookback_bars=300,
+    )
+    payload = json.loads(result)
+
+    assert payload["ok"] is True
+    assert payload["snapshot_id"]
+    assert payload["timeframe_plan"]["primary"]
+    assert "selected_timeframe" not in payload
+    assert isinstance(payload.get("primary"), dict)
+    assert isinstance(payload.get("secondary"), dict)
+    assert payload["primary"]["timeframe"] == payload["timeframe_plan"]["primary"]
+    assert payload["secondary"]["timeframe"] == payload["timeframe_plan"]["secondary"]
+    assert payload["primary"]["family_scores"]["recommended_family"] in {
+        "trend_continuation",
+        "mean_reversion",
+        "volatility_regime",
+    }
+    assert 0.0 <= payload["primary"]["features"]["adx_n"] <= 1.0
+    assert -1.0 <= payload["primary"]["features"]["cumulative_return_n"] <= 1.0
+
+
+def test_095_load_local_regime_frame_expands_lookback_for_4h(
+    monkeypatch: Any,
+) -> None:
+    calls: dict[str, int] = {"load": 0}
+
+    class _FakeLoader:
+        def get_symbol_metadata(self, market: str, symbol: str) -> dict[str, Any]:
+            del market, symbol
+            return {
+                "available_timerange": {
+                    "start": "2024-01-01T00:00:00+00:00",
+                    "end": "2026-03-13T20:59:00+00:00",
+                }
+            }
+
+        def load(
+            self,
+            market: str,
+            symbol: str,
+            timeframe: str,
+            start_date: datetime,
+            end_date: datetime,
+        ) -> pd.DataFrame:
+            del market, symbol, start_date, end_date
+            calls["load"] += 1
+            assert timeframe == "1h"
+            if calls["load"] == 1:
+                # First attempt intentionally under-fetches (insufficient after 4h resample).
+                return _build_hourly_regime_frame(320, start="2026-01-01T00:00:00Z")
+            # Second attempt provides enough history for 500x 4h bars.
+            return _build_hourly_regime_frame(2600, start="2025-01-01T00:00:00Z")
+
+    monkeypatch.setattr(market_tools, "_get_data_loader", lambda: _FakeLoader())
+
+    frame = market_tools._load_local_regime_frame(
+        market="us_stocks",
+        symbol="AAPL",
+        timeframe="4h",
+        lookback_bars=500,
+        end_utc=datetime(2026, 3, 15, 0, 0, tzinfo=UTC),
+    )
+
+    assert calls["load"] >= 2
+    assert len(frame) == 500
+
+
+async def test_096_resolve_regime_frame_uses_local_storage_only(
+    monkeypatch: Any,
+) -> None:
+    calls: dict[str, int] = {"alpaca": 0, "local": 0}
+    sample = _build_sample_regime_frame(rows=700)
+
+    async def _fake_fetch_alpaca_regime_frame(**kwargs: Any) -> pd.DataFrame:
+        del kwargs
+        calls["alpaca"] += 1
+        return sample.copy()
+
+    def _fake_load_local_regime_frame(**kwargs: Any) -> pd.DataFrame:
+        del kwargs
+        calls["local"] += 1
+        return sample.copy()
+
+    monkeypatch.setattr(
+        market_tools,
+        "_fetch_alpaca_regime_frame",
+        _fake_fetch_alpaca_regime_frame,
+    )
+    monkeypatch.setattr(
+        market_tools,
+        "_load_local_regime_frame",
+        _fake_load_local_regime_frame,
+    )
+
+    frame, source_mode, source_label = await market_tools._resolve_regime_frame(
+        market="crypto",
+        symbol="BTCUSD",
+        timeframe="1h",
+        lookback_bars=500,
+        end_utc=datetime(2026, 3, 15, 0, 0, tzinfo=UTC),
+    )
+
+    assert calls["alpaca"] == 0
+    assert calls["local"] == 1
+    assert source_mode == "local_primary"
+    assert source_label == "local_parquet"
+    assert len(frame) == 700
+
+
+async def test_100_pre_strategy_render_candlestick_uses_cached_snapshot(
+    monkeypatch: Any,
+) -> None:
+    frame = _build_sample_regime_frame()
+
+    async def _fake_resolve_regime_frame(**kwargs: Any) -> tuple[pd.DataFrame, str, str]:
+        del kwargs
+        return frame.copy(), "fallback_local", "local_parquet"
+
+    monkeypatch.setattr(market_tools, "_resolve_regime_frame", _fake_resolve_regime_frame)
+    monkeypatch.setattr(
+        market_tools,
+        "render_candlestick_image",
+        lambda **kwargs: "fake-image-object",
+    )
+
+    snapshot_payload = json.loads(
+        await market_tools.pre_strategy_get_regime_snapshot(
+            market="crypto",
+            symbol="ETHUSD",
+            opportunity_frequency_bucket="few_per_week",
+            holding_period_bucket="intraday",
+            lookback_bars=280,
+        )
+    )
+    snapshot_id = snapshot_payload["snapshot_id"]
+
+    rendered = market_tools.pre_strategy_render_candlestick(
+        snapshot_id=snapshot_id,
+        timeframe="primary",
+        bars=120,
+    )
+
+    assert isinstance(rendered, list)
+    assert rendered[0] == "fake-image-object"
+    assert isinstance(rendered[1], str)
+    assert "Chart timeframe=" in rendered[1]
+
+
+def test_110_register_market_data_tools_includes_pre_strategy_regime_tools() -> None:
+    class _FakeMCP:
+        def __init__(self) -> None:
+            self.registered_names: list[str] = []
+
+        def tool(self):  # noqa: ANN001
+            def _decorator(fn):  # noqa: ANN001
+                self.registered_names.append(fn.__name__)
+                return fn
+
+            return _decorator
+
+    fake_mcp = _FakeMCP()
+    market_tools.register_market_data_tools(fake_mcp)  # type: ignore[arg-type]
+
+    assert "pre_strategy_get_regime_snapshot" in fake_mcp.registered_names
+    assert "pre_strategy_render_candlestick" not in fake_mcp.registered_names
+    assert "pre_strategy_get_regime_snapshot" in market_tools.TOOL_NAMES
+    assert "pre_strategy_render_candlestick" not in market_tools.TOOL_NAMES

@@ -17,6 +17,7 @@ class ParquetAppendResult:
     rows_input: int
     rows_written: int
     files_touched: int
+    file_paths: tuple[str, ...] = ()
 
 
 def append_ohlcv_rows(
@@ -56,6 +57,7 @@ def append_ohlcv_rows(
     rows_input = len(prepared)
     rows_written = 0
     files_touched = 0
+    touched_file_paths: list[str] = []
 
     for year, year_rows in prepared.groupby(prepared["timestamp"].dt.year):
         file_path = market_dir / f"{symbol_key}_{file_timeframe}_{session_key}_{int(year)}.parquet"
@@ -63,11 +65,13 @@ def append_ohlcv_rows(
         merged.to_parquet(file_path, index=False)
         rows_written += added
         files_touched += 1
+        touched_file_paths.append(str(file_path))
 
     return ParquetAppendResult(
         rows_input=rows_input,
         rows_written=rows_written,
         files_touched=files_touched,
+        file_paths=tuple(touched_file_paths),
     )
 
 

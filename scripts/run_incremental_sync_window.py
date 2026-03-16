@@ -11,6 +11,9 @@ from datetime import UTC, datetime
 from packages.domain.market_data.incremental.local_sync_service import (
     run_local_incremental_sync,
 )
+from packages.domain.market_data.incremental.provider_router import (
+    normalize_incremental_market,
+)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -43,13 +46,26 @@ def main() -> int:
         action="store_true",
         help="Ignore market session gate and fetch historical windows directly.",
     )
+    parser.add_argument(
+        "--markets",
+        default="",
+        help="Comma-separated market list (crypto,us_stocks,forex,futures). Empty means all.",
+    )
     args = parser.parse_args()
+    include_markets: set[str] | None = None
+    if str(args.markets).strip():
+        include_markets = {
+            normalize_incremental_market(item)
+            for item in str(args.markets).split(",")
+            if item.strip()
+        }
 
     result = asyncio.run(
         run_local_incremental_sync(
             window_start=_parse_dt(args.window_start),
             window_end=_parse_dt(args.window_end),
             respect_session_gate=not bool(args.ignore_session_gate),
+            include_markets=include_markets,
         )
     )
     print(json.dumps(result.to_dict(), ensure_ascii=False, separators=(",", ":")))

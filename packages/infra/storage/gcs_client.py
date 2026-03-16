@@ -10,6 +10,8 @@ from packages.shared_settings.schema.settings import settings
 class GcsClient:
     """Thin adapter around google-cloud-storage."""
 
+    _DEFAULT_TIMEOUT_SECONDS = 300
+
     def __init__(self) -> None:
         try:
             from google.cloud import storage  # type: ignore[import-not-found]
@@ -44,6 +46,7 @@ class GcsClient:
         blob.upload_from_filename(
             str(path),
             content_type=content_type,
+            timeout=self._DEFAULT_TIMEOUT_SECONDS,
         )
 
     def upload_bytes(
@@ -55,7 +58,11 @@ class GcsClient:
         content_type: str | None = None,
     ) -> None:
         blob = self._client.bucket(bucket_name).blob(object_name)
-        blob.upload_from_string(payload, content_type=content_type)
+        blob.upload_from_string(
+            payload,
+            content_type=content_type,
+            timeout=self._DEFAULT_TIMEOUT_SECONDS,
+        )
 
     def download_bytes(
         self,
@@ -64,4 +71,4 @@ class GcsClient:
         object_name: str,
     ) -> bytes:
         blob = self._client.bucket(bucket_name).blob(object_name)
-        return bytes(blob.download_as_bytes())
+        return bytes(blob.download_as_bytes(timeout=self._DEFAULT_TIMEOUT_SECONDS))

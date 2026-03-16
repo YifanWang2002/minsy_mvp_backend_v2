@@ -37,6 +37,16 @@ from packages.domain.market_data.sync_service import (
     get_market_data_sync_job_view,
     schedule_market_data_sync_job,
 )
+from packages.domain.market_data.regime import (
+    FamilyScores,
+    RegimeSnapshot,
+    SUPPORTED_REGIME_TIMEFRAMES,
+    StrategyFamilyId,
+    TimeframePlan,
+    build_regime_feature_snapshot,
+    map_pre_strategy_timeframes,
+    score_strategy_families,
+)
 
 __all__ = [
     "AggregatedBar",
@@ -55,6 +65,12 @@ __all__ = [
     "RuntimeBar",
     "SubscriptionDelta",
     "SubscriptionRegistry",
+    "SUPPORTED_REGIME_TIMEFRAMES",
+    "StrategyFamilyId",
+    "TimeframePlan",
+    "FamilyScores",
+    "RegimeSnapshot",
+    "build_regime_feature_snapshot",
     "create_market_data_sync_job",
     "execute_market_data_sync_job",
     "execute_market_data_sync_job_with_fresh_session",
@@ -63,8 +79,10 @@ __all__ = [
     "get_symbol_coverage",
     "mark_accessed",
     "market_data_runtime",
+    "map_pre_strategy_timeframes",
     "scan_and_sync_catalog",
     "schedule_market_data_sync_job",
+    "score_strategy_families",
     "upsert_catalog_entry",
     "upsert_catalog_entry_from_parquet",
 ]

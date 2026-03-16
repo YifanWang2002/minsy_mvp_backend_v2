@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
 from uuid import UUID
 
 import httpx
+import pandas as pd
 from mcp.server.fastmcp import Context, FastMCP
 
 from apps.mcp.auth.context_auth import (
@@ -16,12 +18,31 @@ from apps.mcp.auth.context_auth import (
     extract_mcp_context_token,
 )
 from apps.mcp.common.utils import log_mcp_tool_result, to_json, utc_now_iso
+from apps.mcp.domains.market_data.regime_render import (
+    build_chart_alt_text,
+    render_candlestick_image,
+)
+from apps.mcp.domains.market_data.regime_runtime_cache import (
+    get_snapshot as get_regime_snapshot_from_cache,
+)
+from apps.mcp.domains.market_data.regime_runtime_cache import (
+    put_snapshot as put_regime_snapshot_in_cache,
+)
 from packages.domain.market_data.data import DataLoader
 from packages.domain.market_data.data.local_coverage import (
     LocalCoverageInputError,
     deserialize_missing_ranges,
     detect_missing_ranges,
     serialize_missing_ranges,
+)
+from packages.domain.market_data.regime import (
+    SUPPORTED_REGIME_TIMEFRAMES,
+    build_regime_feature_snapshot,
+    map_pre_strategy_timeframes,
+    score_strategy_families,
+)
+from packages.domain.market_data.regime.family_scoring import (
+    build_family_option_subtitles,
 )
 from packages.domain.market_data.sync_service import (
     MarketDataNoMissingDataError,
@@ -46,6 +67,7 @@ TOOL_NAMES: tuple[str, ...] = (
     "market_data_detect_missing_ranges",
     "market_data_fetch_missing_ranges",
     "market_data_get_sync_job",
+    "pre_strategy_get_regime_snapshot",
     # Backward compatibility aliases.
     "market_data_get_candles",
 )
@@ -75,6 +97,12 @@ VALID_PERIODS = (
     "max",
 )
 _ALPACA_SUPPORTED_MARKETS: frozenset[str] = frozenset({"us_stocks", "crypto"})
+_PRE_STRATEGY_OPPORTUNITY_BUCKETS: frozenset[str] = frozenset(
+    {"few_per_month", "few_per_week", "daily", "multiple_per_day"}
+)
+_PRE_STRATEGY_HOLDING_BUCKETS: frozenset[str] = frozenset(
+    {"intraday_scalp", "intraday", "swing_days", "position_weeks_plus"}
+)
 
 _MARKET_ALIASES: dict[str, str] = {
     "stock": "us_stocks",
@@ -400,6 +428,202 @@ def _bars_to_records(
             }
         )
     return records
+
+
+def _bars_to_dataframe(*, bars: list[OhlcvBar], end: datetime | None = None) -> pd.DataFrame:
+    records = _bars_to_records(bars=bars, end=end)
+    if not records:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    frame = pd.DataFrame.from_records(records)
+    frame["datetime"] = pd.to_datetime(frame["datetime"], utc=True)
+    frame = frame.set_index("datetime").sort_index()
+    return frame[["open", "high", "low", "close", "volume"]].astype(float)
+
+
+def _resample_ohlcv_frame(frame: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    normalized = str(timeframe).strip().lower()
+    if frame.empty:
+        return frame
+    if normalized not in {"4h"}:
+        return frame
+    return (
+        frame.resample("4h")
+        .agg(
+            {
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }
+        )
+        .dropna(subset=["open", "high", "low", "close"])
+    )
+
+
+def _normalize_regime_timeframe(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized in {"60m"}:
+        normalized = "1h"
+    if normalized not in set(SUPPORTED_REGIME_TIMEFRAMES):
+        raise ValueError(
+            "Unsupported timeframe for regime analysis. "
+            f"Use one of: {list(SUPPORTED_REGIME_TIMEFRAMES)}"
+        )
+    return normalized
+
+
+def _resolve_local_available_start(
+    *,
+    loader: DataLoader,
+    market: str,
+    symbol: str,
+) -> datetime | None:
+    try:
+        metadata = loader.get_symbol_metadata(market, symbol)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    timerange = metadata.get("available_timerange")
+    if not isinstance(timerange, dict):
+        return None
+    start_raw = timerange.get("start")
+    if not isinstance(start_raw, str) or not start_raw.strip():
+        return None
+    try:
+        return _parse_datetime_field(start_raw, "available_start")
+    except ValueError:
+        return None
+
+
+async def _fetch_alpaca_regime_frame(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    lookback_bars: int,
+    end_utc: datetime,
+) -> pd.DataFrame:
+    _validate_alpaca_market(market)
+    requested = _normalize_regime_timeframe(timeframe)
+    if requested == "4h":
+        base_timeframe = "1Hour"
+        safe_limit = max(200, min(lookback_bars * 4 + 100, 2000))
+        seconds = max(_timeframe_to_seconds("1h") or 3600, 60)
+    else:
+        base_timeframe = _to_alpaca_timeframe(requested)
+        safe_limit = max(50, min(lookback_bars + 100, 2000))
+        seconds = max(_timeframe_to_seconds(requested) or 60, 60)
+
+    since = end_utc - timedelta(seconds=safe_limit * seconds * 2)
+    client = AlpacaMarketDataClient()
+    try:
+        bars = await client.fetch_ohlcv(
+            symbol=symbol,
+            market=market,
+            timeframe=base_timeframe,
+            since=since,
+            limit=safe_limit,
+        )
+    finally:
+        await client.aclose()
+
+    frame = _bars_to_dataframe(bars=bars, end=end_utc)
+    if requested == "4h":
+        frame = _resample_ohlcv_frame(frame, requested)
+    if len(frame) > lookback_bars:
+        frame = frame.tail(lookback_bars)
+    return frame
+
+
+def _load_local_regime_frame(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    lookback_bars: int,
+    end_utc: datetime,
+) -> pd.DataFrame:
+    loader = _get_data_loader()
+    normalized_timeframe = _normalize_regime_timeframe(timeframe)
+    # For sparse sessions (notably RTH equities), fixed windows can under-fetch,
+    # so we expand the local lookback progressively until bars are sufficient
+    # or we hit the earliest known local timestamp.
+    source_timeframe = "1h" if normalized_timeframe == "4h" else normalized_timeframe
+    seconds = _timeframe_to_seconds(source_timeframe) or 60
+    base_multiplier = 8 if normalized_timeframe == "4h" else 4
+    history_span = timedelta(seconds=max(seconds * lookback_bars * base_multiplier, 60 * 60))
+    available_start = _resolve_local_available_start(
+        loader=loader,
+        market=market,
+        symbol=symbol,
+    )
+
+    best_frame = pd.DataFrame()
+    last_error: Exception | None = None
+
+    for _attempt in range(8):
+        start_utc = end_utc - history_span
+        if available_start is not None and start_utc < available_start:
+            start_utc = available_start
+
+        try:
+            source_frame = loader.load(
+                market=market,
+                symbol=symbol,
+                timeframe=source_timeframe,
+                start_date=start_utc,
+                end_date=end_utc,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            last_error = exc
+            if available_start is not None and start_utc <= available_start:
+                break
+            history_span *= 2
+            continue
+
+        if normalized_timeframe == "4h":
+            frame = _resample_ohlcv_frame(source_frame, "4h")
+        else:
+            frame = source_frame
+
+        if len(frame) > len(best_frame):
+            best_frame = frame
+        if len(frame) >= lookback_bars:
+            break
+        if available_start is not None and start_utc <= available_start:
+            break
+        history_span *= 2
+
+    if not best_frame.empty:
+        if len(best_frame) > lookback_bars:
+            return best_frame.tail(lookback_bars)
+        return best_frame
+
+    if last_error is not None:
+        raise last_error
+    raise ValueError(
+        f"No local candles found for {symbol} market={market} timeframe={normalized_timeframe}."
+    )
+
+
+async def _resolve_regime_frame(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    lookback_bars: int,
+    end_utc: datetime,
+) -> tuple[pd.DataFrame, str, str]:
+    local_frame = _load_local_regime_frame(
+        market=market,
+        symbol=symbol,
+        timeframe=timeframe,
+        lookback_bars=lookback_bars,
+        end_utc=end_utc,
+    )
+    return local_frame, "local_primary", "local_parquet"
 
 
 def _metadata_from_quote(quote: QuoteSnapshot) -> dict[str, Any]:
@@ -736,6 +960,542 @@ async def get_symbol_metadata(symbol: str, market: str) -> str:
         await client.aclose()
 
 
+def _build_regime_summary_text(
+    *,
+    timeframe: str,
+    family_scores: dict[str, Any],
+    snapshot: dict[str, Any],
+) -> str:
+    recommended = str(family_scores.get("recommended_family", "trend_continuation")).strip()
+    confidence = float(family_scores.get("confidence", 0.0) or 0.0)
+    trend = float(family_scores.get("trend_continuation", 0.0) or 0.0)
+    reversion = float(family_scores.get("mean_reversion", 0.0) or 0.0)
+    volatility = float(family_scores.get("volatility_regime", 0.0) or 0.0)
+    trend_block = snapshot.get("trend_reversion", {})
+    adx = float(trend_block.get("adx", 0.0) or 0.0)
+    chop = float(trend_block.get("chop", 0.0) or 0.0)
+    return (
+        f"Timeframe {timeframe} shows recommended family={recommended} "
+        f"(confidence {confidence:.2f}). "
+        f"Scores trend={trend:.2f}, mean_reversion={reversion:.2f}, volatility={volatility:.2f}. "
+        f"ADX={adx:.1f}, CHOP={chop:.1f}."
+    )
+
+
+def _safe_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(numeric) or math.isinf(numeric):
+        return default
+    return numeric
+
+
+def _clip(value: float, *, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _norm_01(value: Any, divisor: float) -> float:
+    return _clip(_safe_float(value) / max(divisor, 1e-9), low=0.0, high=1.0)
+
+
+def _signed_tanh(value: Any, scale: float) -> float:
+    return _clip(math.tanh(_safe_float(value) / max(scale, 1e-9)), low=-1.0, high=1.0)
+
+
+def _safe_log_ratio(value: Any) -> float:
+    raw = max(_safe_float(value, default=1.0), 1e-9)
+    return _safe_float(math.log(raw), default=0.0)
+
+
+def _normalized_primary_features(snapshot: dict[str, Any]) -> dict[str, Any]:
+    window_stats = snapshot.get("window_stats", {})
+    price_path = snapshot.get("price_path_summary", {})
+    swing = snapshot.get("swing_structure", {})
+    noise = snapshot.get("efficiency_noise", {})
+    vol_state = snapshot.get("volatility_state", {})
+    trend = snapshot.get("trend_reversion", {})
+    volume = snapshot.get("volume_participation", {})
+    coupling = snapshot.get("volatility_direction_coupling", {})
+
+    return {
+        # Cross-asset comparable transforms (bounded/ratio-based where possible).
+        "cumulative_return_n": _signed_tanh(
+            window_stats.get("cumulative_return"),
+            scale=0.2,
+        ),
+        "recent_return_n": _signed_tanh(
+            window_stats.get("recent_return"),
+            scale=0.03,
+        ),
+        "rolling_return_std_n": _signed_tanh(
+            window_stats.get("rolling_return_std"),
+            scale=0.05,
+        ),
+        "return_skew_n": _signed_tanh(window_stats.get("return_skew"), scale=2.0),
+        "return_kurtosis_n": _signed_tanh(window_stats.get("return_kurtosis"), scale=5.0),
+        "max_drawdown_n": _signed_tanh(price_path.get("max_drawdown"), scale=0.2),
+        "up_bar_ratio": _clip(
+            _safe_float(price_path.get("up_bar_ratio"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "doji_ratio": _clip(
+            _safe_float(price_path.get("doji_ratio"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "gap_frequency": _clip(
+            _safe_float(price_path.get("gap_frequency"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "breakout_frequency": _clip(
+            _safe_float(swing.get("breakout_frequency"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "false_breakout_frequency": _clip(
+            _safe_float(swing.get("false_breakout_frequency"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "distance_to_recent_midrange_n": _clip(
+            _safe_float(swing.get("distance_to_recent_midrange"), default=0.0),
+            low=-1.0,
+            high=1.0,
+        ),
+        "efficiency_ratio": _clip(
+            _safe_float(noise.get("efficiency_ratio"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "sign_autocorrelation": _clip(
+            _safe_float(noise.get("sign_autocorrelation"), default=0.0),
+            low=-1.0,
+            high=1.0,
+        ),
+        "choppiness_n": _norm_01(noise.get("choppiness_index"), 100.0),
+        "vol_percentile": _clip(
+            _safe_float(vol_state.get("vol_percentile"), default=0.5),
+            low=0.0,
+            high=1.0,
+        ),
+        "short_long_vol_log": _safe_log_ratio(vol_state.get("short_long_vol_ratio")),
+        "atr_short_long_log": _safe_log_ratio(vol_state.get("atr_short_long_ratio")),
+        "squeeze_score": _clip(
+            _safe_float(vol_state.get("squeeze_score"), default=0.5),
+            low=0.0,
+            high=1.0,
+        ),
+        "volatility_change_n": _signed_tanh(
+            vol_state.get("volatility_change_rate"),
+            scale=0.5,
+        ),
+        "volatility_expansion_flag": 1.0
+        if _safe_float(vol_state.get("volatility_expansion_flag"), default=0.0) >= 0.5
+        else 0.0,
+        "volatility_contraction_flag": 1.0
+        if _safe_float(vol_state.get("volatility_contraction_flag"), default=0.0) >= 0.5
+        else 0.0,
+        "adx_n": _norm_01(trend.get("adx"), 100.0),
+        "price_zscore_n": _signed_tanh(trend.get("price_zscore"), scale=3.0),
+        "bollinger_position_n": _clip(
+            _safe_float(trend.get("bollinger_position"), default=0.5),
+            low=0.0,
+            high=1.0,
+        ),
+        "rsi_n": _norm_01(trend.get("rsi"), 100.0),
+        "distance_from_vwap_n": _clip(
+            _safe_float(trend.get("distance_from_vwap"), default=0.0),
+            low=-1.0,
+            high=1.0,
+        ),
+        "volume_reliable_flag": 1.0
+        if _safe_float(volume.get("volume_reliable_flag"), default=0.0) >= 0.5
+        else 0.0,
+        "relative_volume_log": _safe_log_ratio(volume.get("relative_volume")),
+        "mfi_n": _norm_01(volume.get("mfi"), 100.0),
+        "dry_up_reversal_hint": _clip(
+            _safe_float(volume.get("dry_up_reversal_hint"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "trend_with_low_vol": bool(coupling.get("trend_with_low_vol", False)),
+        "trend_with_expanding_vol": bool(
+            coupling.get("trend_with_expanding_vol", False)
+        ),
+        "range_with_low_vol": bool(coupling.get("range_with_low_vol", False)),
+        "panic_reversal_with_high_vol": bool(
+            coupling.get("panic_reversal_with_high_vol", False)
+        ),
+    }
+
+
+def _normalized_secondary_features(primary_features: dict[str, Any]) -> dict[str, Any]:
+    brief_keys: tuple[str, ...] = (
+        "adx_n",
+        "choppiness_n",
+        "efficiency_ratio",
+        "price_zscore_n",
+        "vol_percentile",
+        "short_long_vol_log",
+        "squeeze_score",
+        "volatility_change_n",
+        "breakout_frequency",
+        "distance_from_vwap_n",
+        "relative_volume_log",
+        "max_drawdown_n",
+        "distance_to_recent_midrange_n",
+    )
+    return {
+        key: primary_features[key]
+        for key in brief_keys
+        if key in primary_features
+    }
+
+
+def _compact_family_scores(
+    scores_payload: dict[str, Any],
+    *,
+    include_evidence: bool,
+) -> dict[str, Any]:
+    compact = {
+        "trend_continuation": _clip(
+            _safe_float(scores_payload.get("trend_continuation"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "mean_reversion": _clip(
+            _safe_float(scores_payload.get("mean_reversion"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "volatility_regime": _clip(
+            _safe_float(scores_payload.get("volatility_regime"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+        "recommended_family": str(
+            scores_payload.get("recommended_family", "trend_continuation")
+        ).strip(),
+        "confidence": _clip(
+            _safe_float(scores_payload.get("confidence"), default=0.0),
+            low=0.0,
+            high=1.0,
+        ),
+    }
+    if include_evidence:
+        evidence_for = scores_payload.get("evidence_for")
+        evidence_against = scores_payload.get("evidence_against")
+        if isinstance(evidence_for, dict):
+            compact["evidence_for"] = evidence_for
+        if isinstance(evidence_against, dict):
+            compact["evidence_against"] = evidence_against
+    return compact
+
+
+async def pre_strategy_get_regime_snapshot(
+    market: str,
+    symbol: str,
+    opportunity_frequency_bucket: str,
+    holding_period_bucket: str,
+    lookback_bars: int = 500,
+    end_utc: str | None = None,
+) -> str:
+    """Build pre-strategy regime snapshot for one symbol with two mapped timeframes."""
+
+    context = _build_market_input_context(
+        market=market,
+        symbol=symbol,
+        extra_context={
+            "opportunity_frequency_bucket": opportunity_frequency_bucket,
+            "holding_period_bucket": holding_period_bucket,
+            "lookback_bars": lookback_bars,
+            "end_utc": end_utc,
+        },
+    )
+    try:
+        market_key = _normalize_market(market)
+        symbol_key = _normalize_symbol(symbol)
+        frequency_key = str(opportunity_frequency_bucket).strip().lower()
+        holding_key = str(holding_period_bucket).strip().lower()
+        if frequency_key not in _PRE_STRATEGY_OPPORTUNITY_BUCKETS:
+            raise ValueError(
+                "Unsupported opportunity_frequency_bucket. "
+                f"Use one of: {sorted(_PRE_STRATEGY_OPPORTUNITY_BUCKETS)}"
+            )
+        if holding_key not in _PRE_STRATEGY_HOLDING_BUCKETS:
+            raise ValueError(
+                "Unsupported holding_period_bucket. "
+                f"Use one of: {sorted(_PRE_STRATEGY_HOLDING_BUCKETS)}"
+            )
+        requested_lookback = int(lookback_bars)
+        if requested_lookback <= 0:
+            requested_lookback = int(settings.pre_strategy_regime_lookback_bars)
+        safe_lookback = max(
+            int(settings.pre_strategy_regime_min_bars),
+            min(requested_lookback, 1200),
+        )
+        resolved_end = (
+            _parse_datetime_field(end_utc, "end_utc")
+            if isinstance(end_utc, str) and end_utc.strip()
+            else datetime.now(UTC)
+        )
+        timeframe_plan = map_pre_strategy_timeframes(
+            opportunity_frequency_bucket=frequency_key,
+            holding_period_bucket=holding_key,
+        )
+    except ValueError as exc:
+        return _build_error_payload(
+            tool="pre_strategy_get_regime_snapshot",
+            error_code="INVALID_INPUT",
+            error_message=str(exc),
+            context=context,
+        )
+
+    by_timeframe: dict[str, dict[str, Any]] = {}
+    candles_by_timeframe: dict[str, pd.DataFrame] = {}
+
+    for timeframe in timeframe_plan.candidates:
+        try:
+            frame, source_mode, source_label = await _resolve_regime_frame(
+                market=market_key,
+                symbol=symbol_key,
+                timeframe=timeframe,
+                lookback_bars=safe_lookback,
+                end_utc=resolved_end,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _build_error_payload(
+                tool="pre_strategy_get_regime_snapshot",
+                error_code="REGIME_DATA_FETCH_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+                context={**context, "timeframe": timeframe},
+            )
+
+        if frame.empty:
+            return _build_error_payload(
+                tool="pre_strategy_get_regime_snapshot",
+                error_code="CANDLES_NOT_FOUND",
+                error_message=f"No candles available for {symbol_key} on timeframe={timeframe}.",
+                context={**context, "timeframe": timeframe},
+            )
+        if len(frame) < int(settings.pre_strategy_regime_min_bars):
+            return _build_error_payload(
+                tool="pre_strategy_get_regime_snapshot",
+                error_code="INSUFFICIENT_BARS",
+                error_message=(
+                    f"Insufficient candles for stable regime analysis. bars={len(frame)} timeframe={timeframe}"
+                ),
+                context={**context, "timeframe": timeframe},
+            )
+
+        snapshot = build_regime_feature_snapshot(
+            frame,
+            timeframe=timeframe,
+            lookback_bars=safe_lookback,
+            pivot_window=max(2, int(settings.pre_strategy_regime_pivot_window)),
+        )
+        scores = score_strategy_families(snapshot)
+        scores_payload = scores.to_dict()
+        summary = _build_regime_summary_text(
+            timeframe=timeframe,
+            family_scores=scores_payload,
+            snapshot=snapshot,
+        )
+        subtitles = build_family_option_subtitles(snapshot, scores)
+        normalized_primary = _normalized_primary_features(snapshot)
+        normalized_secondary = _normalized_secondary_features(normalized_primary)
+        payload = {
+            "timeframe": timeframe,
+            "bars": len(frame),
+            "source_mode": source_mode,
+            "source_label": source_label,
+            "family_scores": scores_payload,
+            "summary": summary,
+            "choice_option_subtitles": subtitles,
+            "normalized_primary_features": normalized_primary,
+            "normalized_secondary_features": normalized_secondary,
+            "snapshot": snapshot,
+        }
+        by_timeframe[timeframe] = payload
+        candles_by_timeframe[timeframe] = frame
+
+    primary_payload = by_timeframe.get(timeframe_plan.primary)
+    secondary_payload = by_timeframe.get(timeframe_plan.secondary)
+    if not isinstance(primary_payload, dict) or not isinstance(secondary_payload, dict):
+        return _build_error_payload(
+            tool="pre_strategy_get_regime_snapshot",
+            error_code="REGIME_INTERNAL_ERROR",
+            error_message="Mapped timeframe payload is missing.",
+            context=context,
+        )
+
+    cache_payload = {
+        "market": market_key,
+        "symbol": symbol_key,
+        "timeframe_plan": timeframe_plan.to_dict(),
+        "selected_timeframe": timeframe_plan.primary,
+        "snapshots_by_timeframe": by_timeframe,
+        "candles_by_timeframe": candles_by_timeframe,
+    }
+    snapshot_id = put_regime_snapshot_in_cache(
+        cache_payload,
+        ttl_seconds=settings.pre_strategy_regime_cache_ttl_seconds,
+    )
+
+    response_data = {
+        "market": market_key,
+        "symbol": symbol_key,
+        "lookback_bars": safe_lookback,
+        "end_utc": _datetime_to_utc_z(resolved_end),
+        "timeframe_plan": timeframe_plan.to_dict(),
+        "primary": {
+            "timeframe": str(primary_payload.get("timeframe", "")).strip(),
+            "bars": int(primary_payload.get("bars", 0) or 0),
+            "source_mode": str(primary_payload.get("source_mode", "")).strip(),
+            "source_label": str(primary_payload.get("source_label", "")).strip(),
+            "summary": str(primary_payload.get("summary", "")).strip(),
+            "family_scores": _compact_family_scores(
+                dict(primary_payload.get("family_scores", {})),
+                include_evidence=True,
+            ),
+            "choice_option_subtitles": dict(
+                primary_payload.get("choice_option_subtitles", {})
+            ),
+            "features": dict(primary_payload.get("normalized_primary_features", {})),
+        },
+        "secondary": {
+            "timeframe": str(secondary_payload.get("timeframe", "")).strip(),
+            "bars": int(secondary_payload.get("bars", 0) or 0),
+            "summary": str(secondary_payload.get("summary", "")).strip(),
+            "family_scores": _compact_family_scores(
+                dict(secondary_payload.get("family_scores", {})),
+                include_evidence=False,
+            ),
+            "features": dict(secondary_payload.get("normalized_secondary_features", {})),
+        },
+        "snapshot_id": snapshot_id,
+        "snapshot_cache_ttl_seconds": int(settings.pre_strategy_regime_cache_ttl_seconds),
+    }
+    return _build_success_payload(
+        tool="pre_strategy_get_regime_snapshot",
+        data=response_data,
+    )
+
+
+def pre_strategy_render_candlestick(
+    snapshot_id: str,
+    timeframe: str = "primary",
+    bars: int = 240,
+) -> Any:
+    """Render candlestick image from cached pre-strategy snapshot."""
+
+    normalized_snapshot_id = str(snapshot_id).strip()
+    if not normalized_snapshot_id:
+        return _build_error_payload(
+            tool="pre_strategy_render_candlestick",
+            error_code="INVALID_INPUT",
+            error_message="snapshot_id cannot be empty",
+        )
+
+    cached = get_regime_snapshot_from_cache(normalized_snapshot_id)
+    if not isinstance(cached, dict):
+        return _build_error_payload(
+            tool="pre_strategy_render_candlestick",
+            error_code="NOT_FOUND",
+            error_message="snapshot_id is missing or expired. Please call pre_strategy_get_regime_snapshot again.",
+            context={"snapshot_id": normalized_snapshot_id},
+        )
+
+    timeframe_plan = cached.get("timeframe_plan")
+    if isinstance(timeframe_plan, dict):
+        primary = str(timeframe_plan.get("primary", "")).strip().lower()
+        secondary = str(timeframe_plan.get("secondary", "")).strip().lower()
+    else:
+        primary = ""
+        secondary = ""
+
+    requested = str(timeframe).strip().lower() or "primary"
+    if requested == "primary":
+        resolved_timeframe = primary or "1h"
+    elif requested == "secondary":
+        resolved_timeframe = secondary or primary or "1h"
+    else:
+        try:
+            resolved_timeframe = _normalize_regime_timeframe(requested)
+        except ValueError as exc:
+            return _build_error_payload(
+                tool="pre_strategy_render_candlestick",
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+                context={"timeframe": timeframe},
+            )
+
+    snapshots_by_tf = cached.get("snapshots_by_timeframe", {})
+    selected_snapshot = (
+        snapshots_by_tf.get(resolved_timeframe)
+        if isinstance(snapshots_by_tf, dict)
+        else None
+    )
+    candles_by_tf = cached.get("candles_by_timeframe", {})
+    frame = (
+        candles_by_tf.get(resolved_timeframe)
+        if isinstance(candles_by_tf, dict)
+        else None
+    )
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return _build_error_payload(
+            tool="pre_strategy_render_candlestick",
+            error_code="CANDLES_NOT_FOUND",
+            error_message=f"No cached candles for timeframe={resolved_timeframe}.",
+            context={"snapshot_id": normalized_snapshot_id, "timeframe": resolved_timeframe},
+        )
+
+    selected_scores = (
+        selected_snapshot.get("family_scores", {})
+        if isinstance(selected_snapshot, dict)
+        else {}
+    )
+    selected_summary = (
+        str(selected_snapshot.get("summary", "")).strip()
+        if isinstance(selected_snapshot, dict)
+        else ""
+    )
+    alt_text = build_chart_alt_text(
+        timeframe=resolved_timeframe,
+        summary=selected_summary,
+        family_scores=selected_scores if isinstance(selected_scores, dict) else {},
+    )
+    safe_bars = max(80, min(int(bars), int(settings.pre_strategy_regime_image_max_bars)))
+
+    try:
+        image = render_candlestick_image(
+            candles=frame,
+            title=f"{cached.get('symbol', 'symbol')} {resolved_timeframe}",
+            max_bars=safe_bars,
+        )
+        log_mcp_tool_result(
+            category="market_data",
+            tool="pre_strategy_render_candlestick",
+            ok=True,
+        )
+        return [image, alt_text]
+    except Exception as exc:  # noqa: BLE001
+        fallback = (
+            f"{alt_text} "
+            f"Image rendering degraded to text fallback: {type(exc).__name__}."
+        )
+        log_mcp_tool_result(
+            category="market_data",
+            tool="pre_strategy_render_candlestick",
+            ok=True,
+        )
+        return [fallback]
+
+
 def market_data_detect_missing_ranges(
     market: str,
     symbol: str,
@@ -1004,6 +1764,7 @@ def register_market_data_tools(mcp: FastMCP) -> None:
         get_symbol_data_coverage,
         get_symbol_candles,
         get_symbol_metadata,
+        pre_strategy_get_regime_snapshot,
         market_data_detect_missing_ranges,
         market_data_fetch_missing_ranges,
         market_data_get_sync_job,

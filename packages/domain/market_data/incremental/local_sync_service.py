@@ -18,6 +18,7 @@ from packages.domain.market_data.incremental.hmac_auth import (
     sign_payload,
 )
 from packages.domain.market_data.incremental.provider_router import (
+    normalize_incremental_market,
     resolve_provider_for_market,
 )
 from packages.domain.market_data.incremental.session_gate import (
@@ -133,18 +134,61 @@ class _RemoteIncrementalApiClient:
             "total_rows": int(total_rows),
         }
         body = json.dumps(body_json, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        headers = self._headers(method="POST", path=path, body=body)
-        headers["Content-Type"] = "application/json"
-        response = await self._client.post(
-            self._endpoint(path),
-            headers=headers,
-            content=body,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError("Unexpected import notify payload")
-        return payload
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            headers = self._headers(method="POST", path=path, body=body)
+            headers["Content-Type"] = "application/json"
+            try:
+                response = await self._client.post(
+                    self._endpoint(path),
+                    headers=headers,
+                    content=body,
+                )
+                if response.status_code >= 500 and attempt < max_attempts:
+                    await asyncio.sleep(float(attempt))
+                    continue
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Unexpected import notify payload")
+                return payload
+            except Exception:
+                if attempt >= max_attempts:
+                    raise
+                await asyncio.sleep(float(attempt))
+        raise RuntimeError("unreachable")
+
+
+def _upload_file_with_fresh_client(
+    *,
+    local_path: Path,
+    bucket_name: str,
+    object_name: str,
+    content_type: str | None = None,
+) -> None:
+    client = GcsClient()
+    client.upload_file(
+        local_path=local_path,
+        bucket_name=bucket_name,
+        object_name=object_name,
+        content_type=content_type,
+    )
+
+
+def _upload_bytes_with_fresh_client(
+    *,
+    payload: bytes,
+    bucket_name: str,
+    object_name: str,
+    content_type: str | None = None,
+) -> None:
+    client = GcsClient()
+    client.upload_bytes(
+        payload=payload,
+        bucket_name=bucket_name,
+        object_name=object_name,
+        content_type=content_type,
+    )
 
 
 def _parse_iso_datetime(value: object) -> datetime | None:
@@ -198,6 +242,19 @@ def _aggregate_5m(frame_1m: pd.DataFrame) -> pd.DataFrame:
     agg = agg.dropna(subset=["open", "high", "low", "close"])
     agg = agg.reset_index()
     return agg
+
+
+def _split_frame_by_month(frame: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+    if frame.empty:
+        return []
+    data = frame.copy()
+    data["timestamp"] = pd.to_datetime(data["timestamp"], utc=True)
+    data["_month_key"] = data["timestamp"].dt.strftime("%Y-%m")
+    chunks: list[tuple[str, pd.DataFrame]] = []
+    for month_key, month_frame in data.groupby("_month_key", sort=True):
+        normalized = month_frame.drop(columns=["_month_key"]).reset_index(drop=True)
+        chunks.append((str(month_key), normalized))
+    return chunks
 
 
 def _split_windows(
@@ -273,7 +330,8 @@ async def _fetch_ibkr_1m(
             timeframe="1m",
             since=start,
             until=end,
-            limit=1500,
+            # Keep request windows conservative to reduce IBKR historical timeout risk.
+            limit=1_500,
         )
     finally:
         await provider.aclose()
@@ -298,6 +356,7 @@ async def run_local_incremental_sync(
     window_start: datetime | None = None,
     window_end: datetime | None = None,
     respect_session_gate: bool = True,
+    include_markets: set[str] | None = None,
 ) -> LocalIncrementalSyncResult:
     now_utc = datetime.now(UTC)
     run_id = now_utc.strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
@@ -317,7 +376,6 @@ async def run_local_incremental_sync(
     if not bucket:
         raise ValueError("MARKET_DATA_INCREMENTAL_GCS_BUCKET is required for local collector.")
 
-    gcs_client = GcsClient()
     api_client = _RemoteIncrementalApiClient()
     safety_lag = timedelta(minutes=max(int(settings.market_data_incremental_safety_lag_minutes), 0))
     default_end = (now_utc - safety_lag).replace(second=0, microsecond=0)
@@ -358,6 +416,13 @@ async def run_local_incremental_sync(
             symbols = market_item.get("symbols")
             if not market or not isinstance(symbols, list):
                 continue
+            if include_markets:
+                try:
+                    normalized_market = normalize_incremental_market(market)
+                except ValueError:
+                    continue
+                if normalized_market not in include_markets:
+                    continue
 
             for symbol_item in symbols:
                 if not isinstance(symbol_item, dict):
@@ -397,20 +462,34 @@ async def run_local_incremental_sync(
                     skipped_uptodate += 1
                     continue
 
-                if provider == "alpaca":
-                    bars_1m = await _fetch_alpaca_1m(
-                        symbol=symbol,
-                        market=market,
-                        start=start,
-                        end=effective_end,
+                try:
+                    if provider == "alpaca":
+                        fetch_coro = _fetch_alpaca_1m(
+                            symbol=symbol,
+                            market=market,
+                            start=start,
+                            end=effective_end,
+                        )
+                        bars_1m = await asyncio.wait_for(fetch_coro, timeout=180.0)
+                    else:
+                        fetch_coro = _fetch_ibkr_1m(
+                            symbol=symbol,
+                            market=market,
+                            start=start,
+                            end=effective_end,
+                        )
+                        bars_1m = await asyncio.wait_for(fetch_coro, timeout=600.0)
+                except Exception:
+                    logger.exception(
+                        "[market-data-incremental] skip symbol after provider fetch failure "
+                        "market=%s symbol=%s start=%s end=%s",
+                        market,
+                        symbol,
+                        start.isoformat(),
+                        effective_end.isoformat(),
                     )
-                else:
-                    bars_1m = await _fetch_ibkr_1m(
-                        symbol=symbol,
-                        market=market,
-                        start=start,
-                        end=effective_end,
-                    )
+                    skipped_uptodate += 1
+                    continue
                 frame_1m = _bars_to_frame(bars_1m)
                 if frame_1m.empty:
                     skipped_uptodate += 1
@@ -419,48 +498,54 @@ async def run_local_incremental_sync(
                 frame_5m = _aggregate_5m(frame_1m)
                 symbol_dir = stage_dir / market / symbol / session
                 symbol_dir.mkdir(parents=True, exist_ok=True)
-                file_1m = symbol_dir / "1m.parquet"
-                frame_1m.to_parquet(file_1m, index=False)
+                chunked_1m = _split_frame_by_month(frame_1m)
+                if not chunked_1m:
+                    skipped_uptodate += 1
+                    continue
 
-                object_1m = f"{prefix}/{market}/{symbol}/{session}/1m.parquet"
-                await asyncio.to_thread(
-                    gcs_client.upload_file,
-                    local_path=file_1m,
-                    bucket_name=bucket,
-                    object_name=object_1m,
-                    content_type="application/octet-stream",
-                )
+                chunked_5m = _split_frame_by_month(frame_5m) if not frame_5m.empty else []
 
-                files_uploaded += 1
-                rows_uploaded += int(len(frame_1m))
-                symbols_synced += 1
-                start_iso = frame_1m["timestamp"].min().isoformat()
-                end_iso = frame_1m["timestamp"].max().isoformat()
-                manifest_entries.append(
-                    {
-                        "market": market,
-                        "symbol": symbol,
-                        "timeframe": "1m",
-                        "session": session,
-                        "gcs_object": object_1m,
-                        "row_count": int(len(frame_1m)),
-                        "start": start_iso,
-                        "end": end_iso,
-                    }
-                )
-                if not frame_5m.empty:
-                    file_5m = symbol_dir / "5m.parquet"
-                    frame_5m.to_parquet(file_5m, index=False)
-                    object_5m = f"{prefix}/{market}/{symbol}/{session}/5m.parquet"
+                for month_key, frame_1m_chunk in chunked_1m:
+                    file_1m = symbol_dir / "1m" / f"{month_key}.parquet"
+                    file_1m.parent.mkdir(parents=True, exist_ok=True)
+                    frame_1m_chunk.to_parquet(file_1m, index=False)
+                    object_1m = f"{prefix}/{market}/{symbol}/{session}/1m/{month_key}.parquet"
                     await asyncio.to_thread(
-                        gcs_client.upload_file,
+                        _upload_file_with_fresh_client,
+                        local_path=file_1m,
+                        bucket_name=bucket,
+                        object_name=object_1m,
+                        content_type="application/octet-stream",
+                    )
+                    files_uploaded += 1
+                    rows_uploaded += int(len(frame_1m_chunk))
+                    manifest_entries.append(
+                        {
+                            "market": market,
+                            "symbol": symbol,
+                            "timeframe": "1m",
+                            "session": session,
+                            "gcs_object": object_1m,
+                            "row_count": int(len(frame_1m_chunk)),
+                            "start": frame_1m_chunk["timestamp"].min().isoformat(),
+                            "end": frame_1m_chunk["timestamp"].max().isoformat(),
+                        }
+                    )
+
+                for month_key, frame_5m_chunk in chunked_5m:
+                    file_5m = symbol_dir / "5m" / f"{month_key}.parquet"
+                    file_5m.parent.mkdir(parents=True, exist_ok=True)
+                    frame_5m_chunk.to_parquet(file_5m, index=False)
+                    object_5m = f"{prefix}/{market}/{symbol}/{session}/5m/{month_key}.parquet"
+                    await asyncio.to_thread(
+                        _upload_file_with_fresh_client,
                         local_path=file_5m,
                         bucket_name=bucket,
                         object_name=object_5m,
                         content_type="application/octet-stream",
                     )
                     files_uploaded += 1
-                    rows_uploaded += int(len(frame_5m))
+                    rows_uploaded += int(len(frame_5m_chunk))
                     manifest_entries.append(
                         {
                             "market": market,
@@ -468,11 +553,12 @@ async def run_local_incremental_sync(
                             "timeframe": "5m",
                             "session": session,
                             "gcs_object": object_5m,
-                            "row_count": int(len(frame_5m)),
-                            "start": frame_5m["timestamp"].min().isoformat(),
-                            "end": frame_5m["timestamp"].max().isoformat(),
+                            "row_count": int(len(frame_5m_chunk)),
+                            "start": frame_5m_chunk["timestamp"].min().isoformat(),
+                            "end": frame_5m_chunk["timestamp"].max().isoformat(),
                         }
                     )
+                symbols_synced += 1
 
         if not manifest_entries:
             return LocalIncrementalSyncResult(
@@ -496,7 +582,7 @@ async def run_local_incremental_sync(
         manifest_bytes = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
         manifest_object = f"{prefix}/manifest.json"
         await asyncio.to_thread(
-            gcs_client.upload_bytes,
+            _upload_bytes_with_fresh_client,
             payload=manifest_bytes,
             bucket_name=bucket,
             object_name=manifest_object,

@@ -6,11 +6,14 @@ import asyncio
 import json
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from packages.domain.market_data.catalog_service import scan_and_sync_catalog
+from packages.domain.market_data.catalog_service import (
+    upsert_catalog_entry_from_parquet,
+)
 from packages.domain.market_data.data import DataLoader
 from packages.domain.market_data.data.parquet_writer import append_ohlcv_rows
 from packages.infra.storage.gcs_client import GcsClient
@@ -52,6 +55,7 @@ async def import_incremental_manifest(
     rows_written = 0
     processed = 0
     touched_symbols: set[tuple[str, str]] = set()
+    touched_catalog_files: set[tuple[str, str, str, str, int, str]] = set()
 
     for item in files:
         if not isinstance(item, dict):
@@ -83,9 +87,24 @@ async def import_incremental_manifest(
         rows_written += int(write_result.rows_written)
         processed += 1
         touched_symbols.add((market, symbol, session))
+        for file_path in write_result.file_paths:
+            year = _extract_year_from_parquet_path(file_path)
+            if year is None:
+                continue
+            touched_catalog_files.add(
+                (market, symbol, timeframe, session, year, file_path)
+            )
 
-    # Re-sync catalog once after all appends.
-    await scan_and_sync_catalog(db, loader.data_dir)
+    for market, symbol, timeframe, session, year, file_path in sorted(touched_catalog_files):
+        await upsert_catalog_entry_from_parquet(
+            db,
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe,
+            session=session,
+            year=year,
+            file_path=file_path,
+        )
 
     return IncrementalImportSummary(
         files_total=len(files),
@@ -93,3 +112,16 @@ async def import_incremental_manifest(
         rows_written=rows_written,
         symbols_touched=len(touched_symbols),
     )
+
+
+def _extract_year_from_parquet_path(file_path: str) -> int | None:
+    stem = Path(file_path).stem
+    if not stem:
+        return None
+    last = stem.rsplit("_", 1)[-1]
+    if not last.isdigit():
+        return None
+    year = int(last)
+    if year < 1970 or year > 2100:
+        return None
+    return year
