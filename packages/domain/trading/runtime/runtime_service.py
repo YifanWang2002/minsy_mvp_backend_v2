@@ -22,6 +22,7 @@ from packages.domain.market_data.runtime import RuntimeBar, market_data_runtime
 from packages.domain.notification.services.notification_outbox_service import (
     NotificationOutboxService,
 )
+from packages.domain.trading.broker_capability_policy import build_broker_capabilities
 from packages.domain.trading.pnl.service import PnlService, PortfolioSnapshot
 from packages.domain.trading.runtime.circuit_breaker import (
     CircuitBreakerOpenError,
@@ -42,6 +43,12 @@ from packages.domain.trading.runtime.risk_gate import RiskConfig, RiskContext, R
 from packages.domain.trading.runtime.signal_runtime import LiveSignalRuntime
 from packages.domain.trading.runtime.timeframe_scheduler import (
     normalize_runtime_timeframe,
+)
+from packages.domain.trading.runtime.unified_signal import (
+    build_manual_unified_signal,
+    build_runtime_unified_signal,
+    reconcile_unified_signal_capabilities,
+    unified_signal_to_order_intent,
 )
 from packages.domain.trading.services.broker_provider_service import (
     BrokerProviderService,
@@ -65,7 +72,6 @@ from packages.infra.providers.trading.adapters.base import (
     AccountState,
     BrokerAdapter,
     OhlcvBar,
-    OrderIntent,
     PositionRecord,
 )
 from packages.infra.redis.locks.deployment_lock import deployment_runtime_lock
@@ -1052,6 +1058,23 @@ async def _build_market_data_adapter_for_run(
         db=db, run=run
     )
     return binding.adapter, binding.provider
+
+
+async def _resolve_run_broker_capabilities(
+    *,
+    db: AsyncSession,
+    run: DeploymentRun,
+) -> dict[str, Any]:
+    account = await _broker_provider_service.load_account_for_run(db=db, run=run)
+    if account is None:
+        return {}
+    if isinstance(account.capabilities, dict) and account.capabilities:
+        return dict(account.capabilities)
+    return build_broker_capabilities(
+        provider=account.provider,
+        exchange_id=account.exchange_id,
+        is_sandbox=bool(account.is_sandbox),
+    )
 
 
 async def _build_adapter_if_enabled(
@@ -2593,29 +2616,56 @@ async def process_deployment_signal_cycle(
                     metadata=approval_metadata,
                 )
 
-        side = "buy"
-        if decision.signal == "OPEN_SHORT":
-            side = "sell"
-        elif decision.signal == "CLOSE":
-            side = "sell" if position_side == "long" else "buy"
+        strategy_payload = (
+            deployment.strategy.dsl_payload
+            if isinstance(deployment.strategy.dsl_payload, dict)
+            else {}
+        )
+        broker_capabilities = await _resolve_run_broker_capabilities(db=db, run=run)
+        unified_signal = build_runtime_unified_signal(
+            signal=decision.signal,
+            reason=decision.reason,
+            symbol=symbol,
+            market=market,
+            timeframe=timeframe,
+            qty=Decimal(str(order_qty)),
+            position_side=position_side,
+            strategy_payload=strategy_payload,
+            mark_price=execution_mark_price,
+            base_metadata={
+                "timeframe": timeframe,
+                "market": market,
+                **_build_execution_price_metadata(execution_price_snapshot),
+            },
+        )
+        unified_signal, reconcile_error = reconcile_unified_signal_capabilities(
+            unified_signal=unified_signal,
+            capabilities=broker_capabilities,
+            strict=False,
+        )
+        if unified_signal is None:
+            await db.commit()
+            await _persist_runtime_state(
+                deployment_id=deployment.id,
+                run=run,
+                status="running",
+                reason=reconcile_error or "capability_rejected",
+                signal="NOOP",
+                bar_time=bar_time,
+            )
+            return await _build_cycle_result(
+                signal="NOOP",
+                reason=reconcile_error or "capability_rejected",
+                bar_time=bar_time,
+            )
 
         bar_epoch = int((bar_time or bars[-1].timestamp).timestamp())
         client_order_id = (
             f"{deployment.id.hex[:8]}-{bar_epoch}-{decision.signal.lower()}"
         )
-        intent = OrderIntent(
+        intent = unified_signal_to_order_intent(
+            unified_signal=unified_signal,
             client_order_id=client_order_id,
-            symbol=symbol,
-            side=side,
-            qty=Decimal(str(order_qty)),
-            order_type="market",
-            metadata={
-                "signal": decision.signal,
-                "reason": decision.reason,
-                "timeframe": timeframe,
-                "market": market,
-                **_build_execution_price_metadata(execution_price_snapshot),
-            },
         )
 
         adapter: BrokerAdapter | None
@@ -3385,20 +3435,21 @@ async def execute_manual_trade_action(
             if not risk_decision.allowed:
                 return await _reject(f"risk_rejected:{risk_decision.reason}")
 
-        side = "buy"
-        if signal == "OPEN_SHORT":
-            side = "sell"
-        elif signal == "CLOSE":
-            side = "sell" if current_position_side == "long" else "buy"
-
-        intent = OrderIntent(
-            client_order_id=f"manual-{action.id.hex}",
+        broker_capabilities: dict[str, Any] = {}
+        if run is not None:
+            broker_capabilities = await _resolve_run_broker_capabilities(db=db, run=run)
+        unified_signal = build_manual_unified_signal(
+            action=action.action,
+            signal=signal,
+            reason=action.action,
             symbol=symbol,
-            side=side,
+            market=market,
+            timeframe=timeframe,
             qty=qty,
-            order_type="market",
-            metadata={
-                "signal": signal,
+            current_position_side=current_position_side,
+            mark_price=mark_price,
+            payload=payload,
+            base_metadata={
                 "manual_action_id": str(action.id),
                 "action": action.action,
                 "market": market,
@@ -3413,6 +3464,18 @@ async def execute_manual_trade_action(
                     else {}
                 ),
             },
+        )
+        unified_signal, reconcile_error = reconcile_unified_signal_capabilities(
+            unified_signal=unified_signal,
+            capabilities=broker_capabilities,
+            strict=False,
+        )
+        if unified_signal is None:
+            return await _reject(reconcile_error or "capability_rejected")
+
+        intent = unified_signal_to_order_intent(
+            unified_signal=unified_signal,
+            client_order_id=f"manual-{action.id.hex}",
         )
 
         adapter: BrokerAdapter | None

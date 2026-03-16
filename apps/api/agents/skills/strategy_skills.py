@@ -173,6 +173,19 @@ def build_strategy_dynamic_state(
     pre_strategy_instrument_available_locally = bool(
         pre_runtime.get("instrument_available_locally")
     )
+    pre_strategy_family_choice = str(
+        pre.get("strategy_family_choice", "")
+    ).strip() or "none"
+    timeframe_plan = pre_runtime.get("timeframe_plan")
+    if isinstance(timeframe_plan, dict):
+        pre_strategy_timeframe_primary = (
+            str(timeframe_plan.get("primary", "")).strip() or "none"
+        )
+    else:
+        pre_strategy_timeframe_primary = "none"
+    pre_strategy_market_regime_summary = (
+        str(pre_runtime.get("regime_summary_short", "")).strip() or "none"
+    )
     strategy_id = str(fields.get("strategy_id", "")).strip() or "none"
     strategy_market = str(fields.get("strategy_market", "")).strip() or "none"
     strategy_primary_symbol = str(fields.get("strategy_primary_symbol", "")).strip() or "none"
@@ -199,6 +212,9 @@ def build_strategy_dynamic_state(
         f"- pre_strategy_instrument_data_symbol: {pre_strategy_instrument_data_symbol}\n"
         f"- pre_strategy_instrument_data_market: {pre_strategy_instrument_data_market}\n"
         f"- pre_strategy_instrument_available_locally: {str(pre_strategy_instrument_available_locally).lower()}\n"
+        f"- pre_strategy_strategy_family_choice: {pre_strategy_family_choice}\n"
+        f"- pre_strategy_timeframe_primary: {pre_strategy_timeframe_primary}\n"
+        f"- pre_strategy_market_regime_summary: {pre_strategy_market_regime_summary}\n"
         f"- already_collected: {collected}\n"
         f"- confirmed_strategy_id: {strategy_id}\n"
         f"- strategy_market: {strategy_market}\n"

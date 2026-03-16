@@ -95,6 +95,40 @@ def test_040_accessibility_runtime_compatibility_blocks_unsupported_timeframe() 
     assert "DEPLOYMENT_RUNTIME_UNSUPPORTED_TIMEFRAME" in compatibility.blocker_codes
 
 
+def test_045_accessibility_strategy_market_supported_by_account_detects_mismatch() -> None:
+    account = SimpleNamespace(
+        provider="sandbox",
+        exchange_id="sandbox",
+        is_sandbox=True,
+        capabilities={"supported_markets": ["us_stocks", "crypto"]},
+    )
+
+    supported, market = deployment_ops._strategy_market_supported_by_account(
+        strategy_payload={"universe": {"market": "forex"}},
+        account=account,
+    )
+
+    assert supported is False
+    assert market == "forex"
+
+
+def test_047_accessibility_strategy_market_supported_by_account_uses_provider_fallback() -> None:
+    account = SimpleNamespace(
+        provider="alpaca",
+        exchange_id="",
+        is_sandbox=False,
+        capabilities={},
+    )
+
+    supported, market = deployment_ops._strategy_market_supported_by_account(
+        strategy_payload={"universe": {"market": "us_stocks"}},
+        account=account,
+    )
+
+    assert supported is True
+    assert market == "us_stocks"
+
+
 async def test_050_accessibility_apply_status_transition_avoids_lazy_broker_account_load(
     monkeypatch,
 ) -> None:

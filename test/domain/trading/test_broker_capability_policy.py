@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from packages.domain.trading.broker_capability_policy import (
     build_broker_capabilities,
+    capability_supports_order_type,
+    capability_supports_time_in_force,
     derive_supported_markets,
     evaluate_broker_compatibility,
 )
@@ -78,3 +80,20 @@ def test_evaluate_broker_compatibility_returns_ready_for_explicit_matching_selec
     assert result["status"] == "ready"
     assert result["preferred_broker_account_id"] == selected_broker_id
     assert result["blockers"] == []
+
+
+def test_capability_supports_order_type_returns_true_for_supported_type() -> None:
+    assert capability_supports_order_type(
+        capabilities={"order_types": ["market", "limit"]},
+        order_type="limit",
+    )
+
+
+def test_capability_supports_time_in_force_returns_false_for_unknown_tif() -> None:
+    assert (
+        capability_supports_time_in_force(
+            capabilities={"time_in_force": ["day", "gtc"]},
+            time_in_force="ioc",
+        )
+        is False
+    )

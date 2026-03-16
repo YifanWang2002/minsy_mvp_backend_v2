@@ -15,6 +15,7 @@ from apps.api.dependencies import get_db
 from apps.api.middleware.auth import get_current_user
 from apps.api.schemas.events import (
     BrokerAccountCapitalBudgetResponse,
+    BrokerCapabilityProfileResponse,
     BrokerAccountResponse,
     CcxtExchangeInfo,
 )
@@ -33,6 +34,9 @@ from packages.domain.trading.broker_capability_policy import (
 from packages.domain.trading.deployment_ops import resolve_broker_capital_budget
 from packages.domain.trading.services.ccxt_exchange_catalog import (
     list_supported_ccxt_exchanges,
+)
+from packages.domain.trading.services.broker_capability_registry import (
+    list_supported_broker_capability_profiles,
 )
 from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.broker_account_audit_log import BrokerAccountAuditLog
@@ -582,6 +586,20 @@ async def list_ccxt_exchanges(
 ) -> list[CcxtExchangeInfo]:
     _ = user
     return [CcxtExchangeInfo(**item) for item in list_supported_ccxt_exchanges()]
+
+
+@router.get(
+    "/capability-profiles",
+    response_model=list[BrokerCapabilityProfileResponse],
+)
+async def list_broker_capability_profiles(
+    user: User = Depends(get_current_user),
+) -> list[BrokerCapabilityProfileResponse]:
+    _ = user
+    return [
+        BrokerCapabilityProfileResponse(**item)
+        for item in list_supported_broker_capability_profiles()
+    ]
 
 
 @router.get("/{broker_account_id}", response_model=BrokerAccountResponse)

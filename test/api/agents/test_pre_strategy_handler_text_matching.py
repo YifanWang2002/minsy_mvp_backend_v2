@@ -105,7 +105,9 @@ def test_post_process_blocks_strategy_transition_when_data_choice_is_pending(mon
     assert pre_data["runtime"]["instrument_data_status"] == "awaiting_user_choice"
 
 
-def test_post_process_allows_transition_when_download_has_started(monkeypatch) -> None:
+def test_post_process_requires_regime_ready_and_family_choice_before_transition(
+    monkeypatch,
+) -> None:
     handler = PreStrategyHandler()
     monkeypatch.setattr(
         "apps.api.agents.handlers.pre_strategy_handler._is_symbol_available_locally",
@@ -123,7 +125,7 @@ def test_post_process_allows_transition_when_download_has_started(monkeypatch) -
                         "symbol": "PEPEUSD",
                     }
                 ),
-            }
+            },
         ]
     }
     ctx = PhaseContext(
@@ -150,6 +152,110 @@ def test_post_process_allows_transition_when_download_has_started(monkeypatch) -
     )
 
     pre_data = result.artifacts[Phase.PRE_STRATEGY.value]
+    assert result.completed is False
+    assert result.next_phase is None
+    assert pre_data["runtime"]["instrument_data_status"] == "download_started"
+    assert pre_data["runtime"]["regime_snapshot_status"] == "pending"
+
+
+def test_post_process_transitions_after_regime_ready_and_family_choice(monkeypatch) -> None:
+    handler = PreStrategyHandler()
+    monkeypatch.setattr(
+        "apps.api.agents.handlers.pre_strategy_handler._is_symbol_available_locally",
+        lambda **kwargs: False,
+    )
+
+    regime_output = {
+        "ok": True,
+        "timeframe_plan": {
+            "primary": "1h",
+            "secondary": "4h",
+            "mapping_reason": "test mapping",
+        },
+        "primary": {
+            "timeframe": "1h",
+            "summary": "Regime summary",
+            "family_scores": {
+                "trend_continuation": 0.62,
+                "mean_reversion": 0.21,
+                "volatility_regime": 0.17,
+                "recommended_family": "trend_continuation",
+                "confidence": 0.41,
+            },
+            "choice_option_subtitles": {
+                "trend_continuation": "Recommended: trend evidence stronger.",
+                "mean_reversion": "Less preferred: chop not dominant.",
+                "volatility_regime": "Less preferred: vol expansion mild.",
+            },
+        },
+        "secondary": {
+            "timeframe": "4h",
+            "summary": "Secondary summary",
+            "family_scores": {
+                "trend_continuation": 0.48,
+                "mean_reversion": 0.31,
+                "volatility_regime": 0.21,
+                "recommended_family": "trend_continuation",
+                "confidence": 0.17,
+            },
+            "features": {},
+        },
+        "snapshot_id": "snapshot-123",
+    }
+    turn_context = {
+        "mcp_tool_calls": [
+            {
+                "name": "market_data_fetch_missing_ranges",
+                "status": "success",
+                "arguments": json.dumps(
+                    {
+                        "market": "crypto",
+                        "symbol": "PEPEUSD",
+                    }
+                ),
+            },
+            {
+                "name": "pre_strategy_get_regime_snapshot",
+                "status": "success",
+                "arguments": json.dumps(
+                    {
+                        "market": "crypto",
+                        "symbol": "PEPEUSD",
+                        "opportunity_frequency_bucket": "few_per_week",
+                        "holding_period_bucket": "swing_days",
+                    }
+                ),
+                "output": json.dumps(regime_output),
+            },
+        ]
+    }
+    ctx = PhaseContext(
+        user_id=uuid4(),
+        session_artifacts={Phase.PRE_STRATEGY.value: handler.init_artifacts()},
+        session_id=uuid4(),
+        runtime_policy=RuntimePolicy(),
+        turn_context=turn_context,
+    )
+
+    result = asyncio.run(
+        handler.post_process(
+            ctx,
+            [
+                {
+                    "target_market": "crypto",
+                    "target_instrument": "PEPEUSD",
+                    "opportunity_frequency_bucket": "few_per_week",
+                    "holding_period_bucket": "swing_days",
+                    "strategy_family_choice": "trend_continuation",
+                }
+            ],
+            None,  # type: ignore[arg-type]
+        )
+    )
+
+    pre_data = result.artifacts[Phase.PRE_STRATEGY.value]
     assert result.completed is True
     assert result.next_phase == "strategy"
-    assert pre_data["runtime"]["instrument_data_status"] == "download_started"
+    assert pre_data["profile"]["strategy_family_choice"] == "trend_continuation"
+    assert pre_data["runtime"]["regime_snapshot_status"] == "ready"
+    assert pre_data["runtime"]["timeframe_plan"]["primary"] == "1h"

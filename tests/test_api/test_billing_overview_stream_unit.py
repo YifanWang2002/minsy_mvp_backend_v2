@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -21,10 +22,13 @@ from apps.api.schemas.billing_schemas import (
 
 
 class _FakeDbSession:
-    def __init__(self, *, tier: str = "free") -> None:
+    def __init__(self, *, tier: str = "free", on_expire: Callable[[], None] | None = None) -> None:
         self._tier = tier
+        self._on_expire = on_expire
 
     def expire_all(self) -> None:
+        if self._on_expire is not None:
+            self._on_expire()
         return None
 
     async def scalar(self, _stmt):
@@ -124,5 +128,49 @@ def test_overview_stream_emits_snapshot_event(client, app, monkeypatch):
     assert quota["used"] == 12
     assert quota["limit"] == 30
     assert quota["remaining"] == 18
+
+    app.dependency_overrides.clear()
+
+
+class _ExplodingUser:
+    def __init__(self) -> None:
+        self._id = uuid4()
+        self.current_tier = "free"
+        self.email = "stream-expire@example.com"
+        self._expired = False
+
+    def mark_expired(self) -> None:
+        self._expired = True
+
+    @property
+    def id(self):
+        if self._expired:
+            raise RuntimeError("user.id accessed after expire_all()")
+        return self._id
+
+
+def test_overview_stream_does_not_access_user_id_after_expire(client, app, monkeypatch):
+    user = _ExplodingUser()
+    db = _FakeDbSession(tier="free", on_expire=user.mark_expired)
+    _override_dependencies(app=app, user=user, db=db)
+
+    async def _fake_overview(*, db, user_id, current_tier):
+        del db, user_id, current_tier
+        return BillingOverviewResponse(
+            tier="free",
+            subscription=BillingSubscriptionResponse(status="inactive", tier="free"),
+            quotas=[],
+            cost_model={},
+        )
+
+    monkeypatch.setattr(billing_routes, "_build_billing_overview_response", _fake_overview)
+
+    with client.stream(
+        "GET",
+        "/api/v1/billing/overview/stream?poll_seconds=0.5&max_events=1",
+    ) as response:
+        assert response.status_code == 200
+        body = "".join(line for line in response.iter_lines() if line)
+        assert "event: snapshot" in body
 
     app.dependency_overrides.clear()

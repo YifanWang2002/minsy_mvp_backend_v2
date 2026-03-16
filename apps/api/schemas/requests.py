@@ -140,6 +140,45 @@ class StrategyConfirmRequest(BaseModel):
         return normalized
 
 
+class BacktestTradeSnapshotRequest(BaseModel):
+    """Request payload for backtest trade snapshots."""
+
+    selection_mode: Literal["all", "latest", "earliest", "random"] = "latest"
+    selection_count: int | None = Field(default=20, ge=1, le=1000)
+    trade_index: int | None = Field(default=None, ge=0, le=2_000_000)
+    lookback_bars: int = Field(default=120, ge=0, le=10_000)
+    lookforward_bars: int = Field(default=120, ge=0, le=10_000)
+    render_images: bool = False
+    save_images_to_temp: bool = False
+    random_seed: int | None = None
+
+    @model_validator(mode="after")
+    def validate_selection_mode_and_count(self) -> BacktestTradeSnapshotRequest:
+        if self.selection_mode == "all":
+            if self.selection_count is not None:
+                raise ValueError(
+                    "selection_count must be null when selection_mode is 'all'."
+                )
+            if self.trade_index is not None:
+                raise ValueError(
+                    "trade_index cannot be combined with selection_mode='all'."
+                )
+        elif self.selection_count is None:
+            if self.trade_index is None:
+                raise ValueError(
+                    "selection_count is required when selection_mode is not 'all'."
+                )
+        if self.trade_index is not None and self.selection_count not in {None, 1}:
+            raise ValueError(
+                "selection_count must be null or 1 when trade_index is provided."
+            )
+        if self.save_images_to_temp and not self.render_images:
+            raise ValueError(
+                "save_images_to_temp requires render_images=true."
+            )
+        return self
+
+
 class TelegramConnectLinkRequest(BaseModel):
     """Request payload for Telegram connect-link generation."""
 

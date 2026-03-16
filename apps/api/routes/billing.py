@@ -444,6 +444,7 @@ async def stream_billing_overview(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     """Push billing overview snapshots whenever quota/tier state changes."""
+    user_id = user.id
 
     async def _event_stream() -> AsyncIterator[str]:
         emitted = 0
@@ -457,14 +458,14 @@ async def stream_billing_overview(
 
             db.expire_all()
             current_tier = await db.scalar(
-                select(User.current_tier).where(User.id == user.id)
+                select(User.current_tier).where(User.id == user_id)
             )
             if current_tier is None:
                 break
 
             overview = await _build_billing_overview_response(
                 db=db,
-                user_id=user.id,
+                user_id=user_id,
                 current_tier=str(current_tier),
             )
             signature = _billing_overview_signature(overview)

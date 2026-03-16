@@ -291,7 +291,10 @@
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
-        "type": { "type": "string", "enum": ["market"] }
+        "type": { "type": "string", "enum": ["market", "limit", "stop", "stop_limit"] },
+        "time_in_force": { "type": "string", "enum": ["day", "gtc", "ioc", "fok"] },
+        "limit_price": { "type": "number", "exclusiveMinimum": 0 },
+        "stop_price": { "type": "number", "exclusiveMinimum": 0 }
       },
       "patternProperties": { "^x-": {} }
     },

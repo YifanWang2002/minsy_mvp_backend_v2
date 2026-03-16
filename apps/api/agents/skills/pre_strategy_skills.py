@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
-import re
 from typing import Any
 
 from packages.domain.market_data.data import DataLoader
@@ -27,6 +27,7 @@ REQUIRED_FIELDS: list[str] = [
     "target_instrument",
     "opportunity_frequency_bucket",
     "holding_period_bucket",
+    "strategy_family_choice",
 ]
 
 _OPPORTUNITY_FREQUENCY_VALUES: set[str] = {
@@ -41,6 +42,12 @@ _HOLDING_PERIOD_VALUES: set[str] = {
     "intraday",
     "swing_days",
     "position_weeks_plus",
+}
+
+_STRATEGY_FAMILY_VALUES: set[str] = {
+    "trend_continuation",
+    "mean_reversion",
+    "volatility_regime",
 }
 
 _LANGUAGE_NAMES: dict[str, str] = {
@@ -121,6 +128,7 @@ def get_pre_strategy_valid_values() -> dict[str, set[str]]:
         },
         "opportunity_frequency_bucket": set(_OPPORTUNITY_FREQUENCY_VALUES),
         "holding_period_bucket": set(_HOLDING_PERIOD_VALUES),
+        "strategy_family_choice": set(_STRATEGY_FAMILY_VALUES),
     }
 
 
@@ -379,6 +387,71 @@ def build_pre_strategy_dynamic_state(
         runtime.get("instrument_data_market", "")
     ).strip() or "none"
     instrument_available_locally = bool(runtime.get("instrument_available_locally"))
+    strategy_family_choice = (
+        str((collected_fields or {}).get("strategy_family_choice", "")).strip() or "none"
+    )
+    timeframe_plan = runtime.get("timeframe_plan")
+    if isinstance(timeframe_plan, dict):
+        timeframe_primary = str(timeframe_plan.get("primary", "")).strip() or "none"
+        timeframe_secondary = str(timeframe_plan.get("secondary", "")).strip() or "none"
+        timeframe_mapping_reason = (
+            str(timeframe_plan.get("mapping_reason", "")).strip() or "none"
+        )
+    else:
+        timeframe_primary = "none"
+        timeframe_secondary = "none"
+        timeframe_mapping_reason = "none"
+    regime_snapshot_status = (
+        str(runtime.get("regime_snapshot_status", "")).strip() or "pending"
+    )
+    regime_summary_short = (
+        str(runtime.get("regime_summary_short", "")).strip() or "none"
+    )
+    regime_snapshot_id = (
+        str(runtime.get("regime_snapshot_id", "")).strip() or "none"
+    )
+    regime_family_scores_raw = runtime.get("regime_family_scores")
+    if isinstance(regime_family_scores_raw, dict) and regime_family_scores_raw:
+        score_parts = []
+        for key in (
+            "trend_continuation",
+            "mean_reversion",
+            "volatility_regime",
+            "recommended_family",
+            "confidence",
+        ):
+            if key not in regime_family_scores_raw:
+                continue
+            score_parts.append(f"{key}={regime_family_scores_raw.get(key)}")
+        regime_family_scores = ", ".join(score_parts) if score_parts else "none"
+        regime_evidence_for = _compact_family_evidence(
+            regime_family_scores_raw.get("evidence_for")
+        )
+        regime_evidence_against = _compact_family_evidence(
+            regime_family_scores_raw.get("evidence_against")
+        )
+    else:
+        regime_family_scores = "none"
+        regime_evidence_for = "none"
+        regime_evidence_against = "none"
+    regime_primary_features = _compact_primary_features(
+        runtime.get("regime_primary_features")
+    )
+    regime_probe_required = (
+        "true"
+        if all(
+            isinstance((collected_fields or {}).get(key), str)
+            and str((collected_fields or {}).get(key)).strip()
+            for key in (
+                "target_market",
+                "target_instrument",
+                "opportunity_frequency_bucket",
+                "holding_period_bucket",
+            )
+        )
+        and regime_snapshot_status != "ready"
+        else "false"
+    )
     download_lookback_days = 730
     download_default_timeframe = "1m"
     download_eta_hint_minutes = 2
@@ -406,6 +479,7 @@ def build_pre_strategy_dynamic_state(
         f"- available_markets: {available_markets_line}\n"
         f"- target_market: {target_market or 'none'}\n"
         f"- target_instrument: {target_instrument or 'none'}\n"
+        f"- strategy_family_choice: {strategy_family_choice}\n"
         f"- allowed_instruments_for_target_market: {allowed_instruments_str}\n"
         f"- mapped_market_data_symbol_for_target_instrument: {mapped_market_data_symbol}\n"
         f"- mapped_tradingview_symbol_for_target_instrument: {mapped_tradingview_symbol}\n"
@@ -413,6 +487,17 @@ def build_pre_strategy_dynamic_state(
         f"- instrument_data_symbol: {instrument_data_symbol}\n"
         f"- instrument_data_market: {instrument_data_market}\n"
         f"- instrument_available_locally: {str(instrument_available_locally).lower()}\n"
+        f"- timeframe_plan_primary: {timeframe_primary}\n"
+        f"- timeframe_plan_secondary: {timeframe_secondary}\n"
+        f"- timeframe_plan_mapping_reason: {timeframe_mapping_reason}\n"
+        f"- regime_snapshot_status: {regime_snapshot_status}\n"
+        f"- regime_summary_short: {regime_summary_short}\n"
+        f"- regime_family_scores: {regime_family_scores}\n"
+        f"- regime_evidence_for: {regime_evidence_for}\n"
+        f"- regime_evidence_against: {regime_evidence_against}\n"
+        f"- regime_primary_features: {regime_primary_features}\n"
+        f"- regime_snapshot_id: {regime_snapshot_id}\n"
+        f"- regime_probe_required: {regime_probe_required}\n"
         "- download_requires_user_confirmation: true\n"
         f"- download_lookback_days: {download_lookback_days}\n"
         f"- download_default_timeframe: {download_default_timeframe}\n"
@@ -434,3 +519,51 @@ def _summarize_instrument_candidates(
     if len(instruments) <= sample_size:
         return sample
     return f"{sample} ... (+{len(instruments) - sample_size} more)"
+
+
+def _compact_family_evidence(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "none"
+    parts: list[str] = []
+    for family in ("trend_continuation", "mean_reversion", "volatility_regime"):
+        entries = value.get(family)
+        if not isinstance(entries, list) or not entries:
+            continue
+        first = next(
+            (
+                str(item).strip()
+                for item in entries
+                if isinstance(item, str) and item.strip()
+            ),
+            "",
+        )
+        if not first:
+            continue
+        parts.append(f"{family}={first}")
+    return " | ".join(parts) if parts else "none"
+
+
+def _compact_primary_features(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return "none"
+
+    preferred_order = (
+        "adx_n",
+        "chop_n",
+        "er_n",
+        "vol_percentile_n",
+        "atr_percentile_n",
+        "distance_to_recent_midrange_n",
+        "return_autocorr_n",
+        "zscore_n",
+        "bb_pos_n",
+    )
+    fields: list[str] = []
+    for key in preferred_order:
+        if key not in value:
+            continue
+        fields.append(f"{key}={value.get(key)}")
+    if not fields:
+        keys = sorted(str(key) for key in value.keys())[:6]
+        fields = [f"{key}={value.get(key)}" for key in keys]
+    return ", ".join(fields) if fields else "none"

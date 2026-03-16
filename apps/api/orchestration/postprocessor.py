@@ -914,10 +914,32 @@ class PostProcessorMixin:
         if not isinstance(instrument, str) or not instrument.strip():
             return genui_payloads
         instrument = instrument.strip()
-        if instrument_before == instrument:
-            return genui_payloads
         market = profile.get("target_market")
         if not isinstance(market, str) or not market.strip():
+            return genui_payloads
+
+        runtime_state_raw = pre_strategy_data.get("runtime")
+        runtime_state = (
+            dict(runtime_state_raw)
+            if isinstance(runtime_state_raw, dict)
+            else {}
+        )
+        timeframe_plan = runtime_state.get("timeframe_plan")
+        timeframe_primary = (
+            str(timeframe_plan.get("primary", "")).strip().lower()
+            if isinstance(timeframe_plan, dict)
+            else ""
+        )
+        interval_mapping = {
+            "1m": "1",
+            "5m": "5",
+            "15m": "15",
+            "1h": "60",
+            "4h": "240",
+            "1d": "D",
+        }
+        chart_interval = interval_mapping.get(timeframe_primary, "D")
+        if instrument_before == instrument and chart_interval == "D":
             return genui_payloads
 
         symbol = get_tradingview_symbol_for_market_instrument(
@@ -930,6 +952,6 @@ class PostProcessorMixin:
         chart_payload = {
             "type": "tradingview_chart",
             "symbol": symbol,
-            "interval": "D",
+            "interval": chart_interval,
         }
         return [chart_payload, *genui_payloads]

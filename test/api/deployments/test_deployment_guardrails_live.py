@@ -19,7 +19,11 @@ from packages.infra.db.models.trading_event_outbox import TradingEventOutbox
 from packages.domain.trading.runtime import runtime_service as runtime_service_module
 
 
-def _build_deployable_dsl() -> dict[str, object]:
+def _build_deployable_dsl(
+    *,
+    market: str = "crypto",
+    ticker: str = "BTC/USD",
+) -> dict[str, object]:
     return {
         "dsl_version": "1.0.0",
         "strategy": {
@@ -27,8 +31,8 @@ def _build_deployable_dsl() -> dict[str, object]:
             "description": "Live API deployment guardrail test",
         },
         "universe": {
-            "market": "crypto",
-            "tickers": ["BTC/USD"],
+            "market": market,
+            "tickers": [ticker],
         },
         "timeframe": "1m",
         "factors": {
@@ -89,13 +93,19 @@ def _create_thread(api_test_client: TestClient, auth_headers: dict[str, str]) ->
     return str(response.json()["session_id"])
 
 
-def _create_strategy(api_test_client: TestClient, auth_headers: dict[str, str]) -> str:
+def _create_strategy(
+    api_test_client: TestClient,
+    auth_headers: dict[str, str],
+    *,
+    market: str = "crypto",
+    ticker: str = "BTC/USD",
+) -> str:
     response = api_test_client.post(
         "/api/v1/strategies/confirm",
         headers=auth_headers,
         json={
             "session_id": _create_thread(api_test_client, auth_headers),
-            "dsl_json": _build_deployable_dsl(),
+            "dsl_json": _build_deployable_dsl(market=market, ticker=ticker),
             "auto_start_backtest": False,
             "language": "en",
         },

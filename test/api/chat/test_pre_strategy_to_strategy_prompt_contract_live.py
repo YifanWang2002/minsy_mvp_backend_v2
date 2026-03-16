@@ -76,6 +76,7 @@ def _preferred_option_id(choice_id: str) -> str | None:
         "target_instrument": "SPY",
         "opportunity_frequency_bucket": "daily",
         "holding_period_bucket": "intraday",
+        "strategy_family_choice": "trend_continuation",
     }
     return mapping.get(choice_id.strip())
 
@@ -148,7 +149,7 @@ def test_000_full_kyc_to_strategy_flow_with_real_openai_and_frontend_style_label
     )
     assert done["phase"] in {"kyc", "pre_strategy"}, done
 
-    for _ in range(10):
+    for _ in range(16):
         if done["phase"] == "strategy":
             break
 

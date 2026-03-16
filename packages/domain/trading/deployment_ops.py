@@ -19,6 +19,11 @@ from packages.domain.exceptions import DomainError
 from packages.domain.notification.services.notification_outbox_service import (
     NotificationOutboxService,
 )
+from packages.domain.trading.broker_capability_policy import (
+    build_broker_capabilities,
+    capability_supports_market,
+    normalize_market,
+)
 from packages.domain.trading.runtime.timeframe_scheduler import (
     SUPPORTED_RUNTIME_TIMEFRAMES,
     timeframe_to_seconds,
@@ -389,6 +394,35 @@ def assess_strategy_runtime_compatibility(
     )
 
 
+def _strategy_market_supported_by_account(
+    *,
+    strategy_payload: dict[str, Any] | None,
+    account: BrokerAccount,
+) -> tuple[bool, str]:
+    payload = strategy_payload if isinstance(strategy_payload, dict) else {}
+    universe = payload.get("universe") if isinstance(payload.get("universe"), dict) else {}
+    strategy_market = normalize_market(universe.get("market"))
+    if not strategy_market:
+        return True, ""
+
+    account_capabilities = (
+        dict(account.capabilities)
+        if isinstance(account.capabilities, dict)
+        else {}
+    )
+    if not account_capabilities:
+        account_capabilities = build_broker_capabilities(
+            provider=account.provider,
+            exchange_id=account.exchange_id,
+            is_sandbox=bool(account.is_sandbox),
+        )
+    supported = capability_supports_market(
+        capabilities=account_capabilities,
+        market=strategy_market,
+    )
+    return supported, strategy_market
+
+
 def build_runtime_compatibility_error(
     compatibility: DeploymentRuntimeCompatibility,
 ) -> tuple[str, str]:
@@ -741,6 +775,20 @@ async def create_deployment(
             status_code=422,
             code="BROKER_ACCOUNT_INACTIVE",
             message="Broker account must be active before deployment.",
+        )
+    strategy_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    market_supported, strategy_market = _strategy_market_supported_by_account(
+        strategy_payload=strategy_payload,
+        account=account,
+    )
+    if not market_supported:
+        _raise_error(
+            status_code=422,
+            code="BROKER_ACCOUNT_MARKET_NOT_SUPPORTED",
+            message=(
+                "Selected broker account does not support strategy market "
+                f"'{strategy_market}'."
+            ),
         )
 
     owner = await db.scalar(select(User).where(User.id == user_id))

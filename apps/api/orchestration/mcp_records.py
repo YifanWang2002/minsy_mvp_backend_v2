@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from .shared import *  # noqa: F403
 
 
@@ -272,7 +274,10 @@ class McpRecordsMixin:
             if "arguments" in record:
                 item["arguments"] = record["arguments"]
             if "output" in record:
-                item["output"] = record["output"]
+                item["output"] = self._sanitize_mcp_output_for_storage(
+                    name=name,
+                    output=record["output"],
+                )
             if error:
                 item["error"] = error
             output.append(item)
@@ -306,6 +311,41 @@ class McpRecordsMixin:
                 continue
             filtered.append(item)
         return filtered
+
+    def _sanitize_mcp_output_for_storage(self, *, name: str, output: Any) -> Any:
+        if name != "pre_strategy_render_candlestick":
+            return output
+        return self._redact_image_payload(output)
+
+    def _redact_image_payload(self, value: Any) -> Any:
+        if isinstance(value, list):
+            return [self._redact_image_payload(item) for item in value]
+        if isinstance(value, dict):
+            payload_type = str(value.get("type", "")).strip().lower()
+            if payload_type == "image":
+                sanitized = {key: val for key, val in value.items() if key != "data"}
+                data_raw = value.get("data")
+                if isinstance(data_raw, str):
+                    sanitized["data_redacted"] = True
+                    sanitized["data_len"] = len(data_raw)
+                    sanitized["data_sha256"] = hashlib.sha256(
+                        data_raw.encode("utf-8")
+                    ).hexdigest()[:16]
+                elif isinstance(data_raw, (bytes, bytearray)):
+                    data_bytes = bytes(data_raw)
+                    sanitized["data_redacted"] = True
+                    sanitized["data_len"] = len(data_bytes)
+                    sanitized["data_sha256"] = hashlib.sha256(data_bytes).hexdigest()[
+                        :16
+                    ]
+                return sanitized
+            return {
+                key: self._redact_image_payload(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, str) and len(value) >= 4000:
+            return f"[redacted_large_text len={len(value)}]"
+        return value
 
     def _is_retryable_mcp_failure(self, item: dict[str, Any]) -> bool:
         retryable_hints = (

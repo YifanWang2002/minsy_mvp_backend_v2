@@ -14,7 +14,6 @@ from apps.api.agents.handler_protocol import (
     PromptPieces,
 )
 from apps.api.agents.phases import Phase
-from apps.api.i18n import is_zh_locale
 from apps.api.agents.skills.pre_strategy_skills import (
     REQUIRED_FIELDS,
     build_pre_strategy_dynamic_state,
@@ -27,6 +26,7 @@ from apps.api.agents.skills.pre_strategy_skills import (
     normalize_instrument_value,
     normalize_market_value,
 )
+from apps.api.i18n import is_zh_locale
 from packages.domain.market_data.data import DataLoader
 from packages.shared_settings.schema.settings import settings
 
@@ -53,6 +53,11 @@ _HOLDING_PERIOD_ORDER: tuple[str, ...] = (
     "intraday",
     "swing_days",
     "position_weeks_plus",
+)
+_STRATEGY_FAMILY_ORDER: tuple[str, ...] = (
+    "trend_continuation",
+    "mean_reversion",
+    "volatility_regime",
 )
 _MARKET_OPTION_SUBTITLES: dict[str, str] = {
     "us_stocks": "US equities and ETFs",
@@ -114,41 +119,70 @@ _HOLDING_PERIOD_SUBTITLES_ZH: dict[str, str] = {
     "swing_days": "持有数天",
     "position_weeks_plus": "持有数周或更久",
 }
+_STRATEGY_FAMILY_LABELS: dict[str, str] = {
+    "trend_continuation": "Trend Continuation",
+    "mean_reversion": "Mean Reversion",
+    "volatility_regime": "Volatility Regime",
+}
+_STRATEGY_FAMILY_LABELS_ZH: dict[str, str] = {
+    "trend_continuation": "顺势延续",
+    "mean_reversion": "均值回归",
+    "volatility_regime": "波动率状态切换",
+}
+_STRATEGY_FAMILY_SUBTITLES: dict[str, str] = {
+    "trend_continuation": "Follow breakouts and sustained directional moves.",
+    "mean_reversion": "Fade stretched moves back toward equilibrium.",
+    "volatility_regime": "Trade volatility expansion and contraction states.",
+}
+_STRATEGY_FAMILY_SUBTITLES_ZH: dict[str, str] = {
+    "trend_continuation": "跟随突破与方向延续行情。",
+    "mean_reversion": "在过度偏离后博弈价格回归。",
+    "volatility_regime": "围绕波动收缩与扩张状态交易。",
+}
 _FALLBACK_QUESTION_BY_FIELD: dict[str, str] = {
     "target_market": "Which market do you want to trade?",
     "target_instrument": "Which instrument do you want to focus on?",
     "opportunity_frequency_bucket": "How often do you want trade opportunities?",
     "holding_period_bucket": "What holding period style do you prefer?",
+    "strategy_family_choice": "Which strategy family should we build first?",
 }
 _FALLBACK_QUESTION_BY_FIELD_ZH: dict[str, str] = {
     "target_market": "你想交易哪个市场？",
     "target_instrument": "你想聚焦哪个交易标的？",
     "opportunity_frequency_bucket": "你期望交易机会出现的频率是？",
     "holding_period_bucket": "你偏好的持仓周期是？",
+    "strategy_family_choice": "你想优先构建哪类策略？",
 }
 _FALLBACK_SUBTITLE_BY_FIELD: dict[str, str] = {
     "target_market": "Choose one market so I can scope symbols correctly.",
     "target_instrument": "Pick one primary symbol for setup design.",
     "opportunity_frequency_bucket": "This controls signal cadence and strategy style.",
     "holding_period_bucket": "This controls entry and exit horizon.",
+    "strategy_family_choice": "Choose one family based on current market regime diagnosis.",
 }
 _FALLBACK_SUBTITLE_BY_FIELD_ZH: dict[str, str] = {
     "target_market": "请选择一个市场，我才能正确限定可用标的。",
     "target_instrument": "请选择一个主要标的用于策略设计。",
     "opportunity_frequency_bucket": "这会影响信号节奏与策略风格。",
     "holding_period_bucket": "这会影响入场与出场周期。",
+    "strategy_family_choice": "基于当前市场诊断，请先确认一个策略家族。",
 }
-_PRE_STRATEGY_FALLBACK_MARKET_DATA_TOOLS: tuple[str, ...] = (
+_PRE_STRATEGY_MARKET_DATA_TOOLS: tuple[str, ...] = (
     "check_symbol_available",
     "get_symbol_data_coverage",
     "market_data_detect_missing_ranges",
     "market_data_fetch_missing_ranges",
     "market_data_get_sync_job",
+    "pre_strategy_get_regime_snapshot",
 )
+_STRATEGY_FAMILY_VALUES: set[str] = set(_STRATEGY_FAMILY_ORDER)
 _CRYPTO_QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "USD", "BTC", "ETH", "EUR")
 _DATA_RESOLUTION_AWAITING_USER_CHOICE = "awaiting_user_choice"
 _DATA_RESOLUTION_DOWNLOAD_STARTED = "download_started"
 _DATA_RESOLUTION_LOCAL_READY = "local_ready"
+_REGIME_SNAPSHOT_PENDING = "pending"
+_REGIME_SNAPSHOT_READY = "ready"
+_REGIME_SNAPSHOT_FAILED = "failed"
 
 
 def _pick_text(
@@ -227,6 +261,36 @@ def _holding_subtitle(*, value: str, language: str) -> str:
     )
 
 
+def _strategy_family_label(*, value: str, language: str) -> str:
+    default = value.replace("_", " ").title()
+    return _pick_text(
+        language=language,
+        en_table=_STRATEGY_FAMILY_LABELS,
+        zh_table=_STRATEGY_FAMILY_LABELS_ZH,
+        key=value,
+        default=default,
+    )
+
+
+def _strategy_family_subtitle(
+    *,
+    value: str,
+    language: str,
+    runtime_subtitles: dict[str, Any] | None = None,
+) -> str:
+    if isinstance(runtime_subtitles, dict):
+        runtime_value = runtime_subtitles.get(value)
+        if isinstance(runtime_value, str) and runtime_value.strip():
+            return runtime_value.strip()
+    return _pick_text(
+        language=language,
+        en_table=_STRATEGY_FAMILY_SUBTITLES,
+        zh_table=_STRATEGY_FAMILY_SUBTITLES_ZH,
+        key=value,
+        default=value,
+    )
+
+
 class PreStrategyHandler:
     """Implements :class:`PhaseHandler` for the pre-strategy phase."""
 
@@ -256,14 +320,20 @@ class PreStrategyHandler:
             self.init_artifacts(),
         )
         profile = self._sanitize_profile(dict(phase_data.get("profile", {})))
+        previous_runtime_state = dict(phase_data.get("runtime", {}))
         runtime_state = self._compute_runtime_state(
             profile=profile,
-            previous_runtime_state=dict(phase_data.get("runtime", {})),
+            previous_runtime_state=previous_runtime_state,
             turn_context=ctx.turn_context,
         )
+        if _did_regime_context_change(
+            previous_runtime_state=previous_runtime_state,
+            current_runtime_state=runtime_state,
+        ):
+            profile.pop("strategy_family_choice", None)
         phase_data["profile"] = profile
         phase_data["runtime"] = runtime_state
-        missing = self._compute_missing(profile)
+        missing = self._compute_missing(profile, runtime_state)
         phase_data["missing_fields"] = missing
 
         kyc_data = ctx.session_artifacts.get(Phase.KYC.value, {})
@@ -300,11 +370,17 @@ class PreStrategyHandler:
         )
         profile = dict(phase_data.get("profile", {}))
         runtime_state = dict(phase_data.get("runtime", {}))
+        previous_runtime_state = dict(runtime_state)
 
         for patch in raw_patches:
             validated = self._validate_patch(patch)
             if validated:
                 profile.update(validated)
+
+        self._apply_choice_selection(
+            profile=profile,
+            choice_selection=ctx.turn_context.get("choice_selection"),
+        )
 
         profile = self._sanitize_profile(profile)
         runtime_state = self._compute_runtime_state(
@@ -312,8 +388,17 @@ class PreStrategyHandler:
             previous_runtime_state=runtime_state,
             turn_context=ctx.turn_context,
         )
-        missing = self._compute_missing(profile)
-        completed = not missing and not self._requires_data_resolution(runtime_state)
+        if _did_regime_context_change(
+            previous_runtime_state=previous_runtime_state,
+            current_runtime_state=runtime_state,
+        ):
+            profile.pop("strategy_family_choice", None)
+        missing = self._compute_missing(profile, runtime_state)
+        completed = (
+            not missing
+            and not self._requires_data_resolution(runtime_state)
+            and self._is_regime_ready(runtime_state)
+        )
 
         phase_data["profile"] = profile
         phase_data["missing_fields"] = missing
@@ -482,6 +567,56 @@ class PreStrategyHandler:
             result["options"] = filtered
             return result
 
+        if choice_id == "strategy_family_choice":
+            phase_data = ctx.session_artifacts.get(Phase.PRE_STRATEGY.value, {})
+            runtime_raw = phase_data.get("runtime")
+            runtime_state = dict(runtime_raw) if isinstance(runtime_raw, dict) else {}
+            if not self._is_regime_ready(runtime_state):
+                return None
+            runtime_subtitles_raw = runtime_state.get("regime_family_subtitles")
+            runtime_subtitles = (
+                dict(runtime_subtitles_raw)
+                if isinstance(runtime_subtitles_raw, dict)
+                else {}
+            )
+            allowed = set(_STRATEGY_FAMILY_ORDER)
+            ai_options: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            for option in option_list:
+                if not isinstance(option, dict):
+                    continue
+                option_id = str(option.get("id") or "").strip()
+                if option_id not in allowed or option_id in seen_ids:
+                    continue
+                normalized = dict(option)
+                subtitle = str(normalized.get("subtitle") or "").strip()
+                label = str(normalized.get("label") or "").strip()
+                if not label:
+                    normalized["label"] = _strategy_family_label(
+                        value=option_id,
+                        language=ctx.language,
+                    )
+                if not subtitle:
+                    normalized["subtitle"] = _strategy_family_subtitle(
+                        value=option_id,
+                        language=ctx.language,
+                        runtime_subtitles=runtime_subtitles,
+                    )
+                seen_ids.add(option_id)
+                normalized["id"] = option_id
+                ai_options.append(normalized)
+            if len(ai_options) == len(_STRATEGY_FAMILY_ORDER):
+                result["options"] = ai_options
+                return result
+            fallback_options = self._build_fallback_options_for_field(
+                target_field="strategy_family_choice",
+                ctx=ctx,
+            )
+            if len(fallback_options) != len(_STRATEGY_FAMILY_ORDER):
+                return None
+            result["options"] = fallback_options
+            return result
+
         return payload
 
     def build_fallback_choice_prompt(
@@ -546,8 +681,47 @@ class PreStrategyHandler:
 
     # -- internal helpers -----------------------------------------------
 
-    def _compute_missing(self, profile: dict[str, Any]) -> list[str]:
-        return [f for f in REQUIRED_FIELDS if not _has_value(profile.get(f))]
+    def _compute_missing(
+        self,
+        profile: dict[str, Any],
+        runtime_state: dict[str, Any] | None = None,
+    ) -> list[str]:
+        runtime = dict(runtime_state or {})
+        missing: list[str] = []
+        base_required = (
+            "target_market",
+            "target_instrument",
+            "opportunity_frequency_bucket",
+            "holding_period_bucket",
+        )
+        for field in base_required:
+            if not _has_value(profile.get(field)):
+                missing.append(field)
+        if missing:
+            return missing
+        if self._requires_data_resolution(runtime):
+            return []
+        if not self._is_regime_ready(runtime):
+            return []
+        if not _has_value(profile.get("strategy_family_choice")):
+            missing.append("strategy_family_choice")
+        return missing
+
+    def _apply_choice_selection(
+        self,
+        *,
+        profile: dict[str, Any],
+        choice_selection: Any,
+    ) -> None:
+        if not isinstance(choice_selection, dict):
+            return
+        choice_id = str(choice_selection.get("choice_id") or "").strip()
+        option_id = str(choice_selection.get("selected_option_id") or "").strip()
+        if choice_id != "strategy_family_choice" or not option_id:
+            return
+        normalized = option_id.strip().lower()
+        if normalized in _STRATEGY_FAMILY_VALUES:
+            profile["strategy_family_choice"] = normalized
 
     def _validate_patch(self, patch: dict[str, Any]) -> dict[str, str]:
         valid_values = self.valid_values
@@ -586,7 +760,11 @@ class PreStrategyHandler:
                     ):
                         validated["target_market"] = inferred_market
 
-        for field in ("opportunity_frequency_bucket", "holding_period_bucket"):
+        for field in (
+            "opportunity_frequency_bucket",
+            "holding_period_bucket",
+            "strategy_family_choice",
+        ):
             raw_value = patch.get(field)
             if not isinstance(raw_value, str) or not raw_value.strip():
                 continue
@@ -639,6 +817,16 @@ class PreStrategyHandler:
                 continue
             if _is_field_value_allowed(field=field, value=value, valid_values=valid_values):
                 cleaned[field] = value
+
+        raw_family = profile.get("strategy_family_choice")
+        if isinstance(raw_family, str) and raw_family.strip():
+            family_value = _normalize_field_value("strategy_family_choice", raw_family)
+            if family_value and _is_field_value_allowed(
+                field="strategy_family_choice",
+                value=family_value,
+                valid_values=valid_values,
+            ):
+                cleaned["strategy_family_choice"] = family_value
 
         return cleaned
 
@@ -700,6 +888,34 @@ class PreStrategyHandler:
                 for value in _HOLDING_PERIOD_ORDER
             ]
 
+        if target_field == "strategy_family_choice":
+            phase_data = ctx.session_artifacts.get(Phase.PRE_STRATEGY.value, {})
+            runtime_raw = phase_data.get("runtime")
+            runtime_state = dict(runtime_raw) if isinstance(runtime_raw, dict) else {}
+            if not self._is_regime_ready(runtime_state):
+                return []
+            runtime_subtitles_raw = runtime_state.get("regime_family_subtitles")
+            runtime_subtitles = (
+                dict(runtime_subtitles_raw)
+                if isinstance(runtime_subtitles_raw, dict)
+                else {}
+            )
+            return [
+                {
+                    "id": value,
+                    "label": _strategy_family_label(
+                        value=value,
+                        language=ctx.language,
+                    ),
+                    "subtitle": _strategy_family_subtitle(
+                        value=value,
+                        language=ctx.language,
+                        runtime_subtitles=runtime_subtitles,
+                    ),
+                }
+                for value in _STRATEGY_FAMILY_ORDER
+            ]
+
         return []
 
     def _compute_runtime_state(
@@ -722,6 +938,11 @@ class PreStrategyHandler:
         if not normalized_market or not normalized_instrument:
             return {}
 
+        previous_runtime = (
+            dict(previous_runtime_state)
+            if isinstance(previous_runtime_state, dict)
+            else {}
+        )
         local_available = _is_symbol_available_locally(
             market=normalized_market,
             symbol=normalized_instrument,
@@ -729,15 +950,15 @@ class PreStrategyHandler:
         previous_status = ""
         previous_market = ""
         previous_instrument = ""
-        if isinstance(previous_runtime_state, dict):
+        if previous_runtime:
             previous_status = str(
-                previous_runtime_state.get("instrument_data_status", "")
+                previous_runtime.get("instrument_data_status", "")
             ).strip()
             previous_market = str(
-                previous_runtime_state.get("instrument_data_market", "")
+                previous_runtime.get("instrument_data_market", "")
             ).strip()
             previous_instrument = str(
-                previous_runtime_state.get("instrument_data_symbol", "")
+                previous_runtime.get("instrument_data_symbol", "")
             ).strip()
 
         same_symbol_as_previous = (
@@ -762,17 +983,166 @@ class PreStrategyHandler:
         else:
             status = _DATA_RESOLUTION_AWAITING_USER_CHOICE
 
-        return {
+        runtime: dict[str, Any] = {
             "instrument_data_status": status,
             "instrument_data_market": normalized_market,
             "instrument_data_symbol": normalized_instrument,
             "instrument_available_locally": local_available,
         }
+        frequency = str(profile.get("opportunity_frequency_bucket", "")).strip()
+        holding = str(profile.get("holding_period_bucket", "")).strip()
+        regime_context = {
+            "market": normalized_market,
+            "symbol": normalized_instrument,
+            "opportunity_frequency_bucket": frequency,
+            "holding_period_bucket": holding,
+        }
+        runtime["regime_context"] = regime_context
+        same_regime_context = previous_runtime.get("regime_context") == regime_context
+        if same_regime_context:
+            for key in (
+                "timeframe_plan",
+                "regime_snapshot_status",
+                "regime_summary_short",
+                "regime_family_scores",
+                "regime_family_subtitles",
+                "regime_primary_features",
+                "regime_snapshot_id",
+                "regime_selected_timeframe",
+                "regime_last_error",
+            ):
+                if key in previous_runtime:
+                    runtime[key] = previous_runtime[key]
+
+        if not frequency or not holding:
+            runtime["regime_snapshot_status"] = _REGIME_SNAPSHOT_PENDING
+            runtime.pop("regime_last_error", None)
+            return runtime
+
+        if self._requires_data_resolution(runtime):
+            runtime["regime_snapshot_status"] = _REGIME_SNAPSHOT_PENDING
+            runtime.pop("regime_last_error", None)
+            return runtime
+
+        regime_turn = _extract_regime_snapshot_payload_from_turn_context(
+            turn_context=turn_context,
+            market=normalized_market,
+            symbol=normalized_instrument,
+            opportunity_frequency_bucket=frequency,
+            holding_period_bucket=holding,
+        )
+        regime_status = str(regime_turn.get("status", "")).strip().lower()
+        if regime_status == _REGIME_SNAPSHOT_READY:
+            payload = regime_turn.get("payload")
+            if isinstance(payload, dict):
+                timeframe_plan = payload.get("timeframe_plan")
+                if isinstance(timeframe_plan, dict):
+                    runtime["timeframe_plan"] = {
+                        "primary": str(timeframe_plan.get("primary", "")).strip() or "1h",
+                        "secondary": str(timeframe_plan.get("secondary", "")).strip() or "4h",
+                        "mapping_reason": str(timeframe_plan.get("mapping_reason", "")).strip(),
+                    }
+                primary_payload = payload.get("primary")
+                summary_text = ""
+                if isinstance(primary_payload, dict):
+                    summary_text = str(primary_payload.get("summary", "")).strip()
+                runtime["regime_snapshot_status"] = _REGIME_SNAPSHOT_READY
+                if not summary_text:
+                    summary_text = str(payload.get("selected_summary", "")).strip()
+                if summary_text:
+                    runtime["regime_summary_short"] = summary_text
+                else:
+                    runtime.pop("regime_summary_short", None)
+
+                family_scores: Any = None
+                if isinstance(primary_payload, dict):
+                    family_scores = primary_payload.get("family_scores")
+                if not isinstance(family_scores, dict):
+                    family_scores = payload.get("selected_family_scores")
+                if isinstance(family_scores, dict):
+                    runtime["regime_family_scores"] = dict(family_scores)
+                else:
+                    runtime.pop("regime_family_scores", None)
+
+                subtitles: Any = None
+                if isinstance(primary_payload, dict):
+                    subtitles = primary_payload.get("choice_option_subtitles")
+                if not isinstance(subtitles, dict):
+                    subtitles = payload.get("selected_choice_option_subtitles")
+                if isinstance(subtitles, dict):
+                    runtime["regime_family_subtitles"] = dict(subtitles)
+                else:
+                    runtime.pop("regime_family_subtitles", None)
+
+                primary_features: Any = None
+                if isinstance(primary_payload, dict):
+                    primary_features = primary_payload.get("features")
+                if isinstance(primary_features, dict):
+                    runtime["regime_primary_features"] = dict(primary_features)
+                else:
+                    runtime.pop("regime_primary_features", None)
+                snapshot_id = str(payload.get("snapshot_id", "")).strip()
+                if snapshot_id:
+                    runtime["regime_snapshot_id"] = snapshot_id
+                else:
+                    runtime.pop("regime_snapshot_id", None)
+
+                selected_timeframe = ""
+                if isinstance(primary_payload, dict):
+                    selected_timeframe = str(primary_payload.get("timeframe", "")).strip()
+                if not selected_timeframe:
+                    selected_timeframe = str(payload.get("selected_timeframe", "")).strip()
+                if (
+                    not selected_timeframe
+                    and isinstance(runtime.get("timeframe_plan"), dict)
+                ):
+                    selected_timeframe = str(
+                        runtime["timeframe_plan"].get("primary", "")
+                    ).strip()
+                if selected_timeframe:
+                    runtime["regime_selected_timeframe"] = selected_timeframe
+                else:
+                    runtime.pop("regime_selected_timeframe", None)
+                runtime.pop("regime_last_error", None)
+            return runtime
+
+        if regime_status == _REGIME_SNAPSHOT_FAILED:
+            runtime["regime_snapshot_status"] = _REGIME_SNAPSHOT_FAILED
+            error_message = str(regime_turn.get("error_message", "")).strip()
+            if error_message:
+                runtime["regime_last_error"] = error_message
+            return runtime
+
+        if not same_regime_context:
+            runtime["regime_snapshot_status"] = _REGIME_SNAPSHOT_PENDING
+            for key in (
+                "timeframe_plan",
+                "regime_summary_short",
+                "regime_family_scores",
+                "regime_family_subtitles",
+                "regime_primary_features",
+                "regime_snapshot_id",
+                "regime_selected_timeframe",
+            ):
+                runtime.pop(key, None)
+            runtime.pop("regime_last_error", None)
+        elif runtime.get("regime_snapshot_status") not in {
+            _REGIME_SNAPSHOT_READY,
+            _REGIME_SNAPSHOT_FAILED,
+        }:
+            runtime["regime_snapshot_status"] = _REGIME_SNAPSHOT_PENDING
+            runtime.pop("regime_last_error", None)
+        return runtime
 
     @staticmethod
     def _requires_data_resolution(runtime_state: dict[str, Any]) -> bool:
         status = str(runtime_state.get("instrument_data_status", "")).strip()
         return status == _DATA_RESOLUTION_AWAITING_USER_CHOICE
+
+    @staticmethod
+    def _is_regime_ready(runtime_state: dict[str, Any]) -> bool:
+        status = str(runtime_state.get("regime_snapshot_status", "")).strip().lower()
+        return status == _REGIME_SNAPSHOT_READY
 
 
 def _has_value(value: Any) -> bool:
@@ -788,6 +1158,8 @@ def _normalize_field_value(field: str, value: str) -> str:
         return normalize_market_value(value)
     if field == "target_instrument":
         return _normalize_target_instrument_value(value, target_market=None)
+    if field == "strategy_family_choice":
+        return value.strip().lower()
     return value.strip()
 
 
@@ -825,7 +1197,7 @@ def _build_pre_strategy_tools() -> list[dict[str, Any]]:
             "type": "mcp",
             "server_label": "market_data",
             "server_url": settings.market_data_mcp_server_url,
-            "allowed_tools": list(_PRE_STRATEGY_FALLBACK_MARKET_DATA_TOOLS),
+            "allowed_tools": list(_PRE_STRATEGY_MARKET_DATA_TOOLS),
             "require_approval": "never",
         }
     ]
@@ -932,6 +1304,26 @@ def _is_symbol_available_locally(*, market: str, symbol: str) -> bool:
     return symbol_key in set(loader.get_available_symbols(market_key))
 
 
+def _did_regime_context_change(
+    *,
+    previous_runtime_state: dict[str, Any],
+    current_runtime_state: dict[str, Any],
+) -> bool:
+    previous_context = (
+        previous_runtime_state.get("regime_context")
+        if isinstance(previous_runtime_state, dict)
+        else None
+    )
+    current_context = (
+        current_runtime_state.get("regime_context")
+        if isinstance(current_runtime_state, dict)
+        else None
+    )
+    if not isinstance(previous_context, dict) or not isinstance(current_context, dict):
+        return False
+    return previous_context != current_context
+
+
 def _turn_started_download_for_symbol(
     *,
     turn_context: dict[str, Any],
@@ -961,19 +1353,116 @@ def _turn_started_download_for_symbol(
     return False
 
 
+def _extract_regime_snapshot_payload_from_turn_context(
+    *,
+    turn_context: dict[str, Any],
+    market: str,
+    symbol: str,
+    opportunity_frequency_bucket: str,
+    holding_period_bucket: str,
+) -> dict[str, Any]:
+    tool_calls_raw = turn_context.get("mcp_tool_calls")
+    if not isinstance(tool_calls_raw, list):
+        return {"status": "none"}
+
+    expected_market = normalize_market_value(market)
+    expected_symbol = normalize_instrument_value(symbol)
+    expected_frequency = str(opportunity_frequency_bucket).strip().lower()
+    expected_holding = str(holding_period_bucket).strip().lower()
+
+    for call in reversed(tool_calls_raw):
+        if not isinstance(call, dict):
+            continue
+        name = str(call.get("name") or call.get("tool_name") or "").strip()
+        if name != "pre_strategy_get_regime_snapshot":
+            continue
+        arguments = _extract_call_arguments(call)
+        if not isinstance(arguments, dict):
+            continue
+        market_raw = arguments.get("market")
+        symbol_raw = arguments.get("symbol")
+        frequency_raw = arguments.get("opportunity_frequency_bucket")
+        holding_raw = arguments.get("holding_period_bucket")
+        if not (
+            isinstance(market_raw, str)
+            and isinstance(symbol_raw, str)
+            and isinstance(frequency_raw, str)
+            and isinstance(holding_raw, str)
+        ):
+            continue
+        try:
+            normalized_market = normalize_market_value(market_raw)
+        except Exception:  # noqa: BLE001
+            continue
+        if normalized_market != expected_market:
+            continue
+        if normalize_instrument_value(symbol_raw) != expected_symbol:
+            continue
+        if str(frequency_raw).strip().lower() != expected_frequency:
+            continue
+        if str(holding_raw).strip().lower() != expected_holding:
+            continue
+
+        status = str(call.get("status", "")).strip().lower()
+        output_payload = _coerce_json_object(call.get("output"))
+        if status == "success":
+            if isinstance(output_payload, dict) and bool(output_payload.get("ok")):
+                return {"status": _REGIME_SNAPSHOT_READY, "payload": output_payload}
+            return {
+                "status": _REGIME_SNAPSHOT_FAILED,
+                "error_message": _extract_output_error_message(output_payload)
+                or "Regime snapshot MCP call returned invalid payload.",
+            }
+        if status == "failure":
+            return {
+                "status": _REGIME_SNAPSHOT_FAILED,
+                "error_message": _extract_output_error_message(output_payload)
+                or str(call.get("error", "")).strip()
+                or "Regime snapshot MCP call failed.",
+            }
+    return {"status": "none"}
+
+
+def _coerce_json_object(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _extract_output_error_message(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    nested_error = payload.get("error")
+    if isinstance(nested_error, dict):
+        message = str(nested_error.get("message", "")).strip()
+        if message:
+            return message
+    for key in ("message", "detail", "description", "error"):
+        text = str(payload.get(key, "")).strip()
+        if text:
+            return text
+    return ""
+
+
+def _extract_call_arguments(call: dict[str, Any]) -> dict[str, Any] | None:
+    arguments_raw = call.get("arguments")
+    return _coerce_json_object(arguments_raw)
+
+
 def _mcp_call_targets_symbol(
     *,
     call: dict[str, Any],
     expected_market: str,
     expected_symbol: str,
 ) -> bool:
-    arguments_raw = call.get("arguments")
-    if not isinstance(arguments_raw, str) or not arguments_raw.strip():
-        return False
-    try:
-        arguments = json.loads(arguments_raw)
-    except json.JSONDecodeError:
-        return False
+    arguments = _extract_call_arguments(call)
     if not isinstance(arguments, dict):
         return False
 
@@ -981,7 +1470,11 @@ def _mcp_call_targets_symbol(
     symbol_raw = arguments.get("symbol")
     if not isinstance(market_raw, str) or not isinstance(symbol_raw, str):
         return False
+    try:
+        normalized_market = normalize_market_value(market_raw)
+    except Exception:  # noqa: BLE001
+        return False
     return (
-        normalize_market_value(market_raw) == expected_market
+        normalized_market == expected_market
         and normalize_instrument_value(symbol_raw) == expected_symbol
     )

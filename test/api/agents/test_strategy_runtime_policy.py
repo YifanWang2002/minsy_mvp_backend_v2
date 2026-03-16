@@ -38,12 +38,19 @@ def test_strategy_dynamic_state_includes_pre_strategy_data_readiness() -> None:
         pre_strategy_fields={
             "target_market": "crypto",
             "target_instrument": "PEPEUSD",
+            "strategy_family_choice": "trend_continuation",
         },
         pre_strategy_runtime={
             "instrument_data_status": "download_started",
             "instrument_data_symbol": "PEPEUSD",
             "instrument_data_market": "crypto",
             "instrument_available_locally": False,
+            "timeframe_plan": {
+                "primary": "1h",
+                "secondary": "4h",
+                "mapping_reason": "test",
+            },
+            "regime_summary_short": "trend is stronger than range",
         },
         session_id="abc-123",
     )
@@ -52,3 +59,6 @@ def test_strategy_dynamic_state_includes_pre_strategy_data_readiness() -> None:
     assert "- pre_strategy_instrument_data_symbol: PEPEUSD" in state
     assert "- pre_strategy_instrument_data_market: crypto" in state
     assert "- pre_strategy_instrument_available_locally: false" in state
+    assert "- pre_strategy_strategy_family_choice: trend_continuation" in state
+    assert "- pre_strategy_timeframe_primary: 1h" in state
+    assert "- pre_strategy_market_regime_summary: trend is stronger than range" in state

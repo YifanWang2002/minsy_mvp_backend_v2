@@ -58,3 +58,5 @@ uv.lock
 *.jsonl
 artifacts
 runtime/*
+temp/
+env/gcp/local-collector.json

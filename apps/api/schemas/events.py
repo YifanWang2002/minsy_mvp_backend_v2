@@ -352,6 +352,34 @@ class CcxtExchangeInfo(BaseModel):
     website_url: str | None = None
 
 
+class BrokerCapabilityProfileResponse(BaseModel):
+    """Canonical broker capability profile payload."""
+
+    provider: str
+    exchange_id: str = ""
+    display_name: str
+    integration_status: str = "available"
+    connectivity_mode: str = "api"
+    requires_api_credentials: bool = True
+    requires_local_port: bool = False
+    requires_desktop_app: bool = False
+    desktop_app: str | None = None
+    data_source_mode: str = "user_byo_credentials"
+    asset_classes: list[str] = Field(default_factory=list)
+    supported_markets: list[str] = Field(default_factory=list)
+    order_types: list[str] = Field(default_factory=list)
+    time_in_force: list[str] = Field(default_factory=list)
+    execution_routes_supported: list[str] = Field(default_factory=list)
+    sandbox_supported: bool = False
+    supports_demo: bool = False
+    supports_testnet: bool = False
+    supports_paper: bool = False
+    supports_live: bool = False
+    region_policy: str = "unknown"
+    region_notes: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class IssueReportCreateResponse(BaseModel):
     """Confirmation payload after persisting one issue report bundle."""
 

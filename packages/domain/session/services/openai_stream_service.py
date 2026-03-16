@@ -10,9 +10,11 @@ from typing import Any, Protocol
 import httpx
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI
 
-from packages.shared_settings.schema.settings import settings
-from packages.infra.observability.sentry import capture_exception_with_context
 from packages.infra.observability.logger import logger
+from packages.infra.observability.sentry import capture_exception_with_context
+from packages.shared_settings.schema.settings import settings
+
+_OPENAI_RESPONSES_STREAM_TIMEOUT_SECONDS = 180.0
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -280,6 +282,7 @@ def _build_stream_kwargs(
     *,
     model: str,
     input_text: str,
+    input_payload: Any | None,
     instructions: str | None,
     max_output_tokens: int | None,
     previous_response_id: str | None,
@@ -288,10 +291,11 @@ def _build_stream_kwargs(
     reasoning: dict[str, Any] | None,
     response_verbosity: str | None,
 ) -> dict[str, Any]:
-    stream_kwargs: dict[str, Any] = {
-        "model": model,
-        "input": input_text,
-    }
+    stream_kwargs: dict[str, Any] = {"model": model}
+    if input_payload is not None:
+        stream_kwargs["input"] = input_payload
+    else:
+        stream_kwargs["input"] = input_text
     optional_fields: dict[str, Any] = {
         "instructions": instructions,
         "max_output_tokens": max_output_tokens,
@@ -327,6 +331,7 @@ class ResponsesEventStreamer(Protocol):
         *,
         model: str,
         input_text: str,
+        input_payload: Any | None = None,
         instructions: str | None = None,
         max_output_tokens: int | None = None,
         previous_response_id: str | None = None,
@@ -342,13 +347,17 @@ class OpenAIResponsesEventStreamer:
     """Stream raw OpenAI Responses API events."""
 
     def __init__(self) -> None:
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            timeout=_OPENAI_RESPONSES_STREAM_TIMEOUT_SECONDS,
+        )
 
     async def stream_events(
         self,
         *,
         model: str,
         input_text: str,
+        input_payload: Any | None = None,
         instructions: str | None = None,
         max_output_tokens: int | None = None,
         previous_response_id: str | None = None,
@@ -360,6 +369,7 @@ class OpenAIResponsesEventStreamer:
         stream_kwargs = _build_stream_kwargs(
             model=model,
             input_text=input_text,
+            input_payload=input_payload,
             instructions=instructions,
             max_output_tokens=max_output_tokens,
             previous_response_id=previous_response_id,

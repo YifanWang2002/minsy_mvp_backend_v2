@@ -460,10 +460,38 @@ class PromptBuilderMixin:
         return decorated
 
     @staticmethod
+    def _redact_openai_input_payload_for_trace(value: Any) -> Any:
+        if isinstance(value, list):
+            return [
+                PromptBuilderMixin._redact_openai_input_payload_for_trace(item)
+                for item in value
+            ]
+        if isinstance(value, dict):
+            output: dict[str, Any] = {}
+            for key, item in value.items():
+                normalized_key = str(key).strip().lower()
+                if normalized_key == "image_url" and isinstance(item, str):
+                    text = item.strip()
+                    if text.lower().startswith("data:image/"):
+                        output[str(key)] = f"[redacted_data_url len={len(text)}]"
+                        continue
+                output[str(key)] = PromptBuilderMixin._redact_openai_input_payload_for_trace(
+                    item
+                )
+            return output
+        return value
+
+    @staticmethod
     def _redact_stream_request_kwargs_for_trace(
         stream_request_kwargs: dict[str, Any],
     ) -> dict[str, Any]:
         payload = copy.deepcopy(stream_request_kwargs)
+        for key in ("input_payload", "input"):
+            if key in payload:
+                payload[key] = PromptBuilderMixin._redact_openai_input_payload_for_trace(
+                    payload[key]
+                )
+
         tools = payload.get("tools")
         if not isinstance(tools, list):
             return payload

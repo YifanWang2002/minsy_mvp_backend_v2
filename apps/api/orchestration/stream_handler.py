@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+
 from .shared import *  # noqa: F403
 
 
@@ -32,9 +34,13 @@ class StreamHandlerMixin:
             and preparation.prompt.response_verbosity.strip()
             else None
         )
+        resolved_input_payload = self._build_openai_input_payload(
+            preparation=preparation,
+        )
         stream_request_kwargs: dict[str, Any] = {
             "model": resolved_model,
             "input_text": preparation.prompt.enriched_input,
+            "input_payload": resolved_input_payload,
             "instructions": preparation.prompt.instructions,
             "max_output_tokens": resolved_max_output_tokens,
             "previous_response_id": session.previous_response_id,
@@ -193,6 +199,152 @@ class StreamHandlerMixin:
                 "message": str(exc),
                 "diagnostics": {"category": "orchestrator_stream_runtime_error"},
             }
+
+    def _build_openai_input_payload(
+        self,
+        *,
+        preparation: _TurnPreparation,
+    ) -> list[dict[str, Any]] | None:
+        if preparation.phase_before != Phase.PRE_STRATEGY.value:
+            return None
+
+        pre_raw = preparation.artifacts.get(Phase.PRE_STRATEGY.value)
+        if not isinstance(pre_raw, dict):
+            return None
+
+        missing_raw = pre_raw.get("missing_fields")
+        if not isinstance(missing_raw, list):
+            return None
+        missing = [str(item).strip() for item in missing_raw if str(item).strip()]
+        if missing != ["strategy_family_choice"]:
+            return None
+
+        runtime_raw = pre_raw.get("runtime")
+        if not isinstance(runtime_raw, dict):
+            return None
+        if str(runtime_raw.get("regime_snapshot_status", "")).strip().lower() != "ready":
+            return None
+
+        snapshot_id = str(runtime_raw.get("regime_snapshot_id", "")).strip()
+        if not snapshot_id:
+            return None
+
+        chart_pack = self._load_pre_strategy_chart_data(
+            snapshot_id=snapshot_id,
+        )
+        if chart_pack is None:
+            return None
+        image_data_url, alt_text = chart_pack
+
+        content: list[dict[str, Any]] = [
+            {
+                "type": "input_text",
+                "text": preparation.prompt.enriched_input,
+            },
+            {
+                "type": "input_image",
+                "image_url": image_data_url,
+            },
+        ]
+        if isinstance(alt_text, str) and alt_text.strip():
+            content.insert(
+                1,
+                {
+                    "type": "input_text",
+                    "text": (
+                        "[AUTO_GENERATED_REGIME_CHART_CONTEXT]\n"
+                        f"{alt_text.strip()}"
+                    ),
+                },
+            )
+        return [{"role": "user", "content": content}]
+
+    def _load_pre_strategy_chart_data(
+        self,
+        *,
+        snapshot_id: str,
+    ) -> tuple[str, str] | None:
+        try:
+            from apps.mcp.domains.market_data.tools import (
+                pre_strategy_render_candlestick,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log_agent(
+                "orchestrator",
+                (
+                    "pre_strategy_image_attach_import_failed "
+                    f"error={type(exc).__name__}"
+                ),
+            )
+            return None
+
+        try:
+            rendered = pre_strategy_render_candlestick(
+                snapshot_id=snapshot_id,
+                timeframe="primary",
+                bars=min(int(settings.pre_strategy_regime_image_max_bars), 180),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log_agent(
+                "orchestrator",
+                (
+                    "pre_strategy_image_attach_render_failed "
+                    f"snapshot_id={snapshot_id} error={type(exc).__name__}"
+                ),
+            )
+            return None
+
+        if not isinstance(rendered, list) or not rendered:
+            return None
+
+        image_data_url: str | None = None
+        alt_text = ""
+        for item in rendered:
+            if image_data_url is None:
+                image_data_url = self._coerce_image_data_url(item)
+            if not alt_text and isinstance(item, str) and item.strip():
+                alt_text = item.strip()
+
+        if not image_data_url:
+            return None
+        return image_data_url, alt_text
+
+    @staticmethod
+    def _coerce_image_data_url(value: Any) -> str | None:
+        raw_data: bytes | None = None
+        if hasattr(value, "data"):
+            candidate = getattr(value, "data", None)
+            if isinstance(candidate, bytes):
+                raw_data = candidate
+            elif isinstance(candidate, str) and candidate.strip():
+                try:
+                    raw_data = base64.b64decode(candidate.strip(), validate=True)
+                except Exception:  # noqa: BLE001
+                    raw_data = None
+        elif isinstance(value, dict):
+            candidate = value.get("data")
+            if isinstance(candidate, bytes):
+                raw_data = candidate
+            elif isinstance(candidate, str) and candidate.strip():
+                try:
+                    raw_data = base64.b64decode(candidate.strip(), validate=True)
+                except Exception:  # noqa: BLE001
+                    raw_data = None
+
+        if not raw_data:
+            return None
+
+        raw_format = (
+            getattr(value, "_format", None)
+            or getattr(value, "format", None)
+            or (value.get("format") if isinstance(value, dict) else None)
+            or "png"
+        )
+        fmt = str(raw_format).strip().lower() or "png"
+        if fmt == "jpg":
+            fmt = "jpeg"
+        encoded = base64.b64encode(raw_data).decode("ascii")
+        return f"data:image/{fmt};base64,{encoded}"
 
     @staticmethod
     def _resolve_stream_timeout_seconds() -> float:

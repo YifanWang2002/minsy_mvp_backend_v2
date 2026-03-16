@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from packages.domain.trading.services.broker_capability_registry import (
+    resolve_broker_capability_profile,
+)
+
 _MARKET_ALIASES: dict[str, str] = {
     "stock": "us_stocks",
     "stocks": "us_stocks",
@@ -55,36 +59,12 @@ def build_broker_capabilities(
 ) -> dict[str, Any]:
     """Build canonical persisted capability metadata for one broker account."""
 
-    provider_key = str(provider).strip().lower()
-    exchange_key = str(exchange_id).strip().lower()
-    if provider_key == "alpaca":
-        return {
-            "asset_classes": ["us_equity", "crypto"],
-            "supported_markets": ["us_stocks", "crypto"],
-            "order_types": ["market", "limit", "stop", "stop_limit"],
-            "time_in_force": ["day", "gtc", "ioc", "fok"],
-            "sandbox_supported": True,
-        }
-    if provider_key == "ccxt":
-        return {
-            "exchange_id": exchange_key,
-            "asset_classes": ["crypto"],
-            "supported_markets": ["crypto"],
-            "order_types": ["market", "limit"],
-            "time_in_force": ["gtc", "ioc", "fok"],
-            "sandbox_supported": bool(is_sandbox),
-        }
-    if provider_key == "sandbox":
-        return {
-            "asset_classes": ["us_equity", "crypto"],
-            "supported_markets": ["us_stocks", "crypto"],
-            "order_types": ["market", "limit"],
-            "time_in_force": ["gtc"],
-            "sandbox_supported": True,
-            "execution_model": "internal_simulated",
-            "market_data_source": "alpaca",
-        }
-    return {}
+    profile = resolve_broker_capability_profile(
+        provider=provider,
+        exchange_id=exchange_id,
+        is_sandbox=is_sandbox,
+    )
+    return profile.to_capabilities()
 
 
 def derive_supported_markets(capabilities: dict[str, Any] | None) -> list[str]:
@@ -152,6 +132,50 @@ def capability_supports_market(
         for item in raw_asset_classes
         if str(item or "").strip()
     }
+
+
+def capability_supports_order_type(
+    *,
+    capabilities: dict[str, Any] | None,
+    order_type: str | None,
+) -> bool:
+    """Return True when broker capabilities support the requested order type."""
+
+    normalized_order_type = str(order_type or "").strip().lower()
+    if not normalized_order_type:
+        return False
+    data = capabilities if isinstance(capabilities, dict) else {}
+    raw_order_types = data.get("order_types")
+    if not isinstance(raw_order_types, list):
+        return False
+    supported = {
+        str(item or "").strip().lower()
+        for item in raw_order_types
+        if str(item or "").strip()
+    }
+    return normalized_order_type in supported
+
+
+def capability_supports_time_in_force(
+    *,
+    capabilities: dict[str, Any] | None,
+    time_in_force: str | None,
+) -> bool:
+    """Return True when broker capabilities support the requested TIF."""
+
+    normalized_tif = str(time_in_force or "").strip().lower()
+    if not normalized_tif:
+        return False
+    data = capabilities if isinstance(capabilities, dict) else {}
+    raw_values = data.get("time_in_force")
+    if not isinstance(raw_values, list):
+        return False
+    supported = {
+        str(item or "").strip().lower()
+        for item in raw_values
+        if str(item or "").strip()
+    }
+    return normalized_tif in supported
 
 
 def evaluate_broker_compatibility(
