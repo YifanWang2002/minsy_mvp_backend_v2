@@ -7,10 +7,20 @@ from uuid import UUID
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from apps.mcp.auth.context_auth import (
+    McpContextClaims,
+    decode_mcp_context_token,
+    extract_mcp_context_token,
+)
+from apps.mcp.common.utils import log_mcp_tool_result, to_json, utc_now_iso
 from packages.domain.backtest import (
     BacktestBarLimitExceededError,
     BacktestJobNotFoundError,
+    BacktestJobNotReadyError,
     BacktestStrategyNotFoundError,
+    BacktestTradeSnapshotInputError,
+    BacktestTradesTruncatedForAllModeError,
+    build_backtest_trade_snapshots,
     create_backtest_job,
     get_backtest_job_view,
     schedule_backtest_job,
@@ -26,19 +36,14 @@ from packages.domain.backtest.analytics import (
     compute_rolling_metrics,
     compute_underwater_curve,
 )
-from packages.domain.exceptions import DomainError
 from packages.domain.billing.quota_service import QuotaExceededError
-from apps.mcp.auth.context_auth import (
-    McpContextClaims,
-    decode_mcp_context_token,
-    extract_mcp_context_token,
-)
-from apps.mcp.common.utils import log_mcp_tool_result, to_json, utc_now_iso
+from packages.domain.exceptions import DomainError
 from packages.infra.db import session as db_module
 
 TOOL_NAMES: tuple[str, ...] = (
     "backtest_create_job",
     "backtest_get_job",
+    "backtest_trade_snapshots",
     "backtest_entry_hour_pnl_heatmap",
     "backtest_entry_weekday_pnl",
     "backtest_monthly_return_table",
@@ -408,6 +413,107 @@ def register_backtest_tools(mcp: FastMCP) -> None:
             return None, error_payload
         assert result is not None
         return result, None
+
+    @mcp.tool()
+    async def backtest_trade_snapshots(
+        job_id: str,
+        selection_mode: str = "latest",
+        selection_count: int | None = 20,
+        trade_index: int | None = None,
+        lookback_bars: int = 120,
+        lookforward_bars: int = 120,
+        render_images: bool = False,
+        save_images_to_temp: bool = False,
+        random_seed: int | None = None,
+        ctx: Context | None = None,
+    ) -> str:
+        try:
+            job_uuid = _parse_uuid(job_id, "job_id")
+        except ValueError as exc:
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="INVALID_UUID",
+                error_message=str(exc),
+            )
+        try:
+            claims = _resolve_context_claims(ctx)
+        except ValueError as exc:
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+        if claims is None:
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="MISSING_CONTEXT",
+                error_message="MCP context token is required to resolve user scope.",
+            )
+
+        try:
+            async with await _new_db_session() as db:
+                payload = await build_backtest_trade_snapshots(
+                    db,
+                    job_id=job_uuid,
+                    user_id=claims.user_id,
+                    selection_mode=selection_mode,
+                    selection_count=selection_count,
+                    trade_index=trade_index,
+                    lookback_bars=lookback_bars,
+                    lookforward_bars=lookforward_bars,
+                    render_images=render_images,
+                    save_images_to_temp=save_images_to_temp,
+                    random_seed=random_seed,
+                )
+        except BacktestJobNotFoundError as exc:
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="JOB_NOT_FOUND",
+                error_message=str(exc),
+            )
+        except BacktestJobNotReadyError as exc:
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="JOB_NOT_READY",
+                error_message="Backtest job is not completed yet.",
+                error_details={"status": exc.status},
+            )
+        except BacktestTradesTruncatedForAllModeError as exc:
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="TRADES_TRUNCATED_FOR_ALL_MODE",
+                error_message=str(exc),
+                error_details={
+                    "trades_total": exc.trades_total,
+                    "trades_kept": exc.trades_kept,
+                },
+            )
+        except BacktestTradeSnapshotInputError as exc:
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="INVALID_INPUT",
+                error_message=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _payload(
+                tool="backtest_trade_snapshots",
+                ok=False,
+                error_code="BACKTEST_TRADE_SNAPSHOTS_ERROR",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+
+        return _payload(
+            tool="backtest_trade_snapshots",
+            ok=True,
+            data=payload,
+        )
 
     @mcp.tool()
     async def backtest_entry_hour_pnl_heatmap(

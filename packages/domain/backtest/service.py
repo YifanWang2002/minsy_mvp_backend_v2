@@ -14,6 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from packages.core.events.notification_events import EVENT_BACKTEST_COMPLETED
 from packages.domain.backtest.analytics import build_compact_performance_payload
 from packages.domain.backtest.engine import EventDrivenBacktestEngine
+from packages.domain.backtest.trade_snapshot import (
+    build_trade_snapshots_from_result,
+)
 from packages.domain.backtest.types import BacktestConfig
 from packages.domain.billing.quota_service import QuotaService
 from packages.domain.billing.usage_service import (
@@ -30,6 +33,7 @@ from packages.domain.strategy import parse_strategy_payload
 from packages.infra.db import session as db_module
 from packages.infra.db.models.backtest import BacktestJob
 from packages.infra.db.models.strategy import Strategy
+from packages.infra.db.models.strategy_revision import StrategyRevision
 from packages.infra.db.models.user import User
 from packages.infra.observability.logger import logger
 from packages.shared_settings.schema.settings import settings
@@ -79,6 +83,29 @@ class BacktestStrategyNotFoundError(LookupError):
 
 class BacktestBarLimitExceededError(ValueError):
     """Raised when requested bar count exceeds configured safety limit."""
+
+
+class BacktestJobNotReadyError(RuntimeError):
+    """Raised when a backtest job has not reached completed state."""
+
+    def __init__(self, *, status: str) -> None:
+        self.status = str(status).strip().lower() or "pending"
+        super().__init__(f"Backtest job is not completed yet. status={self.status}")
+
+
+class BacktestTradeSnapshotInputError(ValueError):
+    """Raised when trade-snapshot input arguments are invalid."""
+
+
+class BacktestTradesTruncatedForAllModeError(RuntimeError):
+    """Raised when `selection_mode=all` is requested on truncated results."""
+
+    def __init__(self, *, trades_total: int, trades_kept: int) -> None:
+        self.trades_total = int(trades_total)
+        self.trades_kept = int(trades_kept)
+        super().__init__(
+            "Backtest trades are truncated; `selection_mode=all` requires full trade history."
+        )
 
 
 async def create_backtest_job(
@@ -324,6 +351,169 @@ async def get_backtest_job_view(
     if user_id is not None and job.user_id != user_id:
         raise BacktestJobNotFoundError(f"Backtest job not found: {job_id}")
     return _to_view(job)
+
+
+async def build_backtest_trade_snapshots(
+    db: AsyncSession,
+    *,
+    job_id: UUID,
+    user_id: UUID,
+    selection_mode: str = "latest",
+    selection_count: int | None = 20,
+    trade_index: int | None = None,
+    lookback_bars: int = 120,
+    lookforward_bars: int = 120,
+    render_images: bool = False,
+    save_images_to_temp: bool = False,
+    random_seed: int | None = None,
+) -> dict[str, Any]:
+    """Build trade snapshots for a completed backtest job."""
+
+    normalized_mode = str(selection_mode).strip().lower()
+    if normalized_mode not in {"all", "latest", "earliest", "random"}:
+        raise BacktestTradeSnapshotInputError(
+            f"Unsupported selection_mode: {selection_mode}"
+        )
+    if lookback_bars < 0 or lookforward_bars < 0:
+        raise BacktestTradeSnapshotInputError(
+            "lookback_bars and lookforward_bars must be >= 0."
+        )
+    if save_images_to_temp and not render_images:
+        raise BacktestTradeSnapshotInputError(
+            "save_images_to_temp requires render_images=true."
+        )
+    if trade_index is not None and int(trade_index) < 0:
+        raise BacktestTradeSnapshotInputError(
+            "trade_index must be >= 0 when provided."
+        )
+    if normalized_mode == "all":
+        if selection_count is not None:
+            raise BacktestTradeSnapshotInputError(
+                "selection_count must be null when selection_mode=all."
+            )
+        if trade_index is not None:
+            raise BacktestTradeSnapshotInputError(
+                "trade_index cannot be combined with selection_mode=all."
+            )
+    elif selection_count is None or int(selection_count) < 1:
+        if trade_index is None:
+            raise BacktestTradeSnapshotInputError(
+                "selection_count must be >= 1 when selection_mode is not all."
+            )
+
+    job = await db.scalar(
+        select(BacktestJob).where(
+            BacktestJob.id == job_id,
+            BacktestJob.user_id == user_id,
+        )
+    )
+    if job is None:
+        raise BacktestJobNotFoundError(f"Backtest job not found: {job_id}")
+
+    status_external = _to_external_status(job.status)
+    result_payload = job.results if isinstance(job.results, dict) else None
+    if status_external != "done" or result_payload is None:
+        raise BacktestJobNotReadyError(status=status_external)
+
+    if normalized_mode == "all":
+        trades_kept = len(
+            result_payload.get("trades")
+            if isinstance(result_payload.get("trades"), list)
+            else []
+        )
+        truncation = (
+            result_payload.get("truncation")
+            if isinstance(result_payload.get("truncation"), dict)
+            else {}
+        )
+        trades_total = int(truncation.get("trades_total", trades_kept) or trades_kept)
+        if trades_total > trades_kept:
+            raise BacktestTradesTruncatedForAllModeError(
+                trades_total=trades_total,
+                trades_kept=trades_kept,
+            )
+
+    strategy = await db.scalar(select(Strategy).where(Strategy.id == job.strategy_id))
+    if strategy is None:
+        raise BacktestStrategyNotFoundError(f"Strategy not found: {job.strategy_id}")
+
+    strategy_payload_source = "current_strategy_fallback"
+    warnings: list[str] = []
+    strategy_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    strategy_version = None
+    if isinstance(job.config, dict):
+        raw_version = job.config.get("strategy_version")
+        if isinstance(raw_version, int):
+            strategy_version = raw_version
+        elif isinstance(raw_version, str) and raw_version.strip().isdigit():
+            strategy_version = int(raw_version.strip())
+    if strategy_version is not None and strategy_version > 0:
+        revision = await db.scalar(
+            select(StrategyRevision.dsl_payload).where(
+                StrategyRevision.strategy_id == strategy.id,
+                StrategyRevision.version == strategy_version,
+            )
+        )
+        if isinstance(revision, dict):
+            strategy_payload = revision
+            strategy_payload_source = "strategy_revision"
+        else:
+            warnings.append(
+                "Requested strategy revision snapshot is unavailable; fallback to current strategy DSL."
+            )
+    else:
+        warnings.append(
+            "Backtest job does not include strategy_version; fallback to current strategy DSL."
+        )
+
+    try:
+        parsed_strategy = parse_strategy_payload(strategy_payload)
+    except Exception as exc:  # noqa: BLE001
+        raise BacktestTradeSnapshotInputError(
+            f"Unable to parse strategy payload for trade snapshots: {type(exc).__name__}: {exc}"
+        ) from exc
+    symbol = _pick_symbol(parsed_strategy.universe.tickers)
+    try:
+        payload = build_trade_snapshots_from_result(
+            result_payload=result_payload,
+            strategy=parsed_strategy,
+            market=parsed_strategy.universe.market,
+            symbol=symbol,
+            timeframe=parsed_strategy.universe.timeframe,
+            selection_mode=normalized_mode,
+            selection_count=None if normalized_mode == "all" else int(selection_count or 0),
+            lookback_bars=int(lookback_bars),
+            lookforward_bars=int(lookforward_bars),
+            render_images=bool(render_images),
+            save_images_to_temp=bool(save_images_to_temp),
+            job_id=job.id,
+            random_seed=random_seed,
+            trade_index=int(trade_index) if trade_index is not None else None,
+        )
+    except BacktestTradeSnapshotInputError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise BacktestTradeSnapshotInputError(
+            f"Unable to build trade snapshots: {type(exc).__name__}: {exc}"
+        ) from exc
+    merged_warnings = [*warnings, *payload.get("warnings", [])]
+
+    return {
+        "job_id": str(job.id),
+        "strategy_id": str(job.strategy_id),
+        "status": status_external,
+        "market": payload.get("market"),
+        "symbol": payload.get("symbol"),
+        "timeframe": payload.get("timeframe"),
+        "timezone": payload.get("timezone"),
+        "visual_spec": payload.get("visual_spec", {}),
+        "strategy_payload_source": strategy_payload_source,
+        "selection": payload.get("selection", {}),
+        "window": payload.get("window", {}),
+        "snapshots": payload.get("snapshots", []),
+        "warnings": merged_warnings,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+    }
 
 
 def _serialize_backtest_result(

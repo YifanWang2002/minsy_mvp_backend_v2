@@ -9,8 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.middleware.auth import get_current_user
 from apps.api.dependencies import get_db
+from apps.api.middleware.auth import get_current_user
+from apps.api.schemas.requests import BacktestTradeSnapshotRequest
 from packages.domain.backtest.analytics import (
     build_backtest_overview,
     compute_entry_hour_pnl_heatmap,
@@ -23,8 +24,16 @@ from packages.domain.backtest.analytics import (
     compute_rolling_metrics,
     compute_underwater_curve,
 )
+from packages.domain.backtest.service import (
+    BacktestJobNotFoundError,
+    BacktestJobNotReadyError,
+    BacktestTradeSnapshotInputError,
+    BacktestTradesTruncatedForAllModeError,
+    build_backtest_trade_snapshots,
+    create_backtest_job,
+    execute_backtest_job,
+)
 from packages.domain.billing.quota_service import QuotaExceededError
-from packages.domain.backtest.service import create_backtest_job, execute_backtest_job
 from packages.infra.db.models.backtest import BacktestJob
 from packages.infra.db.models.strategy import Strategy
 from packages.infra.db.models.user import User
@@ -119,6 +128,64 @@ async def get_backtest_analysis(
         "data": data,
         "completed_at": job.completed_at.isoformat() if job.completed_at else None,
     }
+
+
+@router.post("/jobs/{job_id}/trade-snapshots")
+async def get_backtest_trade_snapshots(
+    job_id: UUID,
+    payload: BacktestTradeSnapshotRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    try:
+        return await build_backtest_trade_snapshots(
+            db,
+            job_id=job_id,
+            user_id=user.id,
+            selection_mode=payload.selection_mode,
+            selection_count=payload.selection_count,
+            trade_index=payload.trade_index,
+            lookback_bars=payload.lookback_bars,
+            lookforward_bars=payload.lookforward_bars,
+            render_images=payload.render_images,
+            save_images_to_temp=payload.save_images_to_temp,
+            random_seed=payload.random_seed,
+        )
+    except BacktestJobNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "BACKTEST_JOB_NOT_FOUND",
+                "message": str(exc),
+            },
+        ) from exc
+    except BacktestJobNotReadyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "BACKTEST_JOB_NOT_READY",
+                "message": "Backtest job is not completed yet.",
+                "status": exc.status,
+            },
+        ) from exc
+    except BacktestTradesTruncatedForAllModeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "BACKTEST_TRADES_TRUNCATED_FOR_ALL_MODE",
+                "message": str(exc),
+                "trades_total": exc.trades_total,
+                "trades_kept": exc.trades_kept,
+            },
+        ) from exc
+    except BacktestTradeSnapshotInputError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "BACKTEST_TRADE_SNAPSHOT_INVALID_INPUT",
+                "message": str(exc),
+            },
+        ) from exc
 
 
 @router.post("/jobs/demo/ensure")
