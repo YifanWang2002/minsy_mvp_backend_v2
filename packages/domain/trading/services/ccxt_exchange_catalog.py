@@ -84,6 +84,15 @@ _STATIC_EXCHANGES: tuple[CcxtExchangeStaticConfig, ...] = (
         supports_demo=True,
     ),
     CcxtExchangeStaticConfig(
+        exchange_id="krakenfutures",
+        name="Kraken Futures",
+        description="Kraken Futures with full demo/testnet sandbox support.",
+        website_url="https://futures.kraken.com",
+        website_title="Kraken Futures: Crypto Derivatives Trading",
+        paper_trading_status="supported",
+        supports_demo=True,
+    ),
+    CcxtExchangeStaticConfig(
         exchange_id="gemini",
         name="Gemini",
         description="US-focused exchange with sandbox environment.",
