@@ -220,6 +220,18 @@ class CcxtTradingAdapter(BrokerAdapter):
         direct = self._symbol_cache.get(candidate.upper())
         if direct:
             return direct
+
+        # Futures exchanges use settle-coin suffixes (e.g. BTC/USD:USD).
+        # Try common derivatives formats when the normalized spot symbol misses.
+        base_quote = candidate.upper()
+        if ":" not in base_quote and "/" in base_quote:
+            quote = base_quote.split("/", 1)[1]
+            for settle in (quote, quote.replace("USDT", "USD")):
+                futures_candidate = f"{base_quote.split('/')[0]}/USD:{settle}"
+                hit = self._symbol_cache.get(futures_candidate.upper())
+                if hit:
+                    return hit
+
         return candidate
 
     async def fetch_account_state(self) -> AccountState:
