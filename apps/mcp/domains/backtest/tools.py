@@ -425,6 +425,7 @@ def register_backtest_tools(mcp: FastMCP) -> None:
         render_images: bool = False,
         save_images_to_temp: bool = False,
         random_seed: int | None = None,
+        include_decision_trace: bool = False,
         ctx: Context | None = None,
     ) -> str:
         try:
@@ -467,6 +468,7 @@ def register_backtest_tools(mcp: FastMCP) -> None:
                     render_images=render_images,
                     save_images_to_temp=save_images_to_temp,
                     random_seed=random_seed,
+                    include_decision_trace=include_decision_trace,
                 )
         except BacktestJobNotFoundError as exc:
             return _payload(

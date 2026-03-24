@@ -15,6 +15,10 @@ from packages.domain.backtest.condition import (
     evaluate_condition_series,
 )
 from packages.domain.backtest.factors import prepare_backtest_frame
+from packages.domain.backtest.exit_rules import (
+    distance_from_stop_spec as _distance_from_stop_spec_shared,
+    resolve_position_stops as _resolve_position_stops_shared,
+)
 from packages.domain.backtest.types import (
     BacktestConfig,
     BacktestEvent,
@@ -265,18 +269,16 @@ class EventDrivenBacktestEngine:
         stop_price = self._position.stop_price
         if stop_price is not None:
             stop_hit = (
-                (self._position.side == PositionSide.LONG and low <= stop_price)
-                or (self._position.side == PositionSide.SHORT and high >= stop_price)
-            )
+                self._position.side == PositionSide.LONG and low <= stop_price
+            ) or (self._position.side == PositionSide.SHORT and high >= stop_price)
             if stop_hit:
                 return ("stop_loss", stop_price)
 
         take_price = self._position.take_price
         if take_price is not None:
             take_hit = (
-                (self._position.side == PositionSide.LONG and high >= take_price)
-                or (self._position.side == PositionSide.SHORT and low <= take_price)
-            )
+                self._position.side == PositionSide.LONG and high >= take_price
+            ) or (self._position.side == PositionSide.SHORT and low <= take_price)
             if take_hit:
                 return ("take_profit", take_price)
 
@@ -313,7 +315,11 @@ class EventDrivenBacktestEngine:
         else:
             gross = (position.entry_price - adjusted_exit_price) * quantity
 
-        commission = (position.entry_price + adjusted_exit_price) * quantity * self.config.commission_rate
+        commission = (
+            (position.entry_price + adjusted_exit_price)
+            * quantity
+            * self.config.commission_rate
+        )
         pnl = gross - commission
         notional = position.entry_price * quantity
         pnl_pct = (pnl / notional * 100.0) if notional > 0 else 0.0
@@ -362,7 +368,9 @@ class EventDrivenBacktestEngine:
             return
         self._equity_curve.append(point)
 
-    def _resolve_quantity(self, *, side_payload: dict[str, Any], entry_price: float) -> float:
+    def _resolve_quantity(
+        self, *, side_payload: dict[str, Any], entry_price: float
+    ) -> float:
         sizing = side_payload.get("position_sizing", {"mode": "fixed_qty", "qty": 1.0})
         if not isinstance(sizing, dict):
             sizing = {"mode": "fixed_qty", "qty": 1.0}
@@ -411,9 +419,13 @@ class EventDrivenBacktestEngine:
 
         close_price = float(self.frame.iloc[bar_index]["close"])
         if self._position.side == PositionSide.LONG:
-            unrealized = (close_price - self._position.entry_price) * self._position.quantity
+            unrealized = (
+                close_price - self._position.entry_price
+            ) * self._position.quantity
         else:
-            unrealized = (self._position.entry_price - close_price) * self._position.quantity
+            unrealized = (
+                self._position.entry_price - close_price
+            ) * self._position.quantity
         return equity + unrealized
 
     def _resolve_position_stops(
@@ -424,69 +436,13 @@ class EventDrivenBacktestEngine:
         entry_price: float,
         bar_index: int,
     ) -> tuple[float | None, float | None]:
-        exits = side_payload.get("exits", [])
-        if not isinstance(exits, list):
-            return (None, None)
-
-        stop_distance: float | None = None
-        take_distance: float | None = None
-
-        for exit_rule in exits:
-            if not isinstance(exit_rule, dict):
-                continue
-            rule_type = str(exit_rule.get("type", "")).strip().lower()
-            if rule_type == "stop_loss" and stop_distance is None:
-                stop_distance = self._distance_from_stop_spec(
-                    exit_rule.get("stop"),
-                    entry_price=entry_price,
-                    bar_index=bar_index,
-                )
-            elif rule_type == "take_profit" and take_distance is None:
-                take_distance = self._distance_from_stop_spec(
-                    exit_rule.get("take"),
-                    entry_price=entry_price,
-                    bar_index=bar_index,
-                )
-            elif rule_type == "bracket_rr":
-                rr_raw = exit_rule.get("risk_reward")
-                rr = float(rr_raw) if isinstance(rr_raw, int | float) else 0.0
-                bracket_stop = self._distance_from_stop_spec(
-                    exit_rule.get("stop"),
-                    entry_price=entry_price,
-                    bar_index=bar_index,
-                )
-                bracket_take = self._distance_from_stop_spec(
-                    exit_rule.get("take"),
-                    entry_price=entry_price,
-                    bar_index=bar_index,
-                )
-
-                if stop_distance is None and bracket_stop is not None:
-                    stop_distance = bracket_stop
-                if take_distance is None and bracket_take is not None:
-                    take_distance = bracket_take
-
-                if rr > 0:
-                    if stop_distance is not None and take_distance is None:
-                        take_distance = stop_distance * rr
-                    if take_distance is not None and stop_distance is None:
-                        stop_distance = take_distance / rr
-
-        stop_price = None
-        take_price = None
-        if stop_distance is not None:
-            stop_price = (
-                entry_price - stop_distance
-                if side == PositionSide.LONG
-                else entry_price + stop_distance
-            )
-        if take_distance is not None:
-            take_price = (
-                entry_price + take_distance
-                if side == PositionSide.LONG
-                else entry_price - take_distance
-            )
-        return (stop_price, take_price)
+        return _resolve_position_stops_shared(
+            side_payload=side_payload,
+            side=side,
+            frame=self.frame,
+            entry_price=entry_price,
+            bar_index=bar_index,
+        )
 
     def _distance_from_stop_spec(
         self,
@@ -495,34 +451,12 @@ class EventDrivenBacktestEngine:
         entry_price: float,
         bar_index: int,
     ) -> float | None:
-        if not isinstance(stop_spec, dict):
-            return None
-
-        kind = str(stop_spec.get("kind", "")).strip().lower()
-        if kind == "points":
-            raw = stop_spec.get("value")
-            if isinstance(raw, int | float) and raw > 0:
-                return float(raw)
-            return None
-        if kind == "pct":
-            raw = stop_spec.get("value")
-            if isinstance(raw, int | float) and raw > 0:
-                return float(entry_price) * float(raw)
-            return None
-        if kind == "atr_multiple":
-            atr_ref = stop_spec.get("atr_ref")
-            multiple = stop_spec.get("multiple")
-            if not isinstance(atr_ref, str):
-                return None
-            if not isinstance(multiple, int | float) or multiple <= 0:
-                return None
-            if atr_ref not in self.frame.columns:
-                return None
-            atr_value = self.frame.iloc[bar_index][atr_ref]
-            if not isinstance(atr_value, int | float):
-                return None
-            return float(atr_value) * float(multiple)
-        return None
+        return _distance_from_stop_spec_shared(
+            stop_spec,
+            frame=self.frame,
+            entry_price=entry_price,
+            bar_index=bar_index,
+        )
 
     def _build_summary(self) -> BacktestSummary:
         total = len(self._trades)
@@ -530,7 +464,9 @@ class EventDrivenBacktestEngine:
         losers = sum(1 for trade in self._trades if trade.pnl < 0)
         win_rate = (winners / total * 100.0) if total else 0.0
 
-        final_equity = self._equity_curve[-1].equity if self._equity_curve else self._cash
+        final_equity = (
+            self._equity_curve[-1].equity if self._equity_curve else self._cash
+        )
         total_pnl = final_equity - self.config.initial_capital
         total_return_pct = (
             total_pnl / self.config.initial_capital * 100.0
@@ -606,7 +542,9 @@ class EventDrivenBacktestEngine:
                 condition = entry.get("condition")
                 if isinstance(condition, dict):
                     entry_eval = compile_condition(condition)
-                    entry_signal = evaluate_condition_series(condition, frame=self.frame)
+                    entry_signal = evaluate_condition_series(
+                        condition, frame=self.frame
+                    )
 
             signal_exits: list[
                 tuple[str, ConditionEvaluator, np.ndarray[Any, np.dtype[np.bool_]]]
@@ -621,7 +559,10 @@ class EventDrivenBacktestEngine:
                     condition = exit_rule.get("condition")
                     if not isinstance(condition, dict):
                         continue
-                    reason = str(exit_rule.get("name", "signal_exit")).strip() or "signal_exit"
+                    reason = (
+                        str(exit_rule.get("name", "signal_exit")).strip()
+                        or "signal_exit"
+                    )
                     condition_eval = compile_condition(condition)
                     signal = evaluate_condition_series(condition, frame=self.frame)
                     signal_exits.append((reason, condition_eval, signal))

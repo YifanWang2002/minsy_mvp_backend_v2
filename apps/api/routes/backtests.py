@@ -150,6 +150,7 @@ async def get_backtest_trade_snapshots(
             render_images=payload.render_images,
             save_images_to_temp=payload.save_images_to_temp,
             random_seed=payload.random_seed,
+            include_decision_trace=payload.include_decision_trace,
         )
     except BacktestJobNotFoundError as exc:
         raise HTTPException(
@@ -244,7 +245,9 @@ async def ensure_demo_backtest_job(
             last_error = _summarize_backtest_error(view.error)
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, QuotaExceededError):
-                raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+                raise HTTPException(
+                    status_code=exc.status_code, detail=exc.detail
+                ) from exc
             await db.rollback()
             last_error = f"{type(exc).__name__}: {exc}"
 

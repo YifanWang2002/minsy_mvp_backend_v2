@@ -1793,6 +1793,59 @@ class Settings(BaseSettings):
         return merged
 
     @property
+    def billing_user_quota_overrides(self) -> dict[str, dict[str, Any]]:
+        raw = (
+            self.billing_pricing_json.get("user_quota_overrides")
+            if isinstance(self.billing_pricing_json, dict)
+            else None
+        )
+        if not isinstance(raw, dict):
+            return {}
+
+        allowed_metrics = {
+            "ai_tokens_monthly_total",
+            "cpu_tokens_monthly_total",
+            "strategies_current_count",
+            "deployments_running_count",
+        }
+        normalized: dict[str, dict[str, Any]] = {}
+        for raw_user_id, raw_config in raw.items():
+            if not isinstance(raw_user_id, str) or not isinstance(raw_config, dict):
+                continue
+            user_id = raw_user_id.strip()
+            if not user_id:
+                continue
+
+            try:
+                percent_bonus = int(raw_config.get("percent_bonus", 0))
+            except (TypeError, ValueError):
+                continue
+            if percent_bonus <= 0:
+                continue
+
+            metrics_raw = raw_config.get("metrics")
+            metrics: list[str] = []
+            if isinstance(metrics_raw, (list, tuple, set)):
+                for item in metrics_raw:
+                    if not isinstance(item, str):
+                        continue
+                    metric = item.strip()
+                    if not metric or metric not in allowed_metrics or metric in metrics:
+                        continue
+                    metrics.append(metric)
+            if not metrics:
+                metrics = [
+                    "ai_tokens_monthly_total",
+                    "cpu_tokens_monthly_total",
+                ]
+
+            normalized[user_id] = {
+                "percent_bonus": percent_bonus,
+                "metrics": tuple(metrics),
+            }
+        return normalized
+
+    @property
     def billing_cost_model(self) -> dict[str, float]:
         defaults: dict[str, float] = {
             "token_cost_per_1k_usd": 0.01,

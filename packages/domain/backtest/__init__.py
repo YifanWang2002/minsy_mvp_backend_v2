@@ -1,5 +1,7 @@
 """Event-driven backtest engine."""
 
+from packages.domain.backtest.condition import evaluate_condition_trace_at
+from packages.domain.backtest.decision_trace import build_trade_decision_trace
 from packages.domain.backtest.engine import EventDrivenBacktestEngine
 from packages.domain.backtest.types import (
     BacktestConfig,
@@ -39,7 +41,9 @@ def __getattr__(name: str):
         return getattr(_service, name)
     raise AttributeError(name)
 
+
 __all__ = [
+    "build_trade_decision_trace",
     "BacktestConfig",
     "BacktestEvent",
     "BacktestEventType",
@@ -57,6 +61,7 @@ __all__ = [
     "EquityPoint",
     "EventDrivenBacktestEngine",
     "PositionSide",
+    "evaluate_condition_trace_at",
     "build_backtest_trade_snapshots",
     "create_backtest_job",
     "execute_backtest_job",

@@ -128,5 +128,7 @@ def test_incremental_sync_result_to_dict_contract() -> None:
     payload = result.to_dict()
     assert payload["status"] == "ok"
     assert payload["symbols_seen"] == 10
+    assert payload["local_rows_written"] == 0
+    assert payload["local_files_touched"] == 0
     assert payload["import_job_id"] is not None
     assert payload["run_id"] == "20260315T043000Z-abcd1234"

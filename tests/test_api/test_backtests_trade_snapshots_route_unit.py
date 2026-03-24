@@ -57,6 +57,7 @@ async def test_trade_snapshot_route_success(monkeypatch) -> None:
         lookforward_bars=15,
         render_images=True,
         save_images_to_temp=True,
+        include_decision_trace=True,
     )
     captured: dict[str, object] = {}
 
@@ -93,6 +94,7 @@ async def test_trade_snapshot_route_success(monkeypatch) -> None:
     assert result["status"] == "done"
     assert result["selection"]["mode"] == "latest"
     assert captured["save_images_to_temp"] is True
+    assert captured["include_decision_trace"] is True
 
 
 @pytest.mark.asyncio

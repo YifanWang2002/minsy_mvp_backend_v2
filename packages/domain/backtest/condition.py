@@ -45,7 +45,9 @@ def compile_condition(condition: dict[str, Any]) -> ConditionEvaluator:
         if not isinstance(child, dict):
             return lambda frame, bar_index: False
         child_eval = compile_condition(child)
-        return lambda frame, bar_index, child_eval=child_eval: not child_eval(frame, bar_index)
+        return lambda frame, bar_index, child_eval=child_eval: (
+            not child_eval(frame, bar_index)
+        )
 
     if "cmp" in condition and isinstance(condition["cmp"], dict):
         return _compile_cmp(condition["cmp"])
@@ -113,13 +115,40 @@ def evaluate_condition_at(
         return _evaluate_cross(condition["cross"], frame=frame, bar_index=bar_index)
 
     if "ref" in condition:
-        value = _resolve_ref_value(str(condition["ref"]), frame=frame, bar_index=bar_index)
+        value = _resolve_ref_value(
+            str(condition["ref"]), frame=frame, bar_index=bar_index
+        )
         return _is_truthy(value)
 
     if "temporal" in condition:
-        raise ValueError("Temporal conditions are reserved and not supported in v1 runtime.")
+        raise ValueError(
+            "Temporal conditions are reserved and not supported in v1 runtime."
+        )
 
     return False
+
+
+def evaluate_condition_trace_at(
+    condition: dict[str, Any],
+    *,
+    frame: pd.DataFrame,
+    bar_index: int,
+) -> dict[str, Any]:
+    """Evaluate one condition tree and return a structured trace payload."""
+
+    tree = _evaluate_condition_trace_node(
+        condition=condition,
+        frame=frame,
+        bar_index=bar_index,
+        path="$",
+    )
+    unmet_nodes: list[dict[str, Any]] = []
+    _collect_unmet_nodes(tree, unmet_nodes)
+    return {
+        "hit": bool(tree.get("hit")),
+        "tree": tree,
+        "unmet_nodes": unmet_nodes,
+    }
 
 
 def evaluate_condition_series(
@@ -168,16 +197,326 @@ def evaluate_condition_series(
         return _truthy_mask(_resolve_ref_series(ref, frame=frame))
 
     if "temporal" in condition:
-        raise ValueError("Temporal conditions are reserved and not supported in v1 runtime.")
+        raise ValueError(
+            "Temporal conditions are reserved and not supported in v1 runtime."
+        )
 
     return np.zeros(size, dtype=bool)
 
 
 def _compile_temporal_placeholder() -> ConditionEvaluator:
     def _raise_temporal(_: pd.DataFrame, __: int) -> bool:
-        raise ValueError("Temporal conditions are reserved and not supported in v1 runtime.")
+        raise ValueError(
+            "Temporal conditions are reserved and not supported in v1 runtime."
+        )
 
     return _raise_temporal
+
+
+def _evaluate_condition_trace_node(
+    *,
+    condition: dict[str, Any],
+    frame: pd.DataFrame,
+    bar_index: int,
+    path: str,
+) -> dict[str, Any]:
+    if "all" in condition:
+        nodes = condition.get("all", [])
+        children = []
+        for index, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                continue
+            children.append(
+                _evaluate_condition_trace_node(
+                    condition=node,
+                    frame=frame,
+                    bar_index=bar_index,
+                    path=f"{path}.all[{index}]",
+                )
+            )
+        hit = all(bool(child.get("hit")) for child in children)
+        return {
+            "node_type": "all",
+            "path": path,
+            "hit": hit,
+            "reason_code": "all_children_hit" if hit else "all_child_failed",
+            "children": children,
+        }
+
+    if "any" in condition:
+        nodes = condition.get("any", [])
+        children = []
+        for index, node in enumerate(nodes):
+            if not isinstance(node, dict):
+                continue
+            children.append(
+                _evaluate_condition_trace_node(
+                    condition=node,
+                    frame=frame,
+                    bar_index=bar_index,
+                    path=f"{path}.any[{index}]",
+                )
+            )
+        hit = any(bool(child.get("hit")) for child in children)
+        return {
+            "node_type": "any",
+            "path": path,
+            "hit": hit,
+            "reason_code": "any_child_hit" if hit else "any_no_match",
+            "children": children,
+        }
+
+    if "not" in condition:
+        child = condition.get("not")
+        if not isinstance(child, dict):
+            return {
+                "node_type": "not",
+                "path": path,
+                "hit": False,
+                "reason_code": "invalid_not_child",
+            }
+        child_trace = _evaluate_condition_trace_node(
+            condition=child,
+            frame=frame,
+            bar_index=bar_index,
+            path=f"{path}.not",
+        )
+        hit = not bool(child_trace.get("hit"))
+        return {
+            "node_type": "not",
+            "path": path,
+            "hit": hit,
+            "reason_code": "negated_child_false" if hit else "negated_child_true",
+            "child": child_trace,
+        }
+
+    if "cmp" in condition and isinstance(condition["cmp"], dict):
+        return _evaluate_cmp_trace(
+            cmp_node=condition["cmp"],
+            frame=frame,
+            bar_index=bar_index,
+            path=path,
+        )
+
+    if "cross" in condition and isinstance(condition["cross"], dict):
+        return _evaluate_cross_trace(
+            cross_node=condition["cross"],
+            frame=frame,
+            bar_index=bar_index,
+            path=path,
+        )
+
+    if "ref" in condition:
+        ref = condition.get("ref")
+        if not isinstance(ref, str):
+            return {
+                "node_type": "ref",
+                "path": path,
+                "hit": False,
+                "reason_code": "invalid_ref",
+            }
+        value = _resolve_ref_value(ref, frame=frame, bar_index=bar_index)
+        hit = _is_truthy(value)
+        return {
+            "node_type": "ref",
+            "path": path,
+            "hit": hit,
+            "reason_code": "ref_truthy" if hit else "ref_falsy",
+            "ref": ref,
+            "actual_values": {"value": _coerce_trace_value(value)},
+        }
+
+    if "temporal" in condition:
+        return {
+            "node_type": "temporal",
+            "path": path,
+            "hit": False,
+            "reason_code": "temporal_not_supported",
+        }
+
+    return {
+        "node_type": "unknown",
+        "path": path,
+        "hit": False,
+        "reason_code": "unknown_condition_node",
+    }
+
+
+def _evaluate_cmp_trace(
+    *,
+    cmp_node: dict[str, Any],
+    frame: pd.DataFrame,
+    bar_index: int,
+    path: str,
+) -> dict[str, Any]:
+    left = _resolve_operand(cmp_node.get("left"), frame=frame, bar_index=bar_index)
+    right = _resolve_operand(cmp_node.get("right"), frame=frame, bar_index=bar_index)
+    op = str(cmp_node.get("op", "")).lower()
+
+    if _is_nan(left) or _is_nan(right):
+        return {
+            "node_type": "cmp",
+            "path": path,
+            "hit": False,
+            "reason_code": "operand_nan",
+            "op": op,
+            "actual_values": {
+                "left": _coerce_trace_value(left),
+                "right": _coerce_trace_value(right),
+            },
+        }
+
+    if op == "gt":
+        hit = bool(left > right)
+    elif op == "gte":
+        hit = bool(left >= right)
+    elif op == "lt":
+        hit = bool(left < right)
+    elif op == "lte":
+        hit = bool(left <= right)
+    elif op == "eq":
+        hit = bool(left == right)
+    elif op == "neq":
+        hit = bool(left != right)
+    else:
+        return {
+            "node_type": "cmp",
+            "path": path,
+            "hit": False,
+            "reason_code": "unsupported_cmp_op",
+            "op": op,
+            "actual_values": {
+                "left": _coerce_trace_value(left),
+                "right": _coerce_trace_value(right),
+            },
+        }
+
+    return {
+        "node_type": "cmp",
+        "path": path,
+        "hit": hit,
+        "reason_code": "cmp_true" if hit else "cmp_false",
+        "op": op,
+        "actual_values": {
+            "left": _coerce_trace_value(left),
+            "right": _coerce_trace_value(right),
+        },
+    }
+
+
+def _evaluate_cross_trace(
+    *,
+    cross_node: dict[str, Any],
+    frame: pd.DataFrame,
+    bar_index: int,
+    path: str,
+) -> dict[str, Any]:
+    op = str(cross_node.get("op", "")).lower()
+    if bar_index <= 0:
+        return {
+            "node_type": "cross",
+            "path": path,
+            "hit": False,
+            "reason_code": "insufficient_history",
+            "op": op,
+        }
+
+    curr_a = _resolve_operand(cross_node.get("a"), frame=frame, bar_index=bar_index)
+    curr_b = _resolve_operand(cross_node.get("b"), frame=frame, bar_index=bar_index)
+    prev_a = _resolve_operand(cross_node.get("a"), frame=frame, bar_index=bar_index - 1)
+    prev_b = _resolve_operand(cross_node.get("b"), frame=frame, bar_index=bar_index - 1)
+
+    if any(_is_nan(value) for value in (curr_a, curr_b, prev_a, prev_b)):
+        return {
+            "node_type": "cross",
+            "path": path,
+            "hit": False,
+            "reason_code": "operand_nan",
+            "op": op,
+            "actual_values": {
+                "a_prev": _coerce_trace_value(prev_a),
+                "a_curr": _coerce_trace_value(curr_a),
+                "b_prev": _coerce_trace_value(prev_b),
+                "b_curr": _coerce_trace_value(curr_b),
+            },
+        }
+
+    if op in {"cross_above", "up"}:
+        hit = bool(prev_a <= prev_b and curr_a > curr_b)
+    elif op in {"cross_below", "down"}:
+        hit = bool(prev_a >= prev_b and curr_a < curr_b)
+    else:
+        return {
+            "node_type": "cross",
+            "path": path,
+            "hit": False,
+            "reason_code": "unsupported_cross_op",
+            "op": op,
+            "actual_values": {
+                "a_prev": _coerce_trace_value(prev_a),
+                "a_curr": _coerce_trace_value(curr_a),
+                "b_prev": _coerce_trace_value(prev_b),
+                "b_curr": _coerce_trace_value(curr_b),
+            },
+        }
+
+    return {
+        "node_type": "cross",
+        "path": path,
+        "hit": hit,
+        "reason_code": "cross_true" if hit else "cross_false",
+        "op": op,
+        "actual_values": {
+            "a_prev": _coerce_trace_value(prev_a),
+            "a_curr": _coerce_trace_value(curr_a),
+            "b_prev": _coerce_trace_value(prev_b),
+            "b_curr": _coerce_trace_value(curr_b),
+        },
+    }
+
+
+def _collect_unmet_nodes(node: dict[str, Any], output: list[dict[str, Any]]) -> None:
+    if not isinstance(node, dict):
+        return
+    node_type = str(node.get("node_type", "")).strip().lower()
+    if node.get("hit") is False and node_type in {
+        "cmp",
+        "cross",
+        "ref",
+        "temporal",
+        "unknown",
+    }:
+        output.append(
+            {
+                "path": str(node.get("path", "")).strip(),
+                "node_type": node_type,
+                "reason_code": str(node.get("reason_code", "")).strip(),
+                "actual_values": node.get("actual_values")
+                if isinstance(node.get("actual_values"), dict)
+                else {},
+            }
+        )
+    children = node.get("children")
+    if isinstance(children, list):
+        for child in children:
+            if isinstance(child, dict):
+                _collect_unmet_nodes(child, output)
+    child = node.get("child")
+    if isinstance(child, dict):
+        _collect_unmet_nodes(child, output)
+
+
+def _coerce_trace_value(value: Any) -> float | bool | str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Real):
+        if _is_nan(float(value)):
+            return None
+        return float(value)
+    text = str(value).strip()
+    return text or None
 
 
 def _compile_cmp(cmp_node: dict[str, Any]) -> ConditionEvaluator:
@@ -484,11 +823,15 @@ def _apply_offset(
     return shifted
 
 
-def _truthy_mask(values: np.ndarray[Any, np.dtype[np.float64]]) -> np.ndarray[Any, np.dtype[np.bool_]]:
+def _truthy_mask(
+    values: np.ndarray[Any, np.dtype[np.float64]],
+) -> np.ndarray[Any, np.dtype[np.bool_]]:
     return (~np.isnan(values)) & (values != 0.0)
 
 
-def _as_numeric_series(raw_array: Any, *, size: int) -> np.ndarray[Any, np.dtype[np.float64]]:
+def _as_numeric_series(
+    raw_array: Any, *, size: int
+) -> np.ndarray[Any, np.dtype[np.float64]]:
     array = np.asarray(raw_array)
     if array.ndim != 1:
         array = array.reshape(-1)

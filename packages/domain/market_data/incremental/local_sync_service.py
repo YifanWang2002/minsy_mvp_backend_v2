@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 import pandas as pd
 
+from packages.domain.market_data.data import DataLoader
+from packages.domain.market_data.data.parquet_writer import append_ohlcv_rows
 from packages.domain.market_data.incremental.hmac_auth import (
     build_signature_payload,
     sign_payload,
@@ -31,6 +33,11 @@ from packages.infra.providers.trading.adapters.base import OhlcvBar
 from packages.infra.storage.gcs_client import GcsClient
 from packages.shared_settings.schema.settings import settings
 
+_FETCH_RETRY_COUNT = 2
+_FAILURE_ROOT_DIR = Path("runtime/incremental/failures")
+_ACTIVE_FAILURES_PATH = _FAILURE_ROOT_DIR / "active_failures.json"
+_FAILURE_EVENTS_PATH = _FAILURE_ROOT_DIR / "failure_events.jsonl"
+
 
 @dataclass(frozen=True, slots=True)
 class LocalIncrementalSyncResult:
@@ -42,6 +49,8 @@ class LocalIncrementalSyncResult:
     rows_uploaded: int
     skipped_closed: int
     skipped_uptodate: int
+    local_rows_written: int = 0
+    local_files_touched: int = 0
     import_job_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -54,8 +63,195 @@ class LocalIncrementalSyncResult:
             "rows_uploaded": self.rows_uploaded,
             "skipped_closed": self.skipped_closed,
             "skipped_uptodate": self.skipped_uptodate,
+            "local_rows_written": self.local_rows_written,
+            "local_files_touched": self.local_files_touched,
             "import_job_id": self.import_job_id,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class LocalIncrementalReplayResult:
+    files_seen: int
+    files_applied: int
+    rows_written: int
+    local_files_touched: int
+    symbols_touched: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "files_seen": self.files_seen,
+            "files_applied": self.files_applied,
+            "rows_written": self.rows_written,
+            "local_files_touched": self.local_files_touched,
+            "symbols_touched": self.symbols_touched,
+        }
+
+
+def _ensure_failure_store_dir() -> None:
+    _FAILURE_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_active_failures(
+    *,
+    state_path: Path = _ACTIVE_FAILURES_PATH,
+) -> dict[str, dict[str, Any]]:
+    _ensure_failure_store_dir()
+    if not state_path.exists():
+        return {}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[market-data-incremental] failed to read active failures file path=%s",
+            state_path,
+        )
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    normalized: dict[str, dict[str, Any]] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        normalized[key] = value
+    return normalized
+
+
+def _save_active_failures(
+    active_failures: dict[str, dict[str, Any]],
+    *,
+    state_path: Path = _ACTIVE_FAILURES_PATH,
+) -> None:
+    _ensure_failure_store_dir()
+    try:
+        state_path.write_text(
+            json.dumps(
+                active_failures,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[market-data-incremental] failed to write active failures file path=%s",
+            state_path,
+        )
+
+
+def _append_failure_event(
+    event: dict[str, Any],
+    *,
+    events_path: Path = _FAILURE_EVENTS_PATH,
+) -> None:
+    _ensure_failure_store_dir()
+    line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+    try:
+        with events_path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
+            handle.write("\n")
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "[market-data-incremental] failed to append failure event path=%s",
+            events_path,
+        )
+
+
+def _failure_key(*, market: str, symbol: str, session: str) -> str:
+    return f"{market.lower()}|{symbol.upper()}|{session.lower()}"
+
+
+def _serialize_exception(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _apply_failed_backfill_start(
+    *,
+    active_failures: dict[str, dict[str, Any]],
+    failure_key: str,
+    start: datetime,
+    lower_bound: datetime | None,
+) -> datetime:
+    item = active_failures.get(failure_key)
+    candidate = start
+    if isinstance(item, dict):
+        failed_start = _parse_iso_datetime(item.get("start"))
+        if failed_start is not None and failed_start < candidate:
+            candidate = failed_start
+    if lower_bound is not None and candidate < lower_bound:
+        candidate = lower_bound
+    return candidate
+
+
+def _record_symbol_failure(
+    *,
+    active_failures: dict[str, dict[str, Any]],
+    failure_key: str,
+    market: str,
+    symbol: str,
+    session: str,
+    provider: str,
+    start: datetime,
+    end: datetime,
+    exc: Exception,
+    retries: int = _FETCH_RETRY_COUNT,
+) -> None:
+    now = datetime.now(UTC)
+    error_text = _serialize_exception(exc)
+    active_failures[failure_key] = {
+        "market": market,
+        "symbol": symbol,
+        "session": session,
+        "provider": provider,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "failed_at": now.isoformat(),
+        "error": error_text,
+        "retries": int(retries),
+    }
+    _save_active_failures(active_failures)
+    _append_failure_event(
+        {
+            "event": "fetch_failed",
+            "occurred_at": now.isoformat(),
+            "failure_key": failure_key,
+            "market": market,
+            "symbol": symbol,
+            "session": session,
+            "provider": provider,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "error": error_text,
+            "retries": int(retries),
+        }
+    )
+
+
+def _clear_symbol_failure(
+    *,
+    active_failures: dict[str, dict[str, Any]],
+    failure_key: str,
+    market: str,
+    symbol: str,
+    session: str,
+) -> None:
+    previous = active_failures.pop(failure_key, None)
+    if previous is None:
+        return
+    _save_active_failures(active_failures)
+    _append_failure_event(
+        {
+            "event": "fetch_recovered",
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "failure_key": failure_key,
+            "market": market,
+            "symbol": symbol,
+            "session": session,
+            "previous_failed_at": previous.get("failed_at"),
+            "previous_start": previous.get("start"),
+            "previous_end": previous.get("end"),
+        }
+    )
 
 
 class _RemoteIncrementalApiClient:
@@ -337,6 +533,52 @@ async def _fetch_ibkr_1m(
         await provider.aclose()
 
 
+async def _fetch_1m_with_retries(
+    *,
+    provider: str,
+    symbol: str,
+    market: str,
+    start: datetime,
+    end: datetime,
+    retries: int = _FETCH_RETRY_COUNT,
+) -> list[OhlcvBar]:
+    attempts_total = max(0, int(retries)) + 1
+    for attempt in range(1, attempts_total + 1):
+        try:
+            if provider == "alpaca":
+                fetch_coro = _fetch_alpaca_1m(
+                    symbol=symbol,
+                    market=market,
+                    start=start,
+                    end=end,
+                )
+                return await asyncio.wait_for(fetch_coro, timeout=180.0)
+            fetch_coro = _fetch_ibkr_1m(
+                symbol=symbol,
+                market=market,
+                start=start,
+                end=end,
+            )
+            return await asyncio.wait_for(fetch_coro, timeout=600.0)
+        except Exception as exc:
+            if attempt >= attempts_total:
+                raise
+            backoff_seconds = float(attempt)
+            logger.warning(
+                "[market-data-incremental] fetch retry market=%s symbol=%s provider=%s "
+                "attempt=%s/%s retry_in=%.1fs error=%s",
+                market,
+                symbol,
+                provider,
+                attempt,
+                attempts_total,
+                backoff_seconds,
+                _serialize_exception(exc),
+            )
+            await asyncio.sleep(backoff_seconds)
+    raise RuntimeError("unreachable")
+
+
 def _coverage_end_for_symbol(item: dict[str, Any]) -> datetime | None:
     tf_coverage = item.get("timeframe_coverage")
     if isinstance(tf_coverage, dict):
@@ -349,6 +591,86 @@ def _coverage_end_for_symbol(item: dict[str, Any]) -> datetime | None:
     if isinstance(coverage, dict):
         return _parse_iso_datetime(coverage.get("end"))
     return None
+
+
+def _append_frame_to_local_data(
+    *,
+    loader: DataLoader,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    session: str,
+    frame: pd.DataFrame,
+) -> tuple[int, int]:
+    if frame.empty:
+        return 0, 0
+    result = append_ohlcv_rows(
+        loader=loader,
+        market=market,
+        symbol=symbol,
+        timeframe=timeframe,
+        session=session,
+        rows=frame,
+    )
+    return int(result.rows_written), int(result.files_touched)
+
+
+def replay_staged_incremental_to_local(
+    *,
+    stage_root: str | Path = Path("runtime/incremental"),
+) -> LocalIncrementalReplayResult:
+    """Merge historical staged incremental parquet files into local data/*.parquet."""
+    root = Path(stage_root)
+    if not root.exists():
+        return LocalIncrementalReplayResult(
+            files_seen=0,
+            files_applied=0,
+            rows_written=0,
+            local_files_touched=0,
+            symbols_touched=0,
+        )
+
+    loader = DataLoader()
+    files_seen = 0
+    files_applied = 0
+    rows_written = 0
+    local_files_touched = 0
+    touched_symbols: set[tuple[str, str, str]] = set()
+
+    for parquet_path in sorted(root.rglob("*.parquet")):
+        try:
+            rel = parquet_path.relative_to(root)
+        except Exception:  # noqa: BLE001
+            continue
+        parts = rel.parts
+        if len(parts) != 7:
+            continue
+        _date_folder, _run_id, market, symbol, session, timeframe, _name = parts
+        timeframe_key = str(timeframe).strip().lower()
+        if timeframe_key not in {"1m", "5m"}:
+            continue
+        files_seen += 1
+        frame = pd.read_parquet(parquet_path)
+        write_rows, write_files = _append_frame_to_local_data(
+            loader=loader,
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe_key,
+            session=session,
+            frame=frame,
+        )
+        rows_written += write_rows
+        local_files_touched += write_files
+        files_applied += 1
+        touched_symbols.add((market.lower(), symbol.upper(), session.lower()))
+
+    return LocalIncrementalReplayResult(
+        files_seen=files_seen,
+        files_applied=files_applied,
+        rows_written=rows_written,
+        local_files_touched=local_files_touched,
+        symbols_touched=len(touched_symbols),
+    )
 
 
 async def run_local_incremental_sync(
@@ -396,6 +718,10 @@ async def run_local_incremental_sync(
     rows_uploaded = 0
     skipped_closed = 0
     skipped_uptodate = 0
+    local_rows_written = 0
+    local_files_touched = 0
+    active_failures = _load_active_failures()
+    local_loader = DataLoader()
     prefix_root = settings.market_data_incremental_gcs_prefix.strip().strip("/")
     date_folder = now_utc.strftime("%Y-%m-%d")
     prefix = "/".join(part for part in (prefix_root, date_folder, run_id) if part)
@@ -456,109 +782,157 @@ async def run_local_incremental_sync(
                     # Conservative bootstrap range for unknown coverage.
                     coverage_end = effective_end - timedelta(days=1)
                 start = (coverage_end + timedelta(minutes=1)).replace(second=0, microsecond=0)
-                if forced_start is not None:
-                    start = max(start, forced_start)
+                failure_key = _failure_key(market=market, symbol=symbol, session=session)
+                start = _apply_failed_backfill_start(
+                    active_failures=active_failures,
+                    failure_key=failure_key,
+                    start=start,
+                    lower_bound=forced_start,
+                )
                 if start >= effective_end:
                     skipped_uptodate += 1
                     continue
 
                 try:
-                    if provider == "alpaca":
-                        fetch_coro = _fetch_alpaca_1m(
-                            symbol=symbol,
+                    bars_1m = await _fetch_1m_with_retries(
+                        provider=provider,
+                        symbol=symbol,
+                        market=market,
+                        start=start,
+                        end=effective_end,
+                    )
+                    frame_1m = _bars_to_frame(bars_1m)
+                    if frame_1m.empty:
+                        _clear_symbol_failure(
+                            active_failures=active_failures,
+                            failure_key=failure_key,
                             market=market,
-                            start=start,
-                            end=effective_end,
-                        )
-                        bars_1m = await asyncio.wait_for(fetch_coro, timeout=180.0)
-                    else:
-                        fetch_coro = _fetch_ibkr_1m(
                             symbol=symbol,
-                            market=market,
-                            start=start,
-                            end=effective_end,
+                            session=session,
                         )
-                        bars_1m = await asyncio.wait_for(fetch_coro, timeout=600.0)
-                except Exception:
+                        skipped_uptodate += 1
+                        continue
+
+                    frame_5m = _aggregate_5m(frame_1m)
+                    symbol_dir = stage_dir / market / symbol / session
+                    symbol_dir.mkdir(parents=True, exist_ok=True)
+                    chunked_1m = _split_frame_by_month(frame_1m)
+                    if not chunked_1m:
+                        _clear_symbol_failure(
+                            active_failures=active_failures,
+                            failure_key=failure_key,
+                            market=market,
+                            symbol=symbol,
+                            session=session,
+                        )
+                        skipped_uptodate += 1
+                        continue
+
+                    chunked_5m = _split_frame_by_month(frame_5m) if not frame_5m.empty else []
+
+                    for month_key, frame_1m_chunk in chunked_1m:
+                        added_rows, touched_files = _append_frame_to_local_data(
+                            loader=local_loader,
+                            market=market,
+                            symbol=symbol,
+                            timeframe="1m",
+                            session=session,
+                            frame=frame_1m_chunk,
+                        )
+                        local_rows_written += added_rows
+                        local_files_touched += touched_files
+                        file_1m = symbol_dir / "1m" / f"{month_key}.parquet"
+                        file_1m.parent.mkdir(parents=True, exist_ok=True)
+                        frame_1m_chunk.to_parquet(file_1m, index=False)
+                        object_1m = f"{prefix}/{market}/{symbol}/{session}/1m/{month_key}.parquet"
+                        await asyncio.to_thread(
+                            _upload_file_with_fresh_client,
+                            local_path=file_1m,
+                            bucket_name=bucket,
+                            object_name=object_1m,
+                            content_type="application/octet-stream",
+                        )
+                        files_uploaded += 1
+                        rows_uploaded += int(len(frame_1m_chunk))
+                        manifest_entries.append(
+                            {
+                                "market": market,
+                                "symbol": symbol,
+                                "timeframe": "1m",
+                                "session": session,
+                                "gcs_object": object_1m,
+                                "row_count": int(len(frame_1m_chunk)),
+                                "start": frame_1m_chunk["timestamp"].min().isoformat(),
+                                "end": frame_1m_chunk["timestamp"].max().isoformat(),
+                            }
+                        )
+
+                    for month_key, frame_5m_chunk in chunked_5m:
+                        added_rows, touched_files = _append_frame_to_local_data(
+                            loader=local_loader,
+                            market=market,
+                            symbol=symbol,
+                            timeframe="5m",
+                            session=session,
+                            frame=frame_5m_chunk,
+                        )
+                        local_rows_written += added_rows
+                        local_files_touched += touched_files
+                        file_5m = symbol_dir / "5m" / f"{month_key}.parquet"
+                        file_5m.parent.mkdir(parents=True, exist_ok=True)
+                        frame_5m_chunk.to_parquet(file_5m, index=False)
+                        object_5m = f"{prefix}/{market}/{symbol}/{session}/5m/{month_key}.parquet"
+                        await asyncio.to_thread(
+                            _upload_file_with_fresh_client,
+                            local_path=file_5m,
+                            bucket_name=bucket,
+                            object_name=object_5m,
+                            content_type="application/octet-stream",
+                        )
+                        files_uploaded += 1
+                        rows_uploaded += int(len(frame_5m_chunk))
+                        manifest_entries.append(
+                            {
+                                "market": market,
+                                "symbol": symbol,
+                                "timeframe": "5m",
+                                "session": session,
+                                "gcs_object": object_5m,
+                                "row_count": int(len(frame_5m_chunk)),
+                                "start": frame_5m_chunk["timestamp"].min().isoformat(),
+                                "end": frame_5m_chunk["timestamp"].max().isoformat(),
+                            }
+                        )
+                    _clear_symbol_failure(
+                        active_failures=active_failures,
+                        failure_key=failure_key,
+                        market=market,
+                        symbol=symbol,
+                        session=session,
+                    )
+                    symbols_synced += 1
+                except Exception as exc:
                     logger.exception(
-                        "[market-data-incremental] skip symbol after provider fetch failure "
+                        "[market-data-incremental] skip symbol after fetch/upload failure "
                         "market=%s symbol=%s start=%s end=%s",
                         market,
                         symbol,
                         start.isoformat(),
                         effective_end.isoformat(),
                     )
+                    _record_symbol_failure(
+                        active_failures=active_failures,
+                        failure_key=failure_key,
+                        market=market,
+                        symbol=symbol,
+                        session=session,
+                        provider=provider,
+                        start=start,
+                        end=effective_end,
+                        exc=exc,
+                    )
                     skipped_uptodate += 1
                     continue
-                frame_1m = _bars_to_frame(bars_1m)
-                if frame_1m.empty:
-                    skipped_uptodate += 1
-                    continue
-
-                frame_5m = _aggregate_5m(frame_1m)
-                symbol_dir = stage_dir / market / symbol / session
-                symbol_dir.mkdir(parents=True, exist_ok=True)
-                chunked_1m = _split_frame_by_month(frame_1m)
-                if not chunked_1m:
-                    skipped_uptodate += 1
-                    continue
-
-                chunked_5m = _split_frame_by_month(frame_5m) if not frame_5m.empty else []
-
-                for month_key, frame_1m_chunk in chunked_1m:
-                    file_1m = symbol_dir / "1m" / f"{month_key}.parquet"
-                    file_1m.parent.mkdir(parents=True, exist_ok=True)
-                    frame_1m_chunk.to_parquet(file_1m, index=False)
-                    object_1m = f"{prefix}/{market}/{symbol}/{session}/1m/{month_key}.parquet"
-                    await asyncio.to_thread(
-                        _upload_file_with_fresh_client,
-                        local_path=file_1m,
-                        bucket_name=bucket,
-                        object_name=object_1m,
-                        content_type="application/octet-stream",
-                    )
-                    files_uploaded += 1
-                    rows_uploaded += int(len(frame_1m_chunk))
-                    manifest_entries.append(
-                        {
-                            "market": market,
-                            "symbol": symbol,
-                            "timeframe": "1m",
-                            "session": session,
-                            "gcs_object": object_1m,
-                            "row_count": int(len(frame_1m_chunk)),
-                            "start": frame_1m_chunk["timestamp"].min().isoformat(),
-                            "end": frame_1m_chunk["timestamp"].max().isoformat(),
-                        }
-                    )
-
-                for month_key, frame_5m_chunk in chunked_5m:
-                    file_5m = symbol_dir / "5m" / f"{month_key}.parquet"
-                    file_5m.parent.mkdir(parents=True, exist_ok=True)
-                    frame_5m_chunk.to_parquet(file_5m, index=False)
-                    object_5m = f"{prefix}/{market}/{symbol}/{session}/5m/{month_key}.parquet"
-                    await asyncio.to_thread(
-                        _upload_file_with_fresh_client,
-                        local_path=file_5m,
-                        bucket_name=bucket,
-                        object_name=object_5m,
-                        content_type="application/octet-stream",
-                    )
-                    files_uploaded += 1
-                    rows_uploaded += int(len(frame_5m_chunk))
-                    manifest_entries.append(
-                        {
-                            "market": market,
-                            "symbol": symbol,
-                            "timeframe": "5m",
-                            "session": session,
-                            "gcs_object": object_5m,
-                            "row_count": int(len(frame_5m_chunk)),
-                            "start": frame_5m_chunk["timestamp"].min().isoformat(),
-                            "end": frame_5m_chunk["timestamp"].max().isoformat(),
-                        }
-                    )
-                symbols_synced += 1
 
         if not manifest_entries:
             return LocalIncrementalSyncResult(
@@ -570,6 +944,8 @@ async def run_local_incremental_sync(
                 rows_uploaded=rows_uploaded,
                 skipped_closed=skipped_closed,
                 skipped_uptodate=skipped_uptodate,
+                local_rows_written=local_rows_written,
+                local_files_touched=local_files_touched,
             )
 
         manifest = {
@@ -607,6 +983,8 @@ async def run_local_incremental_sync(
             rows_uploaded=rows_uploaded,
             skipped_closed=skipped_closed,
             skipped_uptodate=skipped_uptodate,
+            local_rows_written=local_rows_written,
+            local_files_touched=local_files_touched,
             import_job_id=import_job_id,
         )
     except Exception:

@@ -84,9 +84,7 @@ class ChatSendRequest(BaseModel):
         if not normalized:
             return None
         if _TURN_ID_PATTERN.match(normalized) is None:
-            raise ValueError(
-                "client_turn_id must be 1-96 chars of [A-Za-z0-9._:-]."
-            )
+            raise ValueError("client_turn_id must be 1-96 chars of [A-Za-z0-9._:-].")
         return normalized
 
 
@@ -151,6 +149,7 @@ class BacktestTradeSnapshotRequest(BaseModel):
     render_images: bool = False
     save_images_to_temp: bool = False
     random_seed: int | None = None
+    include_decision_trace: bool = False
 
     @model_validator(mode="after")
     def validate_selection_mode_and_count(self) -> BacktestTradeSnapshotRequest:
@@ -173,9 +172,7 @@ class BacktestTradeSnapshotRequest(BaseModel):
                 "selection_count must be null or 1 when trade_index is provided."
             )
         if self.save_images_to_temp and not self.render_images:
-            raise ValueError(
-                "save_images_to_temp requires render_images=true."
-            )
+            raise ValueError("save_images_to_temp requires render_images=true.")
         return self
 
 

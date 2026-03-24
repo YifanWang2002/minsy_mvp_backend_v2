@@ -15,7 +15,11 @@ import mplfinance as mpf
 import pandas as pd
 
 from packages.domain.backtest.factors import prepare_backtest_frame
+from packages.domain.backtest.decision_trace import build_trade_decision_trace
 from packages.domain.market_data.data import DataLoader
+from packages.domain.strategy.feature.contracts import (
+    canonicalize_output_name as canonicalize_contract_output_name,
+)
 from packages.domain.strategy.feature.indicators import IndicatorRegistry
 from packages.domain.strategy.models import ParsedStrategyDsl
 
@@ -26,6 +30,7 @@ _BACKTEST_TRADE_SNAPSHOT_TEMP_ROOT = (
 )
 _TRADE_SNAPSHOT_VISUAL_SPEC_VERSION = "1.1"
 _MAX_INDICATOR_WARMUP_BARS = 2000
+_MAX_SNAPSHOT_WINDOW_EXPANSION_ATTEMPTS = 8
 _LOOKBACK_PARAM_KEYWORDS: tuple[str, ...] = (
     "period",
     "length",
@@ -37,39 +42,6 @@ _LOOKBACK_PARAM_KEYWORDS: tuple[str, ...] = (
     "span",
     "timeperiod",
 )
-
-_OUTPUT_ALIAS_TO_CANONICAL: dict[str, dict[str, str]] = {
-    "macd": {
-        "macd_line": "macd_line",
-        "signal": "signal",
-        "histogram": "histogram",
-        "MACD": "macd_line",
-        "MACDs": "signal",
-        "MACDh": "histogram",
-    },
-    "bbands": {
-        "upper": "upper",
-        "middle": "middle",
-        "lower": "lower",
-        "BBU": "upper",
-        "BBM": "middle",
-        "BBL": "lower",
-    },
-    "stoch": {
-        "k": "k",
-        "d": "d",
-        "STOCHk": "k",
-        "STOCHd": "d",
-    },
-    "adx": {
-        "adx": "adx",
-        "dmp": "dmp",
-        "dmn": "dmn",
-        "ADX": "adx",
-        "DMP": "dmp",
-        "DMN": "dmn",
-    },
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +82,7 @@ def build_trade_snapshots_from_result(
     random_seed: int | None = None,
     trade_index: int | None = None,
     loader: DataLoader | None = None,
+    include_decision_trace: bool = False,
 ) -> dict[str, Any]:
     trades = _normalize_trades(result_payload.get("trades"))
     indicator_warmup_bars = _estimate_indicator_warmup_bars(strategy)
@@ -172,22 +145,19 @@ def build_trade_snapshots_from_result(
         raise ValueError(f"Unsupported timeframe for trade snapshots: {timeframe}")
     bar_delta = timedelta(minutes=int(timeframe_minutes))
 
-    min_start = min(item.entry_time for item in selected) - (bar_delta * int(lookback_bars))
-    max_end = max(item.exit_time for item in selected) + (bar_delta * int(lookforward_bars))
-    load_start = min_start - (bar_delta * int(indicator_warmup_bars))
-
     data_loader = loader or DataLoader()
-    raw_frame = data_loader.load(
+    prepared, warnings = _load_prepared_snapshot_frame(
         market=market,
         symbol=symbol,
         timeframe=timeframe,
-        start_date=load_start,
-        end_date=max_end,
+        strategy=strategy,
+        selected_trades=selected,
+        lookback_bars=int(lookback_bars),
+        lookforward_bars=int(lookforward_bars),
+        indicator_warmup_bars=int(indicator_warmup_bars),
+        bar_delta=bar_delta,
+        data_loader=data_loader,
     )
-    prepared = prepare_backtest_frame(raw_frame, strategy=strategy)
-    prepared = _normalize_frame_index(prepared)
-    if prepared.empty:
-        raise ValueError("No OHLCV rows available after loading snapshot window.")
 
     factor_series = _resolve_factor_series(
         frame_columns=list(prepared.columns),
@@ -196,14 +166,15 @@ def build_trade_snapshots_from_result(
     factor_columns = [item.column for item in factor_series]
     visual_spec = _build_visual_spec(factor_series)
     snapshots: list[dict[str, Any]] = []
-    warnings: list[str] = []
     for item in selected:
         snapshot = _build_single_trade_snapshot(
             frame=prepared,
+            strategy=strategy,
             factor_columns=factor_columns,
             trade=item,
             lookback_bars=int(lookback_bars),
             lookforward_bars=int(lookforward_bars),
+            include_decision_trace=bool(include_decision_trace),
         )
 
         if render_images:
@@ -353,6 +324,105 @@ def _normalize_frame_index(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _load_prepared_snapshot_frame(
+    *,
+    market: str,
+    symbol: str,
+    timeframe: str,
+    strategy: ParsedStrategyDsl,
+    selected_trades: list[_TradeRow],
+    lookback_bars: int,
+    lookforward_bars: int,
+    indicator_warmup_bars: int,
+    bar_delta: timedelta,
+    data_loader: DataLoader,
+) -> tuple[pd.DataFrame, list[str]]:
+    if not selected_trades:
+        raise ValueError("Cannot load snapshot frame without selected trades.")
+
+    required_pre_bars = max(0, int(lookback_bars)) + max(0, int(indicator_warmup_bars))
+    required_post_bars = max(0, int(lookforward_bars))
+    min_entry = min(item.entry_time for item in selected_trades)
+    max_exit = max(item.exit_time for item in selected_trades)
+
+    load_start = min_entry - (bar_delta * required_pre_bars)
+    load_end = max_exit + (bar_delta * required_post_bars)
+    warnings: list[str] = []
+
+    for attempt in range(_MAX_SNAPSHOT_WINDOW_EXPANSION_ATTEMPTS):
+        raw_frame = data_loader.load(
+            market=market,
+            symbol=symbol,
+            timeframe=timeframe,
+            start_date=load_start,
+            end_date=load_end,
+        )
+        prepared = prepare_backtest_frame(raw_frame, strategy=strategy)
+        prepared = _normalize_frame_index(prepared)
+        if prepared.empty:
+            raise ValueError("No OHLCV rows available after loading snapshot window.")
+
+        missing_pre_bars, missing_post_bars = _snapshot_context_shortfall_bars(
+            frame_index=prepared.index,
+            trades=selected_trades,
+            required_pre_bars=required_pre_bars,
+            required_post_bars=required_post_bars,
+        )
+        if missing_pre_bars <= 0 and missing_post_bars <= 0:
+            return prepared, warnings
+
+        if attempt >= (_MAX_SNAPSHOT_WINDOW_EXPANSION_ATTEMPTS - 1):
+            warnings.append(
+                "Trade snapshot context remains partial after retrying window expansion "
+                f"(missing_pre_bars={missing_pre_bars}, missing_post_bars={missing_post_bars})."
+            )
+            return prepared, warnings
+
+        # Expand by the measured shortfall plus a small buffer, then retry.
+        pre_expand = max(0, int(missing_pre_bars))
+        post_expand = max(0, int(missing_post_bars))
+        buffer = max(1, int((pre_expand + post_expand) * 0.1))
+        if pre_expand > 0:
+            load_start = load_start - (bar_delta * (pre_expand + buffer))
+        if post_expand > 0:
+            load_end = load_end + (bar_delta * (post_expand + buffer))
+
+    raise RuntimeError("Unexpected trade snapshot window expansion termination.")
+
+
+def _snapshot_context_shortfall_bars(
+    *,
+    frame_index: pd.DatetimeIndex,
+    trades: list[_TradeRow],
+    required_pre_bars: int,
+    required_post_bars: int,
+) -> tuple[int, int]:
+    if frame_index.empty:
+        return max(0, int(required_pre_bars)), max(0, int(required_post_bars))
+
+    max_missing_pre = 0
+    max_missing_post = 0
+    last_position = len(frame_index) - 1
+    for trade in trades:
+        entry_index = _find_bar_index(index=frame_index, timestamp=trade.entry_time)
+        exit_index = _find_bar_index(index=frame_index, timestamp=trade.exit_time)
+        if exit_index < entry_index:
+            exit_index = entry_index
+
+        available_pre = max(0, int(entry_index))
+        available_post = max(0, int(last_position - exit_index))
+        max_missing_pre = max(
+            max_missing_pre,
+            max(0, int(required_pre_bars) - available_pre),
+        )
+        max_missing_post = max(
+            max_missing_post,
+            max(0, int(required_post_bars) - available_post),
+        )
+
+    return max_missing_pre, max_missing_post
+
+
 def _resolve_factor_series(
     *,
     frame_columns: list[str],
@@ -360,7 +430,9 @@ def _resolve_factor_series(
 ) -> list[_FactorSeriesSpec]:
     output: list[_FactorSeriesSpec] = []
     seen_series_keys: set[tuple[str, str]] = set()
-    factors = strategy.factors if isinstance(getattr(strategy, "factors", None), dict) else {}
+    factors = (
+        strategy.factors if isinstance(getattr(strategy, "factors", None), dict) else {}
+    )
     for factor_id, factor_def in factors.items():
         factor_type = str(getattr(factor_def, "factor_type", "")).strip().lower()
         category = _factor_category(factor_type)
@@ -428,10 +500,12 @@ def _resolve_factor_series(
 def _build_single_trade_snapshot(
     *,
     frame: pd.DataFrame,
+    strategy: ParsedStrategyDsl,
     factor_columns: list[str],
     trade: _TradeRow,
     lookback_bars: int,
     lookforward_bars: int,
+    include_decision_trace: bool,
 ) -> dict[str, Any]:
     index = frame.index
     assert isinstance(index, pd.DatetimeIndex)
@@ -472,7 +546,18 @@ def _build_single_trade_snapshot(
     entry_offset = entry_index - start_index
     exit_offset = exit_index - start_index
 
-    return {
+    decision_trace = None
+    if include_decision_trace:
+        decision_trace = build_trade_decision_trace(
+            frame=frame,
+            strategy=strategy,
+            trade=trade_payload,
+            entry_index=entry_index,
+            exit_index=exit_index,
+            start_index=start_index,
+        )
+
+    payload = {
         "trade_uid": _trade_uid(trade=trade),
         "trade_index": trade.index,
         "trade": trade_payload,
@@ -495,6 +580,9 @@ def _build_single_trade_snapshot(
             "indicators": indicators,
         },
     }
+    if decision_trace is not None:
+        payload["decision_trace"] = decision_trace
+    return payload
 
 
 def _find_bar_index(
@@ -705,9 +793,7 @@ def _build_visual_spec(factor_series: list[_FactorSeriesSpec]) -> dict[str, Any]
                 "order": index,
             }
         series_id = (
-            f"{series.factor_id}.{series.output}"
-            if series.output
-            else series.factor_id
+            f"{series.factor_id}.{series.output}" if series.output else series.factor_id
         )
         series_specs.append(
             {
@@ -729,7 +815,9 @@ def _build_visual_spec(factor_series: list[_FactorSeriesSpec]) -> dict[str, Any]
             "title": pane["title"],
             "height_weight": pane["height_weight"],
         }
-        for pane in sorted(panes_map.values(), key=lambda item: int(item.get("order", 0)))
+        for pane in sorted(
+            panes_map.values(), key=lambda item: int(item.get("order", 0))
+        )
     ]
     return {
         "version": _TRADE_SNAPSHOT_VISUAL_SPEC_VERSION,
@@ -773,7 +861,11 @@ def _output_visual_override(
         return dict(direct)
     lower_name = output_name.lower()
     for key, value in output_map.items():
-        if isinstance(key, str) and key.strip().lower() == lower_name and isinstance(value, dict):
+        if (
+            isinstance(key, str)
+            and key.strip().lower() == lower_name
+            and isinstance(value, dict)
+        ):
             return dict(value)
     return {}
 
@@ -792,17 +884,7 @@ def _canonicalize_output_name(
     factor_type: str,
     output_name: str | None,
 ) -> str | None:
-    if output_name is None:
-        return None
-    normalized_type = str(factor_type).strip().lower()
-    alias_map = _OUTPUT_ALIAS_TO_CANONICAL.get(normalized_type, {})
-    if output_name in alias_map:
-        return alias_map[output_name]
-    lowered = output_name.lower()
-    for alias, canonical in alias_map.items():
-        if alias.lower() == lowered:
-            return canonical
-    return output_name
+    return canonicalize_contract_output_name(factor_type, output_name)
 
 
 def _resolve_series_pane_id(
@@ -1013,8 +1095,7 @@ def _persist_snapshot_image_to_temp(
 
 def _sanitize_path_token(value: str) -> str:
     normalized = "".join(
-        char.lower() if char.isalnum() else "_"
-        for char in str(value).strip()
+        char.lower() if char.isalnum() else "_" for char in str(value).strip()
     )
     compact = "_".join(part for part in normalized.split("_") if part)
     return compact or "unknown"

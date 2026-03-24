@@ -117,6 +117,35 @@ class QuotaService:
             }
         return {}
 
+    def _limit_with_user_override(
+        self,
+        *,
+        user_id: UUID,
+        metric: str,
+        limit: int,
+    ) -> int:
+        normalized_limit = max(int(limit), 0)
+        if normalized_limit <= 0:
+            return normalized_limit
+
+        override = settings.billing_user_quota_overrides.get(str(user_id))
+        if not isinstance(override, dict):
+            return normalized_limit
+
+        metrics = override.get("metrics")
+        if metric not in metrics:
+            return normalized_limit
+
+        try:
+            percent_bonus = int(override.get("percent_bonus", 0))
+        except (TypeError, ValueError):
+            return normalized_limit
+        if percent_bonus <= 0:
+            return normalized_limit
+
+        bonus = (normalized_limit * percent_bonus + 99) // 100
+        return normalized_limit + bonus
+
     async def resolve_metric_snapshot(
         self,
         *,
@@ -136,6 +165,11 @@ class QuotaService:
                 int(limits.get(UsageMetric.LEGACY_CPU_JOBS_MONTHLY_TOTAL, 0)),
                 0,
             )
+        limit = self._limit_with_user_override(
+            user_id=user_id,
+            metric=normalized_metric,
+            limit=limit,
+        )
 
         reset_at: datetime | None = None
         if normalized_metric in {

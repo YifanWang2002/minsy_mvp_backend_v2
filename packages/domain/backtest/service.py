@@ -220,7 +220,9 @@ async def execute_backtest_job_with_fresh_session(job_id: UUID) -> BacktestJobVi
         # packages.domain.backtest.service.execute_backtest_job keep working.
         from packages.domain.backtest import service as service_module
 
-        return await service_module.execute_backtest_job(session, job_id=job_id, auto_commit=True)
+        return await service_module.execute_backtest_job(
+            session, job_id=job_id, auto_commit=True
+        )
 
 
 def _enqueue_backtest_job(job_id: UUID) -> str:
@@ -366,6 +368,7 @@ async def build_backtest_trade_snapshots(
     render_images: bool = False,
     save_images_to_temp: bool = False,
     random_seed: int | None = None,
+    include_decision_trace: bool = False,
 ) -> dict[str, Any]:
     """Build trade snapshots for a completed backtest job."""
 
@@ -383,9 +386,7 @@ async def build_backtest_trade_snapshots(
             "save_images_to_temp requires render_images=true."
         )
     if trade_index is not None and int(trade_index) < 0:
-        raise BacktestTradeSnapshotInputError(
-            "trade_index must be >= 0 when provided."
-        )
+        raise BacktestTradeSnapshotInputError("trade_index must be >= 0 when provided.")
     if normalized_mode == "all":
         if selection_count is not None:
             raise BacktestTradeSnapshotInputError(
@@ -439,7 +440,9 @@ async def build_backtest_trade_snapshots(
 
     strategy_payload_source = "current_strategy_fallback"
     warnings: list[str] = []
-    strategy_payload = strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    strategy_payload = (
+        strategy.dsl_payload if isinstance(strategy.dsl_payload, dict) else {}
+    )
     strategy_version = None
     if isinstance(job.config, dict):
         raw_version = job.config.get("strategy_version")
@@ -481,7 +484,9 @@ async def build_backtest_trade_snapshots(
             symbol=symbol,
             timeframe=parsed_strategy.universe.timeframe,
             selection_mode=normalized_mode,
-            selection_count=None if normalized_mode == "all" else int(selection_count or 0),
+            selection_count=None
+            if normalized_mode == "all"
+            else int(selection_count or 0),
             lookback_bars=int(lookback_bars),
             lookforward_bars=int(lookforward_bars),
             render_images=bool(render_images),
@@ -489,6 +494,7 @@ async def build_backtest_trade_snapshots(
             job_id=job.id,
             random_seed=random_seed,
             trade_index=int(trade_index) if trade_index is not None else None,
+            include_decision_trace=bool(include_decision_trace),
         )
     except BacktestTradeSnapshotInputError:
         raise
@@ -691,7 +697,9 @@ def _build_backtest_config(config: dict[str, Any]) -> BacktestConfig:
     )
 
 
-def _validated_timerange(*, start: datetime, end: datetime) -> tuple[datetime, datetime]:
+def _validated_timerange(
+    *, start: datetime, end: datetime
+) -> tuple[datetime, datetime]:
     if end < start:
         raise ValueError("end_date must be greater than or equal to start_date")
     return (start, end)
@@ -739,7 +747,11 @@ async def _enqueue_backtest_completed_notification(
     if not settings.notifications_enabled:
         return
     result_payload = job.results if isinstance(job.results, dict) else {}
-    summary = result_payload.get("summary") if isinstance(result_payload.get("summary"), dict) else {}
+    summary = (
+        result_payload.get("summary")
+        if isinstance(result_payload.get("summary"), dict)
+        else {}
+    )
     payload = {
         "job_id": str(job.id),
         "strategy_id": str(strategy.id),
@@ -748,7 +760,9 @@ async def _enqueue_backtest_completed_notification(
             "max_drawdown_pct": summary.get("max_drawdown_pct"),
             "sharpe_ratio": summary.get("sharpe_ratio"),
         },
-        "completed_at": job.completed_at.isoformat() if job.completed_at is not None else None,
+        "completed_at": job.completed_at.isoformat()
+        if job.completed_at is not None
+        else None,
     }
     service = NotificationOutboxService(db)
     await service.enqueue_event_for_user(
