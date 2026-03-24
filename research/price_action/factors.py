@@ -426,9 +426,10 @@ class PriceActionFactors:
 
     @staticmethod
     def bar_follow_through(df: pd.DataFrame, lookback: int = 3) -> pd.Series:
-        """Bar follow-through - do subsequent bars follow the direction?
+        """Bar follow-through without future leakage.
 
-        Measures if strong bars are followed by continuation.
+        Measures whether strong bars were followed by continuation after the
+        follow-through window has fully matured.
 
         VALIDATED: +55% average improvement across all assets
 
@@ -444,14 +445,26 @@ class PriceActionFactors:
         is_bullish = (df["close"] > df["open"]).astype(int)
         body_ratio = PriceActionFactors.body_to_range_ratio(df)
         strong_bar = body_ratio > 0.6
-        follow_through = pd.Series(0.0, index=df.index)
-        for i in range(1, lookback + 1):
-            next_direction = is_bullish.shift(-i)
-            same_direction = (is_bullish == next_direction).astype(float)
-            follow_through += same_direction * (1.0 / i)
-        follow_through = follow_through / lookback
-        follow_through[~strong_bar] = 0.5
-        return follow_through.fillna(0.5)
+        window = max(1, int(lookback))
+
+        follow_through = pd.Series(0.5, index=df.index, dtype=float)
+        weights = np.array([1.0 / float(i) for i in range(1, window + 1)], dtype=float)
+        weight_sum = float(weights.sum())
+
+        for current_idx in range(len(df)):
+            bar_idx = current_idx - window
+            if bar_idx < 0:
+                continue
+            if not bool(strong_bar.iloc[bar_idx]):
+                continue
+            direction = int(is_bullish.iloc[bar_idx])
+            path = is_bullish.iloc[bar_idx + 1 : current_idx + 1]
+            if len(path) != window:
+                continue
+            same_direction = (path.to_numpy(dtype=float) == float(direction)).astype(float)
+            follow_through.iloc[current_idx] = float(np.dot(same_direction, weights) / weight_sum)
+
+        return follow_through.fillna(0.5).clip(lower=0.0, upper=1.0)
 
     @staticmethod
     def multi_timeframe_alignment(df: pd.DataFrame, fast: int = 20, slow: int = 50) -> pd.Series:

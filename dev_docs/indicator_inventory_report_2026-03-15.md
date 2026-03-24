@@ -5,8 +5,8 @@ Generated from source on 2026-03-15.
 ## MCP Exposure Rules
 
 - `get_indicator_catalog` includes categories: `overlap`, `momentum`, `volatility`, `volume`, `utils`.
-- `candle` category is excluded from catalog by `_EXCLUDED_CATALOG_CATEGORIES` in `apps/mcp/domains/strategy/tools.py`.
-- `get_indicator_detail` can return any registered indicator if registry metadata or skill exists.
+- `candle` indicators are no longer part of active registry catalog output.
+- Indicator detail is now obtained through `get_indicator_catalog` metadata entries (tool-level `get_indicator_detail` has been removed from MCP exposure).
 - `detail.summary` precedence in code: `skill.summary` > `registry.description`.
 
 ## Counts By Category
@@ -232,5 +232,3 @@ Generated from source on 2026-03-15.
 | `sum`                 | Summation                                 | return src.rolling(window=length).sum()                                                                                                                | length:int=30[1,500]                       | sum                       | Sum over rolling window                       | no    |
 | `tsf`                 | Time Series Forecast                      | standard library implementation (TA-Lib: TSF; pandas-ta: linreg)                                                                                       | length:int=14[1,500]                       | tsf                       | Linear regression endpoint forecast           | no    |
 | `zscore`              | Z-Score                                   | mean = src.rolling(window=length).mean(); std = src.rolling(window=length).std(); return (src - mean) / std                                            | length:int=30[2,500]                       | zscore                    | Number of standard deviations from mean       | no    |
-
-

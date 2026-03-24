@@ -7,7 +7,7 @@ from . import overlap
 from . import momentum
 from . import volatility
 from . import volume
-from . import candle
+from . import regime
 from . import utils
 
 __all__ = [
@@ -15,6 +15,6 @@ __all__ = [
     "momentum", 
     "volatility",
     "volume",
-    "candle",
+    "regime",
     "utils",
 ]

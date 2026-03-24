@@ -56,7 +56,7 @@ Factor IDs are deterministic. Never invent aliases. Same type + same params = sa
 
 **MCP tools**:
 - Call `get_indicator_catalog(category="momentum")` (or without category) to inspect available categories and registry contracts.
-- Call `get_indicator_detail(indicator="ema")` or `get_indicator_detail(indicator_list=[...])` for full skill detail.
+- Do not depend on per-indicator skill正文; select factors directly from catalog `full_name/description/params/outputs` metadata.
 
 ## Reference System
 

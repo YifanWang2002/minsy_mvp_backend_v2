@@ -33,6 +33,9 @@ from .base import (
 # Import registry
 from .registry import IndicatorRegistry
 
+# Import decorators
+from .decorators import indicator
+
 # Import wrapper
 from .wrapper import (
     IndicatorWrapper,
@@ -84,14 +87,14 @@ def get_all_signatures(
     """Get signatures for all indicators with optional filtering.
     
     Args:
-        exclude_categories: List of categories to exclude (e.g., [IndicatorCategory.CANDLE, IndicatorCategory.UTILS])
+        exclude_categories: List of categories to exclude (e.g., [IndicatorCategory.UTILS])
         include_categories: List of categories to include (if specified, only these are returned)
         
     Note: If both are specified, exclude_categories takes precedence.
     
     Example:
-        # Get all indicators except candle patterns and utils
-        signatures = get_all_signatures(exclude_categories=[IndicatorCategory.CANDLE, IndicatorCategory.UTILS])
+        # Get all indicators except utils
+        signatures = get_all_signatures(exclude_categories=[IndicatorCategory.UTILS])
         
         # Get only momentum and overlap indicators
         signatures = get_all_signatures(include_categories=[IndicatorCategory.MOMENTUM, IndicatorCategory.OVERLAP])
@@ -112,6 +115,8 @@ __all__ = [
     "IndicatorSource",
     # Registry
     "IndicatorRegistry",
+    # Decorators
+    "indicator",
     # Wrapper
     "IndicatorWrapper",
     "calculate",

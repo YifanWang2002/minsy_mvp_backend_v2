@@ -15,7 +15,6 @@ class IndicatorCategory(str, Enum):
     MOMENTUM = "momentum"  # Momentum & trend indicators
     VOLATILITY = "volatility"  # Volatility indicators
     VOLUME = "volume"  # Volume indicators
-    CANDLE = "candle"  # Candlestick patterns
     UTILS = "utils"  # Statistics, math, cycle, etc.
 
 
@@ -61,6 +60,11 @@ class IndicatorMetadata:
     talib_func: str | None = None  # TA-Lib function name (e.g., "SMA")
     pandas_ta_func: str | None = None  # pandas-ta function name (e.g., "sma")
     required_columns: list[str] = field(default_factory=lambda: ["close"])
+    version: str = "1.0.0"
+    status: str = "active"  # active/deprecated/removed
+    deprecated_since: str | None = None
+    replacement: str | None = None
+    remove_after: str | None = None
     
     def get_signature(self) -> dict[str, Any]:
         """Get function signature for documentation."""
@@ -86,6 +90,11 @@ class IndicatorMetadata:
                 for o in self.outputs
             ],
             "required_columns": self.required_columns,
+            "version": str(self.version),
+            "status": str(self.status),
+            "deprecated_since": self.deprecated_since,
+            "replacement": self.replacement,
+            "remove_after": self.remove_after,
             "sources": {
                 "talib": self.talib_func,
                 "pandas_ta": self.pandas_ta_func,

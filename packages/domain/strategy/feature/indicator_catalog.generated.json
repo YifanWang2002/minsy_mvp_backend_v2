@@ -1,0 +1,3550 @@
+{
+  "categories": [
+    {
+      "category": "overlap",
+      "count": 25,
+      "indicators": [
+        {
+          "deprecated_since": null,
+          "description": "Volatility bands around a moving average",
+          "full_name": "Bollinger Bands",
+          "name": "bbands",
+          "outputs": [
+            {
+              "description": "Upper band",
+              "name": "BBU"
+            },
+            {
+              "description": "Middle band",
+              "name": "BBM"
+            },
+            {
+              "description": "Lower band",
+              "name": "BBL"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 2.0,
+              "description": "Standard deviation multiplier",
+              "max": 5.0,
+              "min": 0.1,
+              "name": "std",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Reduces lag of standard EMA",
+          "full_name": "Double Exponential Moving Average",
+          "name": "dema",
+          "outputs": [
+            {
+              "description": "DEMA values",
+              "name": "dema"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Highest high and lowest low over period",
+          "full_name": "Donchian Channels",
+          "name": "donchian",
+          "outputs": [
+            {
+              "description": "Lower channel",
+              "name": "DCL"
+            },
+            {
+              "description": "Middle channel",
+              "name": "DCM"
+            },
+            {
+              "description": "Upper channel",
+              "name": "DCU"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Lower channel period",
+              "max": 500,
+              "min": 1,
+              "name": "lower_length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Upper channel period",
+              "max": 500,
+              "min": 1,
+              "name": "upper_length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Weighted moving average with exponential decay",
+          "full_name": "Exponential Moving Average",
+          "name": "ema",
+          "outputs": [
+            {
+              "description": "EMA values",
+              "name": "ema"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "(High + Low) / 2",
+          "full_name": "HL2 (High-Low Midpoint)",
+          "name": "hl2",
+          "outputs": [
+            {
+              "description": "HL2 values",
+              "name": "hl2"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "(High + Low + Close) / 3",
+          "full_name": "HLC3 (Typical Price)",
+          "name": "hlc3",
+          "outputs": [
+            {
+              "description": "HLC3 values",
+              "name": "hlc3"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Responsive moving average with reduced lag",
+          "full_name": "Hull Moving Average",
+          "name": "hma",
+          "outputs": [
+            {
+              "description": "HMA values",
+              "name": "hma"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 10,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Dominant cycle trendline",
+          "full_name": "Hilbert Transform - Instantaneous Trendline",
+          "name": "ht_trendline",
+          "outputs": [
+            {
+              "description": "Trendline values",
+              "name": "ht_trendline"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Comprehensive trend identification system",
+          "full_name": "Ichimoku Kinkō Hyō",
+          "name": "ichimoku",
+          "outputs": [
+            {
+              "description": "Senkou Span A",
+              "name": "ISA"
+            },
+            {
+              "description": "Senkou Span B",
+              "name": "ISB"
+            },
+            {
+              "description": "Tenkan-sen",
+              "name": "ITS"
+            },
+            {
+              "description": "Kijun-sen",
+              "name": "IKS"
+            },
+            {
+              "description": "Chikou Span",
+              "name": "ICS"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 9,
+              "description": "Tenkan-sen period",
+              "max": 100,
+              "min": 1,
+              "name": "tenkan",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 26,
+              "description": "Kijun-sen period",
+              "max": 200,
+              "min": 1,
+              "name": "kijun",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 52,
+              "description": "Senkou span B period",
+              "max": 500,
+              "min": 1,
+              "name": "senkou",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Adjusts smoothing based on market efficiency",
+          "full_name": "Kaufman Adaptive Moving Average",
+          "name": "kama",
+          "outputs": [
+            {
+              "description": "KAMA values",
+              "name": "kama"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 10,
+              "description": "Efficiency ratio period",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 2,
+              "description": "Fast smoothing constant",
+              "max": 50,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Slow smoothing constant",
+              "max": 500,
+              "min": 5,
+              "name": "slow",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "EMA-based volatility channels",
+          "full_name": "Keltner Channels",
+          "name": "kc",
+          "outputs": [
+            {
+              "description": "Lower channel",
+              "name": "KCL"
+            },
+            {
+              "description": "Middle band (EMA)",
+              "name": "KCB"
+            },
+            {
+              "description": "Upper channel",
+              "name": "KCU"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 2.0,
+              "description": "ATR multiplier",
+              "max": 5.0,
+              "min": 0.5,
+              "name": "scalar",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Linear regression over period",
+          "full_name": "Linear Regression",
+          "name": "linearreg",
+          "outputs": [
+            {
+              "description": "Linear regression values",
+              "name": "linearreg"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Hilbert Transform-based adaptive MA",
+          "full_name": "MESA Adaptive Moving Average",
+          "name": "mama",
+          "outputs": [
+            {
+              "description": "MAMA line",
+              "name": "MAMA"
+            },
+            {
+              "description": "Following Adaptive MA",
+              "name": "FAMA"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 0.5,
+              "description": "Fast limit",
+              "max": 0.99,
+              "min": 0.01,
+              "name": "fastlimit",
+              "type": "float"
+            },
+            {
+              "choices": null,
+              "default": 0.05,
+              "description": "Slow limit",
+              "max": 0.99,
+              "min": 0.01,
+              "name": "slowlimit",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "(Highest + Lowest) / 2 over period",
+          "full_name": "Midpoint over Period",
+          "name": "midpoint",
+          "outputs": [
+            {
+              "description": "Midpoint values",
+              "name": "midpoint"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "(Highest High + Lowest Low) / 2 over period",
+          "full_name": "Midpoint Price over Period",
+          "name": "midprice",
+          "outputs": [
+            {
+              "description": "Midprice values",
+              "name": "midprice"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "(Open + High + Low + Close) / 4",
+          "full_name": "OHLC4",
+          "name": "ohlc4",
+          "outputs": [
+            {
+              "description": "OHLC4 values",
+              "name": "ohlc4"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "open",
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Stop and reverse trailing stop",
+          "full_name": "Parabolic SAR",
+          "name": "sar",
+          "outputs": [
+            {
+              "description": "SAR values",
+              "name": "sar"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 0.02,
+              "description": "Acceleration factor",
+              "max": 0.5,
+              "min": 0.001,
+              "name": "af",
+              "type": "float"
+            },
+            {
+              "choices": null,
+              "default": 0.2,
+              "description": "Maximum acceleration factor",
+              "max": 1.0,
+              "min": 0.01,
+              "name": "max_af",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Average price over a specified period",
+          "full_name": "Simple Moving Average",
+          "name": "sma",
+          "outputs": [
+            {
+              "description": "SMA values",
+              "name": "sma"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "ATR-based trend following indicator",
+          "full_name": "SuperTrend",
+          "name": "supertrend",
+          "outputs": [
+            {
+              "description": "SuperTrend value",
+              "name": "SUPERT"
+            },
+            {
+              "description": "SuperTrend direction (1=up, -1=down)",
+              "name": "SUPERTd"
+            },
+            {
+              "description": "SuperTrend long",
+              "name": "SUPERTl"
+            },
+            {
+              "description": "SuperTrend short",
+              "name": "SUPERTs"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 7,
+              "description": "ATR period",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3.0,
+              "description": "ATR multiplier",
+              "max": 10.0,
+              "min": 0.5,
+              "name": "multiplier",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Tillson T3 moving average",
+          "full_name": "T3 - Triple Exponential Moving Average",
+          "name": "t3",
+          "outputs": [
+            {
+              "description": "T3 values",
+              "name": "t3"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 5,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 0.7,
+              "description": "Volume factor",
+              "max": 1,
+              "min": 0,
+              "name": "vfactor",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Further reduces lag compared to DEMA",
+          "full_name": "Triple Exponential Moving Average",
+          "name": "tema",
+          "outputs": [
+            {
+              "description": "TEMA values",
+              "name": "tema"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Double-smoothed SMA",
+          "full_name": "Triangular Moving Average",
+          "name": "trima",
+          "outputs": [
+            {
+              "description": "TRIMA values",
+              "name": "trima"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Average price weighted by volume",
+          "full_name": "Volume Weighted Average Price",
+          "name": "vwap",
+          "outputs": [
+            {
+              "description": "VWAP values",
+              "name": "vwap"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "(High + Low + 2*Close) / 4",
+          "full_name": "Weighted Close Price",
+          "name": "wcp",
+          "outputs": [
+            {
+              "description": "Weighted close values",
+              "name": "wcp"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Linearly weighted moving average",
+          "full_name": "Weighted Moving Average",
+          "name": "wma",
+          "outputs": [
+            {
+              "description": "WMA values",
+              "name": "wma"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "category": "momentum",
+      "count": 22,
+      "indicators": [
+        {
+          "deprecated_since": null,
+          "description": "Measures trend strength regardless of direction",
+          "full_name": "Average Directional Index",
+          "name": "adx",
+          "outputs": [
+            {
+              "description": "ADX value (trend strength)",
+              "name": "ADX"
+            },
+            {
+              "description": "Plus Directional Indicator (+DI)",
+              "name": "DMP"
+            },
+            {
+              "description": "Minus Directional Indicator (-DI)",
+              "name": "DMN"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Smoothed ADX",
+          "full_name": "Average Directional Movement Index Rating",
+          "name": "adxr",
+          "outputs": [
+            {
+              "description": "ADXR values",
+              "name": "adxr"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Difference between fast and slow EMAs",
+          "full_name": "Absolute Price Oscillator",
+          "name": "apo",
+          "outputs": [
+            {
+              "description": "APO values",
+              "name": "apo"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 12,
+              "description": "Fast EMA period",
+              "max": 100,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 26,
+              "description": "Slow EMA period",
+              "max": 200,
+              "min": 1,
+              "name": "slow",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Identifies trend changes and strength",
+          "full_name": "Aroon",
+          "name": "aroon",
+          "outputs": [
+            {
+              "description": "Aroon Up",
+              "name": "AROONU"
+            },
+            {
+              "description": "Aroon Down",
+              "name": "AROOND"
+            },
+            {
+              "description": "Aroon Oscillator",
+              "name": "AROONOSC"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures buying/selling pressure",
+          "full_name": "Balance of Power",
+          "name": "bop",
+          "outputs": [
+            {
+              "description": "BOP values (-1 to 1)",
+              "name": "bop"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "open",
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Identifies cyclical trends",
+          "full_name": "Commodity Channel Index",
+          "name": "cci",
+          "outputs": [
+            {
+              "description": "CCI values",
+              "name": "cci"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures market trendiness vs choppiness",
+          "full_name": "Choppiness Index",
+          "name": "chop",
+          "outputs": [
+            {
+              "description": "Chop values (0-100)",
+              "name": "chop"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Momentum oscillator using gains and losses",
+          "full_name": "Chande Momentum Oscillator",
+          "name": "cmo",
+          "outputs": [
+            {
+              "description": "CMO values (-100 to 100)",
+              "name": "cmo"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures trend strength",
+          "full_name": "Directional Movement Index",
+          "name": "dx",
+          "outputs": [
+            {
+              "description": "DX values",
+              "name": "dx"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Trend-following momentum indicator",
+          "full_name": "Moving Average Convergence Divergence",
+          "name": "macd",
+          "outputs": [
+            {
+              "description": "MACD line",
+              "name": "MACD"
+            },
+            {
+              "description": "Signal line",
+              "name": "MACDs"
+            },
+            {
+              "description": "Histogram",
+              "name": "MACDh"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 12,
+              "description": "Fast EMA period",
+              "max": 100,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 26,
+              "description": "Slow EMA period",
+              "max": 200,
+              "min": 1,
+              "name": "slow",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 9,
+              "description": "Signal line period",
+              "max": 50,
+              "min": 1,
+              "name": "signal",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Downward price movement",
+          "full_name": "Minus Directional Movement",
+          "name": "minus_dm",
+          "outputs": [
+            {
+              "description": "-DM values",
+              "name": "minus_dm"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Price change over period",
+          "full_name": "Momentum",
+          "name": "mom",
+          "outputs": [
+            {
+              "description": "Momentum values",
+              "name": "mom"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 10,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Upward price movement",
+          "full_name": "Plus Directional Movement",
+          "name": "plus_dm",
+          "outputs": [
+            {
+              "description": "+DM values",
+              "name": "plus_dm"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "MACD expressed as percentage",
+          "full_name": "Percentage Price Oscillator",
+          "name": "ppo",
+          "outputs": [
+            {
+              "description": "PPO values (%)",
+              "name": "ppo"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 12,
+              "description": "Fast EMA period",
+              "max": 100,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 26,
+              "description": "Slow EMA period",
+              "max": 200,
+              "min": 1,
+              "name": "slow",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Percentage price change over period",
+          "full_name": "Rate of Change",
+          "name": "roc",
+          "outputs": [
+            {
+              "description": "ROC values (%)",
+              "name": "roc"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 10,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Momentum oscillator measuring speed and change of price movements",
+          "full_name": "Relative Strength Index",
+          "name": "rsi",
+          "outputs": [
+            {
+              "description": "RSI values (0-100)",
+              "name": "rsi"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 2,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Momentum indicator comparing closing price to price range",
+          "full_name": "Stochastic Oscillator",
+          "name": "stoch",
+          "outputs": [
+            {
+              "description": "Slow %K",
+              "name": "STOCHk"
+            },
+            {
+              "description": "Slow %D",
+              "name": "STOCHd"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Fast %K period",
+              "max": 100,
+              "min": 1,
+              "name": "fastk_period",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3,
+              "description": "Slow %K period",
+              "max": 50,
+              "min": 1,
+              "name": "slowk_period",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3,
+              "description": "Slow %D period",
+              "max": 50,
+              "min": 1,
+              "name": "slowd_period",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Fast version of stochastic oscillator",
+          "full_name": "Stochastic Fast",
+          "name": "stochf",
+          "outputs": [
+            {
+              "description": "Fast %K",
+              "name": "STOCHFk"
+            },
+            {
+              "description": "Fast %D",
+              "name": "STOCHFd"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 5,
+              "description": "Fast %K period",
+              "max": 100,
+              "min": 1,
+              "name": "fastk_period",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3,
+              "description": "Fast %D period",
+              "max": 50,
+              "min": 1,
+              "name": "fastd_period",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "RSI processed through stochastic formula",
+          "full_name": "Stochastic RSI",
+          "name": "stochrsi",
+          "outputs": [
+            {
+              "description": "Stochastic RSI %K",
+              "name": "STOCHRSIk"
+            },
+            {
+              "description": "Stochastic RSI %D",
+              "name": "STOCHRSId"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Stochastic period",
+              "max": 100,
+              "min": 2,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 14,
+              "description": "RSI period",
+              "max": 100,
+              "min": 2,
+              "name": "rsi_length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3,
+              "description": "%K smoothing",
+              "max": 50,
+              "min": 1,
+              "name": "k",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3,
+              "description": "%D smoothing",
+              "max": 50,
+              "min": 1,
+              "name": "d",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Triple smoothed EMA rate of change",
+          "full_name": "TRIX",
+          "name": "trix",
+          "outputs": [
+            {
+              "description": "TRIX values",
+              "name": "trix"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Multi-timeframe momentum oscillator",
+          "full_name": "Ultimate Oscillator",
+          "name": "ultosc",
+          "outputs": [
+            {
+              "description": "Ultimate Oscillator values (0-100)",
+              "name": "ultosc"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 7,
+              "description": "Short period",
+              "max": 50,
+              "min": 1,
+              "name": "period1",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Medium period",
+              "max": 100,
+              "min": 1,
+              "name": "period2",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 28,
+              "description": "Long period",
+              "max": 200,
+              "min": 1,
+              "name": "period3",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Momentum indicator similar to stochastic",
+          "full_name": "Williams %R",
+          "name": "willr",
+          "outputs": [
+            {
+              "description": "Williams %R values (-100 to 0)",
+              "name": "willr"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "category": "volatility",
+      "count": 16,
+      "indicators": [
+        {
+          "deprecated_since": null,
+          "description": "Smoothed average of True Range",
+          "full_name": "Average True Range",
+          "name": "atr",
+          "outputs": [
+            {
+              "description": "ATR values",
+              "name": "atr"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Ratio of short-term ATR to long-term ATR baseline",
+          "full_name": "ATR Regime Ratio",
+          "name": "atr_regime_ratio",
+          "outputs": [
+            {
+              "description": "Short/long ATR ratio",
+              "name": "atr_regime_ratio"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "ATR base period",
+              "max": 200,
+              "min": 2,
+              "name": "atr_period",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Short ATR smooth window",
+              "max": 300,
+              "min": 2,
+              "name": "short_window",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 50,
+              "description": "Long ATR smooth window",
+              "max": 600,
+              "min": 5,
+              "name": "long_window",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "ATR-based trailing stop level",
+          "full_name": "ATR Trailing Stop",
+          "name": "atrts",
+          "outputs": [
+            {
+              "description": "ATR trailing stop values",
+              "name": "atrts"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "ATR period",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3.0,
+              "description": "ATR multiplier",
+              "max": 10.0,
+              "min": 0.5,
+              "name": "multiplier",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "ATR-based trailing stop",
+          "full_name": "Chandelier Exit",
+          "name": "chandelier",
+          "outputs": [
+            {
+              "description": "Long exit (sell stop)",
+              "name": "CHANDELIERl"
+            },
+            {
+              "description": "Short exit (buy stop)",
+              "name": "CHANDELIERs"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 22,
+              "description": "Lookback period",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 14,
+              "description": "ATR period",
+              "max": 100,
+              "min": 1,
+              "name": "atr_length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 3.0,
+              "description": "ATR multiplier",
+              "max": 10.0,
+              "min": 0.5,
+              "name": "multiplier",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "OHLC-based volatility estimator robust to drift",
+          "full_name": "Garman-Klass Volatility",
+          "name": "garman_klass_volatility",
+          "outputs": [
+            {
+              "description": "Garman-Klass volatility estimate",
+              "name": "garman_klass_volatility"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Lookback window",
+              "max": 500,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "open",
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Identifies reversals based on range expansion",
+          "full_name": "Mass Index",
+          "name": "massi",
+          "outputs": [
+            {
+              "description": "Mass Index values",
+              "name": "massi"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 9,
+              "description": "Fast EMA period",
+              "max": 50,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 25,
+              "description": "Sum period",
+              "max": 100,
+              "min": 1,
+              "name": "slow",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "ATR expressed as percentage of close price",
+          "full_name": "Normalized Average True Range",
+          "name": "natr",
+          "outputs": [
+            {
+              "description": "NATR values (%)",
+              "name": "natr"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Range-based volatility estimator using high/low prices",
+          "full_name": "Parkinson Volatility",
+          "name": "parkinson_volatility",
+          "outputs": [
+            {
+              "description": "Parkinson volatility estimate",
+              "name": "parkinson_volatility"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Lookback window",
+              "max": 500,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures bar range relative to close",
+          "full_name": "Price Distance",
+          "name": "pdist",
+          "outputs": [
+            {
+              "description": "Price distance values",
+              "name": "pdist"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "open",
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "RSI applied to standard deviation",
+          "full_name": "Relative Volatility Index",
+          "name": "rvi",
+          "outputs": [
+            {
+              "description": "RVI values (0-100)",
+              "name": "rvi"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Volatility compression score from BB/KC width percentiles",
+          "full_name": "Squeeze Score",
+          "name": "squeeze_score",
+          "outputs": [
+            {
+              "description": "Squeeze score (0-1)",
+              "name": "squeeze_score"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Band window",
+              "max": 300,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 2.0,
+              "description": "Bollinger std multiplier",
+              "max": 5.0,
+              "min": 0.5,
+              "name": "bb_mult",
+              "type": "float"
+            },
+            {
+              "choices": null,
+              "default": 1.0,
+              "description": "Keltner ATR multiplier",
+              "max": 5.0,
+              "min": 0.5,
+              "name": "kc_mult",
+              "type": "float"
+            },
+            {
+              "choices": null,
+              "default": 120,
+              "description": "Percentile window",
+              "max": 1000,
+              "min": 20,
+              "name": "percentile_window",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Historical volatility measure",
+          "full_name": "Standard Deviation",
+          "name": "stdev",
+          "outputs": [
+            {
+              "description": "Standard deviation values",
+              "name": "stdev"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Maximum of (H-L, |H-Prev Close|, |L-Prev Close|)",
+          "full_name": "True Range",
+          "name": "trange",
+          "outputs": [
+            {
+              "description": "True Range values",
+              "name": "trange"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures downside volatility",
+          "full_name": "Ulcer Index",
+          "name": "ui",
+          "outputs": [
+            {
+              "description": "Ulcer Index values",
+              "name": "ui"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Squared standard deviation",
+          "full_name": "Variance",
+          "name": "variance",
+          "outputs": [
+            {
+              "description": "Variance values",
+              "name": "variance"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Ratio of short-horizon to long-horizon realized volatility",
+          "full_name": "Volatility Regime Ratio",
+          "name": "volatility_regime_ratio",
+          "outputs": [
+            {
+              "description": "Short/long volatility ratio",
+              "name": "volatility_regime_ratio"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Short volatility window",
+              "max": 300,
+              "min": 5,
+              "name": "short_window",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 60,
+              "description": "Long volatility window",
+              "max": 600,
+              "min": 10,
+              "name": "long_window",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "category": "volume",
+      "count": 14,
+      "indicators": [
+        {
+          "deprecated_since": null,
+          "description": "Measures cumulative money flow",
+          "full_name": "Accumulation/Distribution Line",
+          "name": "ad",
+          "outputs": [
+            {
+              "description": "A/D Line values",
+              "name": "ad"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Momentum of A/D line",
+          "full_name": "Chaikin A/D Oscillator",
+          "name": "adosc",
+          "outputs": [
+            {
+              "description": "A/D Oscillator values",
+              "name": "adosc"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 3,
+              "description": "Fast EMA period",
+              "max": 50,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 10,
+              "description": "Slow EMA period",
+              "max": 100,
+              "min": 1,
+              "name": "slow",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures money flow over a period",
+          "full_name": "Chaikin Money Flow",
+          "name": "cmf",
+          "outputs": [
+            {
+              "description": "CMF values (-1 to 1)",
+              "name": "cmf"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Rolling probability of reversal after low-volume bars",
+          "full_name": "Dry-Up Reversal Hint",
+          "name": "dry_up_reversal_hint",
+          "outputs": [
+            {
+              "description": "Dry-up reversal probability (0-1)",
+              "name": "dry_up_reversal_hint"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 120,
+              "description": "Lookback window",
+              "max": 1000,
+              "min": 20,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 0.2,
+              "description": "Dry-up volume quantile",
+              "max": 0.5,
+              "min": 0.01,
+              "name": "quantile",
+              "type": "float"
+            },
+            {
+              "choices": null,
+              "default": 1,
+              "description": "Bars waited before reversal is evaluated",
+              "max": 10,
+              "min": 1,
+              "name": "reversal_bars",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Combines price change and volume",
+          "full_name": "Elder's Force Index",
+          "name": "efi",
+          "outputs": [
+            {
+              "description": "EFI values",
+              "name": "efi"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 13,
+              "description": "EMA period",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Price movement per unit volume",
+          "full_name": "Ease of Movement",
+          "name": "eom",
+          "outputs": [
+            {
+              "description": "EOM values",
+              "name": "eom"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Smoothing period",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 100000000,
+              "description": "Volume divisor",
+              "max": 1000000000,
+              "min": 1,
+              "name": "divisor",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Volume-based trend indicator",
+          "full_name": "Klinger Volume Oscillator",
+          "name": "kvo",
+          "outputs": [
+            {
+              "description": "Klinger Volume Oscillator",
+              "name": "KVO"
+            },
+            {
+              "description": "Signal line",
+              "name": "KVOs"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 34,
+              "description": "Fast EMA period",
+              "max": 100,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 55,
+              "description": "Slow EMA period",
+              "max": 200,
+              "min": 1,
+              "name": "slow",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 13,
+              "description": "Signal line period",
+              "max": 50,
+              "min": 1,
+              "name": "signal",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Volume-weighted RSI",
+          "full_name": "Money Flow Index",
+          "name": "mfi",
+          "outputs": [
+            {
+              "description": "MFI values (0-100)",
+              "name": "mfi"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 100,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Tracks price on declining volume days",
+          "full_name": "Negative Volume Index",
+          "name": "nvi",
+          "outputs": [
+            {
+              "description": "NVI values",
+              "name": "nvi"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 255,
+              "description": "EMA period",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 1000,
+              "description": "Initial value",
+              "max": 10000,
+              "min": 1,
+              "name": "initial",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Cumulative volume based on price direction",
+          "full_name": "On Balance Volume",
+          "name": "obv",
+          "outputs": [
+            {
+              "description": "OBV values",
+              "name": "obv"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Tracks price on rising volume days",
+          "full_name": "Positive Volume Index",
+          "name": "pvi",
+          "outputs": [
+            {
+              "description": "PVI values",
+              "name": "pvi"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 255,
+              "description": "EMA period",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 1000,
+              "description": "Initial value",
+              "max": 10000,
+              "min": 1,
+              "name": "initial",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "MACD for volume",
+          "full_name": "Percentage Volume Oscillator",
+          "name": "pvo",
+          "outputs": [
+            {
+              "description": "PVO line",
+              "name": "PVO"
+            },
+            {
+              "description": "Signal line",
+              "name": "PVOs"
+            },
+            {
+              "description": "Histogram",
+              "name": "PVOh"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 12,
+              "description": "Fast EMA period",
+              "max": 100,
+              "min": 1,
+              "name": "fast",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 26,
+              "description": "Slow EMA period",
+              "max": 200,
+              "min": 1,
+              "name": "slow",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 9,
+              "description": "Signal line period",
+              "max": 50,
+              "min": 1,
+              "name": "signal",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Cumulative volume adjusted by price change %",
+          "full_name": "Price-Volume Trend",
+          "name": "pvt",
+          "outputs": [
+            {
+              "description": "PVT values",
+              "name": "pvt"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "MA weighted by volume",
+          "full_name": "Volume Weighted Moving Average",
+          "name": "vwma",
+          "outputs": [
+            {
+              "description": "VWMA values",
+              "name": "vwma"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close",
+            "volume"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "category": "utils",
+      "count": 23,
+      "indicators": [
+        {
+          "deprecated_since": null,
+          "description": "(Open + High + Low + Close) / 4",
+          "full_name": "Average Price",
+          "name": "avgprice",
+          "outputs": [
+            {
+              "description": "Average price",
+              "name": "avgprice"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "open",
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Rolling share of bars that break prior channel highs/lows",
+          "full_name": "Breakout Frequency",
+          "name": "breakout_frequency",
+          "outputs": [
+            {
+              "description": "Breakout ratio (0-1)",
+              "name": "breakout_frequency"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Channel lookback",
+              "max": 300,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 50,
+              "description": "Frequency window",
+              "max": 500,
+              "min": 5,
+              "name": "window",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Rolling probability that return signs continue",
+          "full_name": "Directional Persistence",
+          "name": "directional_persistence",
+          "outputs": [
+            {
+              "description": "Persistence ratio (0-1)",
+              "name": "directional_persistence"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 50,
+              "description": "Lookback window",
+              "max": 500,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Drawdown from peak",
+          "full_name": "Drawdown",
+          "name": "drawdown",
+          "outputs": [
+            {
+              "description": "Drawdown",
+              "name": "DD"
+            },
+            {
+              "description": "Drawdown %",
+              "name": "DDp"
+            },
+            {
+              "description": "Maximum drawdown",
+              "name": "DDmax"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Net directional move divided by cumulative absolute move",
+          "full_name": "Efficiency Ratio",
+          "name": "efficiency_ratio",
+          "outputs": [
+            {
+              "description": "Efficiency ratio (0-1)",
+              "name": "efficiency_ratio"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 50,
+              "description": "Lookback window",
+              "max": 500,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Shannon entropy of price distribution",
+          "full_name": "Entropy",
+          "name": "entropy",
+          "outputs": [
+            {
+              "description": "Entropy values",
+              "name": "entropy"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 10,
+              "description": "Period length",
+              "max": 100,
+              "min": 2,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 2,
+              "description": "Logarithm base",
+              "max": 10,
+              "min": 2,
+              "name": "base",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Rolling share of breakouts that mean-revert within confirm bars",
+          "full_name": "False Breakout Frequency",
+          "name": "false_breakout_frequency",
+          "outputs": [
+            {
+              "description": "False-breakout ratio (0-1)",
+              "name": "false_breakout_frequency"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 20,
+              "description": "Channel lookback",
+              "max": 300,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 5,
+              "description": "Bars to confirm false break",
+              "max": 30,
+              "min": 1,
+              "name": "confirm_bars",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 50,
+              "description": "Frequency window",
+              "max": 500,
+              "min": 5,
+              "name": "window",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low",
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures tailedness of distribution",
+          "full_name": "Kurtosis",
+          "name": "kurtosis",
+          "outputs": [
+            {
+              "description": "Kurtosis values",
+              "name": "kurtosis"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 4,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Angle of linear regression line in degrees",
+          "full_name": "Linear Regression Angle",
+          "name": "linearreg_angle",
+          "outputs": [
+            {
+              "description": "Regression angle (degrees)",
+              "name": "angle"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Intercept of linear regression line",
+          "full_name": "Linear Regression Intercept",
+          "name": "linearreg_intercept",
+          "outputs": [
+            {
+              "description": "Regression intercept",
+              "name": "intercept"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Slope of linear regression line",
+          "full_name": "Linear Regression Slope",
+          "name": "linearreg_slope",
+          "outputs": [
+            {
+              "description": "Regression slope",
+              "name": "slope"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Logarithmic return",
+          "full_name": "Log Return",
+          "name": "log_return",
+          "outputs": [
+            {
+              "description": "Log return values",
+              "name": "log_return"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 1,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": false,
+              "description": "Cumulative sum",
+              "max": null,
+              "min": null,
+              "name": "cumulative",
+              "type": "bool"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Maximum value over rolling window",
+          "full_name": "Highest Value over Period",
+          "name": "max",
+          "outputs": [
+            {
+              "description": "Maximum values",
+              "name": "max"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Median value over rolling window",
+          "full_name": "Rolling Median",
+          "name": "median",
+          "outputs": [
+            {
+              "description": "Median values",
+              "name": "median"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "(High + Low) / 2",
+          "full_name": "Median Price",
+          "name": "medprice",
+          "outputs": [
+            {
+              "description": "Median price",
+              "name": "medprice"
+            }
+          ],
+          "params": [],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "high",
+            "low"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Minimum value over rolling window",
+          "full_name": "Lowest Value over Period",
+          "name": "min",
+          "outputs": [
+            {
+              "description": "Minimum values",
+              "name": "min"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Percentage return",
+          "full_name": "Percent Return",
+          "name": "percent_return",
+          "outputs": [
+            {
+              "description": "Percent return values",
+              "name": "percent_return"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 1,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": false,
+              "description": "Cumulative product",
+              "max": null,
+              "min": null,
+              "name": "cumulative",
+              "type": "bool"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Quantile value over rolling window",
+          "full_name": "Rolling Quantile",
+          "name": "quantile",
+          "outputs": [
+            {
+              "description": "Quantile values",
+              "name": "quantile"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            },
+            {
+              "choices": null,
+              "default": 0.5,
+              "description": "Quantile (0-1)",
+              "max": 1,
+              "min": 0,
+              "name": "q",
+              "type": "float"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Lag-1 autocorrelation of return signs",
+          "full_name": "Sign Autocorrelation",
+          "name": "sign_autocorrelation",
+          "outputs": [
+            {
+              "description": "Autocorrelation (-1 to 1)",
+              "name": "sign_autocorrelation"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 50,
+              "description": "Lookback window",
+              "max": 500,
+              "min": 5,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Measures asymmetry of distribution",
+          "full_name": "Skewness",
+          "name": "skew",
+          "outputs": [
+            {
+              "description": "Skewness values",
+              "name": "skew"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 3,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Sum over rolling window",
+          "full_name": "Summation",
+          "name": "sum",
+          "outputs": [
+            {
+              "description": "Sum values",
+              "name": "sum"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Linear regression endpoint forecast",
+          "full_name": "Time Series Forecast",
+          "name": "tsf",
+          "outputs": [
+            {
+              "description": "Time series forecast",
+              "name": "tsf"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 14,
+              "description": "Period length",
+              "max": 500,
+              "min": 1,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        },
+        {
+          "deprecated_since": null,
+          "description": "Number of standard deviations from mean",
+          "full_name": "Z-Score",
+          "name": "zscore",
+          "outputs": [
+            {
+              "description": "Z-score values",
+              "name": "zscore"
+            }
+          ],
+          "params": [
+            {
+              "choices": null,
+              "default": 30,
+              "description": "Period length",
+              "max": 500,
+              "min": 2,
+              "name": "length",
+              "type": "int"
+            }
+          ],
+          "remove_after": null,
+          "replacement": null,
+          "required_columns": [
+            "close"
+          ],
+          "status": "active",
+          "version": "1.0.0"
+        }
+      ]
+    }
+  ],
+  "total_indicators": 100
+}
