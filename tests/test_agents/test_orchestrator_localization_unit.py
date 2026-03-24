@@ -36,6 +36,19 @@ def test_strategy_prompt_profile_compact_omits_spec_and_schema() -> None:
     assert "[DSL JSON SCHEMA]" not in text
 
 
+def test_strategy_artifact_ops_instructions_include_trade_snapshot_contract() -> None:
+    text = build_strategy_static_instructions(
+        language="en",
+        phase_stage="artifact_ops",
+        prompt_profile="compact",
+    )
+
+    assert "backtest_trade_snapshots" in text
+    assert "## 问题诊断" in text
+    assert "## 证据 Bar" in text
+    assert "## 修改建议" in text
+
+
 @pytest.mark.asyncio
 async def test_resolve_user_locale_prefers_user_setting_over_fallback() -> None:
     class _Db:
@@ -71,7 +84,9 @@ def test_kyc_fallback_choice_prompt_uses_chinese_when_locale_is_zh() -> None:
     assert any("保守" in str(option.get("label", "")) for option in payload["options"])
 
 
-def test_deployment_fallback_confirmation_prompt_uses_chinese_when_locale_is_zh() -> None:
+def test_deployment_fallback_confirmation_prompt_uses_chinese_when_locale_is_zh() -> (
+    None
+):
     handler = DeploymentHandler()
     ctx = PhaseContext(
         user_id=uuid4(),
@@ -85,5 +100,7 @@ def test_deployment_fallback_confirmation_prompt_uses_chinese_when_locale_is_zh(
 
     assert payload is not None
     assert "确认" in str(payload.get("question", ""))
-    option_labels = [str(option.get("label", "")) for option in payload.get("options", [])]
+    option_labels = [
+        str(option.get("label", "")) for option in payload.get("options", [])
+    ]
     assert "确认部署" in option_labels

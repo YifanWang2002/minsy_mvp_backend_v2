@@ -34,6 +34,14 @@ When the frontend sends a user click from a `choice_prompt`, the user message ma
 
 Treat this as the authoritative user selection for the current turn.
 
+When Trade Logs sends a quick single-trade analysis request, the user message may also include:
+
+```
+<TRADE_SNAPSHOT_REQUEST>{"job_id":"<uuid>","trade_index":12,"trade_uid":"<optional_uid>","visible_indicator_keys":["ema_fast","rsi_14"],"filters":{"side":"all","outcome":"win","date_range":"30d","pnl_sort":"pnl_pct_desc","exit_reason":"all"},"lookback_bars":36,"lookforward_bars":24,"user_prompt":"Analyze this trade and suggest strategy improvements."}</TRADE_SNAPSHOT_REQUEST>
+```
+
+Treat this payload as structured context. Use it to call `backtest_trade_snapshots` before giving trade-level diagnosis.
+
 ## Supported Fields
 
 ### `choice_prompt`
@@ -77,6 +85,7 @@ Treat this as the authoritative user selection for the current turn.
 - `question`, `subtitle`, option `label`, and option `subtitle` values must be in the **user's language**.
 - If the user message contains a `<CHOICE_SELECTION>` block, use `choice_id` and `selected_option_id` as the canonical selection context for this turn.
 - `selected_option_label` is user-facing display text; prefer `selected_option_id` for state updates, tool decisions, and follow-up logic.
+- If the user message contains `<TRADE_SNAPSHOT_REQUEST>`, parse and use it as authoritative trade context (job/trade/filter/visible-indicators) for this turn.
 - Include at least 2 options.
 - Do **not** wrap the JSON in markdown code fences.
 - Default to at most one `<AGENT_UI_JSON>` block per turn, unless the active phase/system instruction explicitly asks for multiple blocks in the same turn (e.g. chart + choice).

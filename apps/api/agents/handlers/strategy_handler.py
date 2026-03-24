@@ -73,6 +73,9 @@ class StrategyHandler:
             pre_strategy_fields=pre_profile,
             pre_strategy_runtime=pre_runtime,
             session_id=str(ctx.session_id),
+            choice_selection=ctx.turn_context.get("choice_selection"),
+            trade_snapshot_request=ctx.turn_context.get("trade_snapshot_request"),
+            pending_trade_patch=profile.get("pending_trade_patch"),
         )
         return PromptPieces(
             instructions=instructions,
@@ -109,7 +112,27 @@ class StrategyHandler:
             if validated:
                 if validated.get("strategy_confirmed") is True:
                     strategy_confirmed_this_turn = True
-                profile.update(validated)
+                for key, value in validated.items():
+                    if key == "pending_trade_patch":
+                        if value is None:
+                            profile.pop("pending_trade_patch", None)
+                        else:
+                            profile["pending_trade_patch"] = value
+                        continue
+                    profile[key] = value
+
+        pending_trade_patch = profile.get("pending_trade_patch")
+        strategy_id = str(profile.get("strategy_id", "")).strip()
+        if isinstance(pending_trade_patch, dict):
+            pending_strategy_id = str(
+                pending_trade_patch.get("strategy_id", "")
+            ).strip()
+            if (
+                strategy_id
+                and pending_strategy_id
+                and pending_strategy_id != strategy_id
+            ):
+                profile.pop("pending_trade_patch", None)
 
         missing = self._compute_missing(profile)
         completed = False
@@ -179,7 +202,92 @@ class StrategyHandler:
         strategy_confirmed = _coerce_bool(patch.get("strategy_confirmed"))
         if strategy_confirmed is not None:
             output["strategy_confirmed"] = strategy_confirmed
+
+        if _coerce_bool(patch.get("clear_pending_trade_patch")) is True:
+            output["pending_trade_patch"] = None
+
+        if "pending_trade_patch" in patch:
+            raw_pending = patch.get("pending_trade_patch")
+            if raw_pending is None:
+                output["pending_trade_patch"] = None
+            else:
+                normalized_pending = self._normalize_pending_trade_patch(raw_pending)
+                if normalized_pending is not None:
+                    output["pending_trade_patch"] = normalized_pending
         return output
+
+    def _normalize_pending_trade_patch(
+        self,
+        payload: Any,
+    ) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+
+        strategy_id = payload.get("strategy_id")
+        if not isinstance(strategy_id, str) or not strategy_id.strip():
+            return None
+        strategy_id = strategy_id.strip()
+        try:
+            UUID(strategy_id)
+        except ValueError:
+            return None
+
+        patch_ops_raw = payload.get("patch_ops")
+        if not isinstance(patch_ops_raw, list) or not patch_ops_raw:
+            return None
+        patch_ops: list[dict[str, Any]] = []
+        for item in patch_ops_raw:
+            if isinstance(item, dict):
+                patch_ops.append(dict(item))
+        if not patch_ops:
+            return None
+
+        normalized: dict[str, Any] = {
+            "strategy_id": strategy_id,
+            "patch_ops": patch_ops,
+        }
+
+        source_trade_raw = payload.get("source_trade")
+        if isinstance(source_trade_raw, dict):
+            source_trade: dict[str, Any] = {}
+            job_id = source_trade_raw.get("job_id")
+            if isinstance(job_id, str) and job_id.strip():
+                source_trade["job_id"] = job_id.strip()
+            trade_index = source_trade_raw.get("trade_index")
+            if isinstance(trade_index, int) and trade_index >= 0:
+                source_trade["trade_index"] = trade_index
+            elif isinstance(trade_index, str) and trade_index.strip().isdigit():
+                source_trade["trade_index"] = int(trade_index.strip())
+            trade_uid = source_trade_raw.get("trade_uid")
+            if isinstance(trade_uid, str) and trade_uid.strip():
+                source_trade["trade_uid"] = trade_uid.strip()
+            if source_trade:
+                normalized["source_trade"] = source_trade
+
+        backtest_request_raw = payload.get("backtest_request")
+        if isinstance(backtest_request_raw, dict):
+            backtest_request: dict[str, Any] = {}
+            for key in (
+                "start_date",
+                "end_date",
+                "initial_capital",
+                "commission_rate",
+                "slippage_bps",
+            ):
+                value = backtest_request_raw.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    stripped = value.strip()
+                    if stripped:
+                        backtest_request[key] = stripped
+                    continue
+                if isinstance(value, int | float):
+                    backtest_request[key] = value
+            if backtest_request:
+                normalized["backtest_request"] = backtest_request
+
+        return normalized
 
     async def _prepare_deployment_artifacts(
         self,
@@ -260,7 +368,8 @@ class StrategyHandler:
         )
         deployment_runtime_defaults = {
             "strategy_id": strategy_id,
-            "strategy_name": str(scope_updates.get("strategy_name", "")).strip() or None,
+            "strategy_name": str(scope_updates.get("strategy_name", "")).strip()
+            or None,
             "deployment_status": "blocked",
             "broker_readiness_status": "unknown",
             "selected_broker_account_id": None,
@@ -338,7 +447,6 @@ def _build_strategy_tools() -> list[dict[str, Any]]:
                 "strategy_get_version_dsl",
                 "strategy_diff_versions",
                 "strategy_rollback_dsl",
-                "get_indicator_detail",
                 "get_indicator_catalog",
             ],
             "require_approval": "never",

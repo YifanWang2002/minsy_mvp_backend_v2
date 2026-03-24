@@ -14,6 +14,11 @@ from uuid import UUID
 import anyio
 from mcp.server.fastmcp import Context, FastMCP
 
+from packages.domain.strategy.feature.contracts import (
+    dsl_output_alias_map,
+    to_dsl_output_alias,
+    to_dsl_param_name,
+)
 from packages.domain.strategy.feature.indicators import IndicatorCategory, IndicatorRegistry
 from packages.domain.exceptions import DomainError
 from packages.domain.strategy import (
@@ -53,12 +58,14 @@ TOOL_NAMES: tuple[str, ...] = (
     "strategy_get_version_dsl",
     "strategy_diff_versions",
     "strategy_rollback_dsl",
-    "get_indicator_detail",
     "get_indicator_catalog",
 )
 
 _SKILL_DIR = Path(__file__).resolve().parent / "skills" / "indicators"
-_EXCLUDED_CATALOG_CATEGORIES: set[str] = {IndicatorCategory.CANDLE.value}
+_ENABLE_INDICATOR_SKILLS = (
+    os.getenv("ENABLE_INDICATOR_SKILLS", "").strip().lower() in {"1", "true", "yes"}
+)
+_EXCLUDED_CATALOG_CATEGORIES: set[str] = set()
 _OWNERSHIP_MISMATCH_ERROR = (
     "Strategy ownership mismatch for the provided session/user context."
 )
@@ -68,27 +75,6 @@ _CATEGORY_DESCRIPTIONS: dict[str, str] = {
     IndicatorCategory.VOLATILITY.value: "Volatility and range indicators.",
     IndicatorCategory.VOLUME.value: "Volume and money-flow indicators.",
     IndicatorCategory.UTILS.value: "Utility/statistical indicators.",
-}
-_INDICATOR_DSL_OUTPUT_ALIASES: dict[str, dict[str, str]] = {
-    "macd": {
-        "MACD": "macd_line",
-        "MACDs": "signal",
-        "MACDh": "histogram",
-    },
-    "bbands": {
-        "BBU": "upper",
-        "BBM": "middle",
-        "BBL": "lower",
-    },
-    "stoch": {
-        "STOCHk": "k",
-        "STOCHd": "d",
-    },
-    "adx": {
-        "ADX": "adx",
-        "DMP": "dmp",
-        "DMN": "dmn",
-    },
 }
 _VALIDATION_RETRY_COUNTER_KEY_PREFIX = "strategy:validation_retry:"
 _VALIDATION_RETRY_COUNTER_TTL_SECONDS = 60 * 10
@@ -599,6 +585,8 @@ def _revision_snapshot(revision: Any) -> dict[str, Any]:
 
 
 def _read_indicator_skill(indicator: str) -> dict[str, Any] | None:
+    if not _ENABLE_INDICATOR_SKILLS:
+        return None
     file_path = _SKILL_DIR / f"{indicator.strip().lower()}.md"
     if not file_path.is_file():
         return None
@@ -647,12 +635,12 @@ def _indicator_metadata_snapshot(indicator: str) -> dict[str, Any] | None:
     if metadata is None:
         return None
 
-    alias_mapping = _INDICATOR_DSL_OUTPUT_ALIASES.get(indicator, {})
+    alias_mapping = dsl_output_alias_map(indicator)
     outputs: list[dict[str, Any]] = []
     preferred_outputs: list[str] = []
     for output in metadata.outputs:
         output_name = output.name
-        alias = alias_mapping.get(output_name)
+        alias = to_dsl_output_alias(indicator, output_name)
         item: dict[str, Any] = {
             "name": output_name,
             "description": output.description,
@@ -682,11 +670,15 @@ def _indicator_metadata_snapshot(indicator: str) -> dict[str, Any] | None:
         "outputs": outputs,
         "dsl_preferred_outputs": preferred_outputs,
         "required_columns": list(metadata.required_columns),
+        "version": str(getattr(metadata, "version", "1.0.0")),
+        "status": str(getattr(metadata, "status", "active")),
+        "deprecated_since": getattr(metadata, "deprecated_since", None),
+        "replacement": getattr(metadata, "replacement", None),
+        "remove_after": getattr(metadata, "remove_after", None),
     }
     if alias_mapping:
         payload["dsl_output_alias_map"] = dict(alias_mapping)
     return payload
-
 
 def _visible_catalog_categories() -> list[IndicatorCategory]:
     categories: list[IndicatorCategory] = []
@@ -851,24 +843,6 @@ def _parse_expected_version(expected_version: int) -> int | None:
     return None
 
 
-def _to_dsl_param_name(*, factor_type: str, indicator_param_name: str) -> str:
-    mapping: dict[str, str] = {
-        "length": "period",
-        "std": "std_dev",
-        "fastk_period": "k_period",
-        "slowk_period": "k_smooth",
-        "slowd_period": "d_period",
-    }
-    if factor_type in {"ema", "sma", "wma", "dema", "tema", "kama", "rsi", "atr", "bbands"}:
-        if indicator_param_name == "length":
-            return "period"
-    if factor_type == "bbands" and indicator_param_name == "std":
-        return "std_dev"
-    if factor_type == "stoch":
-        return mapping.get(indicator_param_name, indicator_param_name)
-    return mapping.get(indicator_param_name, indicator_param_name)
-
-
 def _estimate_step(
     *,
     value_type: str,
@@ -897,7 +871,7 @@ def get_indicator_detail(
     indicator: str = "",
     indicator_list: list[str] | None = None,
 ) -> str:
-    """Return indicator skill detail for one or more indicators."""
+    """Return indicator metadata detail for one or more indicators."""
 
     requested = _normalize_indicator_inputs(
         indicator=indicator,
@@ -915,24 +889,24 @@ def get_indicator_detail(
     missing: list[str] = []
 
     for name in requested:
-        skill = _read_indicator_skill(name)
         metadata = _indicator_metadata_snapshot(name)
+        skill = _read_indicator_skill(name)
         if skill is None and metadata is None:
             missing.append(name)
             continue
 
         category = (metadata or {}).get("category") or (skill or {}).get("category") or ""
         summary = (skill or {}).get("summary") or (metadata or {}).get("description") or ""
-        found.append(
-            {
-                "indicator": name,
-                "category": category,
-                "summary": summary,
-                "skill_path": (skill or {}).get("skill_path", ""),
-                "content": (skill or {}).get("content", ""),
-                "registry": metadata,
-            }
-        )
+        entry: dict[str, Any] = {
+            "indicator": name,
+            "category": category,
+            "summary": summary,
+            "registry": metadata,
+        }
+        if _ENABLE_INDICATOR_SKILLS:
+            entry["skill_path"] = (skill or {}).get("skill_path", "")
+            entry["content"] = (skill or {}).get("content", "")
+        found.append(entry)
 
     if not found:
         return _payload(
@@ -955,6 +929,7 @@ def get_indicator_detail(
         data={
             "requested_indicators": requested,
             "count": len(found),
+            "skills_enabled": _ENABLE_INDICATOR_SKILLS,
             "indicators": found,
             "missing": missing,
             "available_categories": [
@@ -1016,18 +991,23 @@ def get_indicator_catalog(category: str = "") -> str:
             if snapshot is None:
                 continue
             skill = _read_indicator_skill(name)
-            indicators.append(
-                {
-                    "indicator": snapshot["name"],
-                    "full_name": snapshot["full_name"],
-                    "description": snapshot["description"],
-                    "params": snapshot["params"],
-                    "outputs": snapshot["outputs"],
-                    "required_columns": snapshot["required_columns"],
-                    "skill_summary": (skill or {}).get("summary", ""),
-                    "skill_path": (skill or {}).get("skill_path", ""),
-                }
-            )
+            item: dict[str, Any] = {
+                "indicator": snapshot["name"],
+                "full_name": snapshot["full_name"],
+                "description": snapshot["description"],
+                "params": snapshot["params"],
+                "outputs": snapshot["outputs"],
+                "required_columns": snapshot["required_columns"],
+                "version": snapshot["version"],
+                "status": snapshot["status"],
+                "deprecated_since": snapshot["deprecated_since"],
+                "replacement": snapshot["replacement"],
+                "remove_after": snapshot["remove_after"],
+            }
+            if _ENABLE_INDICATOR_SKILLS:
+                item["skill_summary"] = (skill or {}).get("summary", "")
+                item["skill_path"] = (skill or {}).get("skill_path", "")
+            indicators.append(item)
 
         if not indicators and requested:
             grouped.append(
@@ -1057,6 +1037,7 @@ def get_indicator_catalog(category: str = "") -> str:
         ok=True,
         data={
             "category_filter": requested or None,
+            "skills_enabled": _ENABLE_INDICATOR_SKILLS,
             "available_categories": available_categories,
             "excluded_categories": sorted(_EXCLUDED_CATALOG_CATEGORIES),
             "count": total,
@@ -1426,10 +1407,7 @@ async def strategy_list_tunable_params(
             continue
 
         for param in metadata.params:
-            dsl_param = _to_dsl_param_name(
-                factor_type=factor_type,
-                indicator_param_name=param.name,
-            )
+            dsl_param = to_dsl_param_name(factor_type, param.name)
             current_value = params.get(dsl_param, param.default)
             tunable = param.type in {"int", "float"} or bool(param.choices)
             tunable_params.append(
@@ -1888,7 +1866,6 @@ async def strategy_rollback_dsl(
 
 def register_strategy_tools(mcp: FastMCP) -> None:
     """Register strategy-related tools."""
-    mcp.tool()(get_indicator_detail)
     mcp.tool()(get_indicator_catalog)
     mcp.tool()(strategy_validate_dsl)
     mcp.tool()(strategy_upsert_dsl)

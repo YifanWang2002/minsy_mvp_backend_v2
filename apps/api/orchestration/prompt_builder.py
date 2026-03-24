@@ -60,6 +60,9 @@ class PromptBuilderMixin:
             user_runtime_policy=user_runtime_policy,
         )
         choice_selection = self._extract_choice_selection_from_message(payload.message)
+        trade_snapshot_request = self._extract_trade_snapshot_request_from_message(
+            payload.message
+        )
         strategy_prompt_profile = self._resolve_strategy_prompt_profile(
             session=session,
             phase=phase_before,
@@ -67,6 +70,8 @@ class PromptBuilderMixin:
         turn_context: dict[str, Any] = {
             "choice_selection": choice_selection,
         }
+        if isinstance(trade_snapshot_request, dict):
+            turn_context["trade_snapshot_request"] = trade_snapshot_request
         if strategy_prompt_profile is not None:
             turn_context["strategy_prompt_profile"] = strategy_prompt_profile
         ctx = PhaseContext(
@@ -153,7 +158,9 @@ class PromptBuilderMixin:
             else {}
         )
 
-        preference_view = await TradingPreferenceService(self.db).get_view(user_id=user_id)
+        preference_view = await TradingPreferenceService(self.db).get_view(
+            user_id=user_id
+        )
         deploy_defaults = (
             dict(preference_view.deploy_defaults)
             if isinstance(preference_view.deploy_defaults, dict)
@@ -299,7 +306,9 @@ class PromptBuilderMixin:
             phase=Phase.DEPLOYMENT.value,
         )
         raw_status = profile.get("deployment_status")
-        status = raw_status.strip().lower() if isinstance(raw_status, str) else "blocked"
+        status = (
+            raw_status.strip().lower() if isinstance(raw_status, str) else "blocked"
+        )
         if status not in {"ready", "deployed", "blocked"}:
             status = "blocked"
 
@@ -309,7 +318,13 @@ class PromptBuilderMixin:
             if isinstance(raw_broker_status, str)
             else "unknown"
         )
-        if broker_status not in {"unknown", "no_broker", "needs_choice", "ready", "blocked"}:
+        if broker_status not in {
+            "unknown",
+            "no_broker",
+            "needs_choice",
+            "ready",
+            "blocked",
+        }:
             broker_status = "unknown"
 
         raw_confirmation = profile.get("deployment_confirmation_status")
@@ -475,8 +490,8 @@ class PromptBuilderMixin:
                     if text.lower().startswith("data:image/"):
                         output[str(key)] = f"[redacted_data_url len={len(text)}]"
                         continue
-                output[str(key)] = PromptBuilderMixin._redact_openai_input_payload_for_trace(
-                    item
+                output[str(key)] = (
+                    PromptBuilderMixin._redact_openai_input_payload_for_trace(item)
                 )
             return output
         return value
@@ -488,8 +503,10 @@ class PromptBuilderMixin:
         payload = copy.deepcopy(stream_request_kwargs)
         for key in ("input_payload", "input"):
             if key in payload:
-                payload[key] = PromptBuilderMixin._redact_openai_input_payload_for_trace(
-                    payload[key]
+                payload[key] = (
+                    PromptBuilderMixin._redact_openai_input_payload_for_trace(
+                        payload[key]
+                    )
                 )
 
         tools = payload.get("tools")
@@ -609,7 +626,10 @@ class PromptBuilderMixin:
             if isinstance(getattr(prompt, "reasoning", None), dict)
             else {}
         )
-        if isinstance(resolved_effort, str) and resolved_effort in _EXECUTION_POLICY_ALLOWED_EFFORTS:
+        if (
+            isinstance(resolved_effort, str)
+            and resolved_effort in _EXECUTION_POLICY_ALLOWED_EFFORTS
+        ):
             base_reasoning["effort"] = resolved_effort
         if base_reasoning:
             resolved_reasoning = base_reasoning
@@ -731,7 +751,11 @@ class PromptBuilderMixin:
 
     def _assert_allowed_execution_model(self, model: str) -> str:
         normalized = model.strip().lower()
-        allowed = {item.strip().lower() for item in settings.openai_allowed_models if item.strip()}
+        allowed = {
+            item.strip().lower()
+            for item in settings.openai_allowed_models
+            if item.strip()
+        }
         if normalized and normalized in allowed:
             return normalized
         raise HTTPException(
@@ -747,7 +771,11 @@ class PromptBuilderMixin:
 
     def _coerce_allowed_execution_model(self, model: str) -> str:
         normalized = model.strip().lower()
-        allowed = {item.strip().lower() for item in settings.openai_allowed_models if item.strip()}
+        allowed = {
+            item.strip().lower()
+            for item in settings.openai_allowed_models
+            if item.strip()
+        }
         if normalized and normalized in allowed:
             return normalized
         fallback = settings.openai_response_model.strip().lower()
@@ -933,4 +961,91 @@ class PromptBuilderMixin:
         label = payload.get("selected_option_label")
         if isinstance(label, str) and label.strip():
             normalized["selected_option_label"] = label.strip()
+        return normalized
+
+    @staticmethod
+    def _extract_trade_snapshot_request_from_message(
+        text: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(text, str) or not text.strip():
+            return None
+        match = re.search(
+            r"<\s*TRADE_SNAPSHOT_REQUEST\s*>([\s\S]*?)<\s*/\s*TRADE_SNAPSHOT_REQUEST\s*>",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        raw_json = match.group(1)
+        if not isinstance(raw_json, str) or not raw_json.strip():
+            return None
+        try:
+            payload = json.loads(raw_json.strip())
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+
+        job_id = payload.get("job_id")
+        trade_index_raw = payload.get("trade_index")
+        if not isinstance(job_id, str) or not job_id.strip():
+            return None
+        try:
+            trade_index = int(trade_index_raw)
+        except (TypeError, ValueError):
+            return None
+        if trade_index < 0:
+            return None
+
+        normalized: dict[str, Any] = {
+            "job_id": job_id.strip(),
+            "trade_index": trade_index,
+        }
+
+        trade_uid = payload.get("trade_uid")
+        if isinstance(trade_uid, str) and trade_uid.strip():
+            normalized["trade_uid"] = trade_uid.strip()
+
+        visible_raw = payload.get("visible_indicator_keys")
+        if isinstance(visible_raw, list):
+            visible_keys = [
+                str(item).strip()
+                for item in visible_raw
+                if isinstance(item, str) and item.strip()
+            ]
+            normalized["visible_indicator_keys"] = visible_keys
+        else:
+            normalized["visible_indicator_keys"] = []
+
+        filters_raw = payload.get("filters")
+        filters: dict[str, str] = {}
+        if isinstance(filters_raw, dict):
+            for key in (
+                "side",
+                "outcome",
+                "date_range",
+                "pnl_sort",
+                "exit_reason",
+            ):
+                value = filters_raw.get(key)
+                if isinstance(value, str) and value.strip():
+                    filters[key] = value.strip()
+        normalized["filters"] = filters
+
+        lookback_raw = payload.get("lookback_bars")
+        lookforward_raw = payload.get("lookforward_bars")
+        try:
+            lookback_bars = max(0, int(lookback_raw))
+        except (TypeError, ValueError):
+            lookback_bars = 0
+        try:
+            lookforward_bars = max(0, int(lookforward_raw))
+        except (TypeError, ValueError):
+            lookforward_bars = 0
+        normalized["lookback_bars"] = lookback_bars
+        normalized["lookforward_bars"] = lookforward_bars
+
+        user_prompt = payload.get("user_prompt")
+        if isinstance(user_prompt, str) and user_prompt.strip():
+            normalized["user_prompt"] = user_prompt.strip()
         return normalized

@@ -17,6 +17,16 @@ Stage objective:
 - Before any `backtest_create_job`, you must call `get_symbol_data_coverage` and bound `start_date/end_date` within `metadata.available_timerange.start/end`.
 - Before any `backtest_create_job`, also ensure the request stays within backend bar cap (`BACKTEST_MAX_BARS`); if it would exceed (commonly with long `1m` ranges), shorten range or raise timeframe first.
 - You may call backtest tools in this stage (`backtest_create_job`, `backtest_get_job`, and analytics tools like `backtest_entry_hour_pnl_heatmap`, `backtest_exit_reason_breakdown`, `backtest_rolling_metrics`) to evaluate and iterate.
+- For trade-level quick analysis (`trade_snapshot_request_present=true` in session state), call `backtest_trade_snapshots` first and only then output diagnosis; prefer `include_decision_trace=true`.
+- Trade quick analysis answer format must include:
+  - `## 问题诊断`
+  - `## 证据 Bar`
+  - `## 修改建议`
+- If `choice_selection.choice_id=trade_patch_apply_decision` and option is `apply_recommended_patch`, execute tool order:
+  1) `strategy_patch_dsl`
+  2) `backtest_create_job`
+  3) `backtest_get_job`
+  then return updated backtest interpretation in the same turn.
 - When backtest status is `done`, emit one `backtest_charts` AGENT_UI payload with `job_id` so frontend can render charts without extra text tokens.
 - If user explicitly confirms "ready to deploy", emit `<AGENT_STATE_PATCH>{"strategy_confirmed":true}</AGENT_STATE_PATCH>` so backend can advance phase automatically.
 - Do not re-collect already finalized schema fields unless user requests changes.

@@ -59,13 +59,15 @@ class PostProcessorMixin:
             existing_genui=selected_genui_payloads,
             mcp_tool_calls=final_mcp_tool_calls,
         )
-        selected_genui_payloads = await self._maybe_backfill_strategy_ref_from_validate_call(
-            phase=preparation.phase_before,
-            artifacts=preparation.artifacts,
-            existing_genui=selected_genui_payloads,
-            mcp_tool_calls=final_mcp_tool_calls,
-            session_id=session.id,
-            user_id=user.id,
+        selected_genui_payloads = (
+            await self._maybe_backfill_strategy_ref_from_validate_call(
+                phase=preparation.phase_before,
+                artifacts=preparation.artifacts,
+                existing_genui=selected_genui_payloads,
+                mcp_tool_calls=final_mcp_tool_calls,
+                session_id=session.id,
+                user_id=user.id,
+            )
         )
         selected_genui_payloads = self._maybe_auto_wrap_backtest_charts_genui(
             phase=preparation.phase_before,
@@ -154,12 +156,14 @@ class PostProcessorMixin:
         if kyc_status is None:
             kyc_status = await self._fetch_kyc_status(user.id)
 
-        assistant_text, stop_criteria_delta = self._maybe_apply_stop_criteria_placeholder(
-            session=session,
-            phase=preparation.phase_before,
-            phase_turn_count=preparation.phase_turn_count,
-            language=language,
-            assistant_text=assistant_text,
+        assistant_text, stop_criteria_delta = (
+            self._maybe_apply_stop_criteria_placeholder(
+                session=session,
+                phase=preparation.phase_before,
+                phase_turn_count=preparation.phase_turn_count,
+                language=language,
+                assistant_text=assistant_text,
+            )
         )
         if not assistant_text.strip():
             assistant_text = self._build_empty_turn_fallback_text(
@@ -216,7 +220,9 @@ class PostProcessorMixin:
             ),
             None,
         )
-        question = fallback_choice.get("question") if fallback_choice is not None else None
+        question = (
+            fallback_choice.get("question") if fallback_choice is not None else None
+        )
         if isinstance(question, str) and question.strip():
             return question.strip()
         return assistant_text
@@ -271,7 +277,9 @@ class PostProcessorMixin:
             )
             if isinstance(raw_usage, dict) and raw_usage:
                 resolved_model = (
-                    str(stream_state.completed_model or stream_state.request_model or "").strip()
+                    str(
+                        stream_state.completed_model or stream_state.request_model or ""
+                    ).strip()
                     or "unknown"
                 )
                 usage_reconcile_payload = {
@@ -358,7 +366,9 @@ class PostProcessorMixin:
                     "reasoning_effort": stream_state.request_reasoning_effort,
                     "raw_usage": fallback_usage,
                     "reasoning_tokens": int(turn_usage.get("reasoning_tokens") or 0),
-                    "cached_input_tokens": int(turn_usage.get("cached_input_tokens") or 0),
+                    "cached_input_tokens": int(
+                        turn_usage.get("cached_input_tokens") or 0
+                    ),
                     "cost_breakdown": (
                         dict(turn_usage.get("cost_breakdown"))
                         if isinstance(turn_usage.get("cost_breakdown"), dict)
@@ -379,8 +389,12 @@ class PostProcessorMixin:
                         "response_id": session.previous_response_id,
                         "resolved_model": usage_reconcile_payload.get("resolved_model"),
                         "reasoning_effort": stream_state.request_reasoning_effort,
-                        "reasoning_tokens": int(turn_usage.get("reasoning_tokens") or 0),
-                        "cached_input_tokens": int(turn_usage.get("cached_input_tokens") or 0),
+                        "reasoning_tokens": int(
+                            turn_usage.get("reasoning_tokens") or 0
+                        ),
+                        "cached_input_tokens": int(
+                            turn_usage.get("cached_input_tokens") or 0
+                        ),
                         "cost_breakdown": (
                             dict(turn_usage.get("cost_breakdown"))
                             if isinstance(turn_usage.get("cost_breakdown"), dict)
@@ -450,7 +464,10 @@ class PostProcessorMixin:
 
         stop_criteria_delta = post_process_result.stop_criteria_delta
         if isinstance(stop_criteria_delta, str) and stop_criteria_delta.strip():
-            if stream_state.text_delta_emitted and post_process_result.cleaned_text.strip():
+            if (
+                stream_state.text_delta_emitted
+                and post_process_result.cleaned_text.strip()
+            ):
                 yield self._sse(
                     "stream",
                     {
@@ -461,12 +478,9 @@ class PostProcessorMixin:
             else:
                 stop_criteria_delta = None
 
-        should_emit_terminal_text = (
-            post_process_result.assistant_text.strip()
-            and (
-                not stream_state.text_delta_emitted
-                or not post_process_result.cleaned_text.strip()
-            )
+        should_emit_terminal_text = post_process_result.assistant_text.strip() and (
+            not stream_state.text_delta_emitted
+            or not post_process_result.cleaned_text.strip()
         )
         if should_emit_terminal_text:
             yield self._sse(
@@ -533,7 +547,9 @@ class PostProcessorMixin:
     ) -> None:
         reconcile_task_id: str | None = None
         if usage_reconcile_payload is not None:
-            reconcile_task_id = enqueue_reconcile_billing_usage_event(usage_reconcile_payload)
+            reconcile_task_id = enqueue_reconcile_billing_usage_event(
+                usage_reconcile_payload
+            )
         reconcile_status = (
             "enqueued"
             if reconcile_task_id
@@ -579,7 +595,9 @@ class PostProcessorMixin:
             self._reset_usage_persist_silent_failure_window()
             return
 
-        failures_in_window, should_escalate = self._record_usage_persist_silent_failure()
+        failures_in_window, should_escalate = (
+            self._record_usage_persist_silent_failure()
+        )
         log_agent(
             "orchestrator",
             (
@@ -596,10 +614,15 @@ class PostProcessorMixin:
         limit = max(int(settings.billing_usage_persist_silent_failure_limit), 0)
         if limit <= 0:
             return (0, False)
-        window_seconds = max(int(settings.billing_usage_persist_silent_window_seconds), 1)
+        window_seconds = max(
+            int(settings.billing_usage_persist_silent_window_seconds), 1
+        )
         window_start = datetime.now(UTC) - timedelta(seconds=window_seconds)
         _USAGE_PERSIST_SILENT_FAILURES.append(datetime.now(UTC))
-        while _USAGE_PERSIST_SILENT_FAILURES and _USAGE_PERSIST_SILENT_FAILURES[0] < window_start:
+        while (
+            _USAGE_PERSIST_SILENT_FAILURES
+            and _USAGE_PERSIST_SILENT_FAILURES[0] < window_start
+        ):
             _USAGE_PERSIST_SILENT_FAILURES.popleft()
         current_count = len(_USAGE_PERSIST_SILENT_FAILURES)
         return (current_count, current_count >= limit)
@@ -633,6 +656,15 @@ class PostProcessorMixin:
     def _resolve_user_message_for_storage(self, text: str) -> str:
         choice_selection = self._extract_choice_selection_payload(text)
         if not isinstance(choice_selection, dict):
+            trade_snapshot_request = self._extract_trade_snapshot_request_payload(text)
+            if not isinstance(trade_snapshot_request, dict):
+                return text
+            cleaned = self._strip_tag_blocks(text, "TRADE_SNAPSHOT_REQUEST").strip()
+            if cleaned:
+                return cleaned
+            prompt = trade_snapshot_request.get("user_prompt")
+            if isinstance(prompt, str) and prompt.strip():
+                return prompt.strip()
             return text
         label = choice_selection.get("selected_option_label")
         if isinstance(label, str) and label.strip():
@@ -660,6 +692,33 @@ class PostProcessorMixin:
         label = payload.get("selected_option_label")
         if isinstance(label, str) and label.strip():
             normalized["selected_option_label"] = label.strip()
+        return normalized
+
+    def _extract_trade_snapshot_request_payload(
+        self,
+        text: str,
+    ) -> dict[str, Any] | None:
+        payloads = self._extract_json_by_tag(text, "TRADE_SNAPSHOT_REQUEST")
+        if not payloads:
+            return None
+        payload = payloads[-1]
+        job_id = payload.get("job_id")
+        trade_index = payload.get("trade_index")
+        if not isinstance(job_id, str) or not job_id.strip():
+            return None
+        try:
+            normalized_trade_index = int(trade_index)
+        except (TypeError, ValueError):
+            return None
+        if normalized_trade_index < 0:
+            return None
+        normalized: dict[str, Any] = {
+            "job_id": job_id.strip(),
+            "trade_index": normalized_trade_index,
+        }
+        user_prompt = payload.get("user_prompt")
+        if isinstance(user_prompt, str) and user_prompt.strip():
+            normalized["user_prompt"] = user_prompt.strip()
         return normalized
 
     def _extract_json_by_tag(self, text: str, tag: str) -> list[dict[str, Any]]:
@@ -703,13 +762,13 @@ class PostProcessorMixin:
             while json_start < len(text) and text[json_start].isspace():
                 json_start += 1
             if json_start >= len(text) or text[json_start] != "{":
-                output_parts.append(text[cursor:match.end()])
+                output_parts.append(text[cursor : match.end()])
                 cursor = match.end()
                 continue
 
             json_end = self._find_json_object_end(text, json_start)
             if json_end is None:
-                output_parts.append(text[cursor:match.end()])
+                output_parts.append(text[cursor : match.end()])
                 cursor = match.end()
                 continue
 
@@ -920,9 +979,7 @@ class PostProcessorMixin:
 
         runtime_state_raw = pre_strategy_data.get("runtime")
         runtime_state = (
-            dict(runtime_state_raw)
-            if isinstance(runtime_state_raw, dict)
-            else {}
+            dict(runtime_state_raw) if isinstance(runtime_state_raw, dict) else {}
         )
         timeframe_plan = runtime_state.get("timeframe_plan")
         timeframe_primary = (

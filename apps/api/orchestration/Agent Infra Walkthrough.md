@@ -366,7 +366,7 @@ sequenceDiagram
 - 能减少用户二次 `yes deploy`，也能减少多轮 prompt 开销。
 
 6. indicator 知识按需加载
-- 先 `get_indicator_catalog`，命中后再拉单个 `get_indicator_detail`，避免一次塞大量内容。
+- 先 `get_indicator_catalog`，并按 category + registry 元数据精确选因子，避免一次塞大量内容。
 
 ## 8. 已知问题逐条校验
 
@@ -853,6 +853,7 @@ Reply in **{{LANG_NAME}}**.
   - `strategy_rollback_dsl`
   - `backtest_create_job`
   - `backtest_get_job`
+  - `backtest_trade_snapshots`
   - `backtest_entry_hour_pnl_heatmap`
   - `backtest_entry_weekday_pnl`
   - `backtest_monthly_return_table`
@@ -863,7 +864,6 @@ Reply in **{{LANG_NAME}}**.
   - `backtest_rolling_metrics`
   - `get_symbol_data_coverage`
   - `get_indicator_catalog`
-- `get_indicator_detail`
 - `strategy_upsert_dsl` requires `dsl_json`.
 - `strategy_get_dsl` requires `strategy_id`.
 - `strategy_list_tunable_params` requires `strategy_id`.
@@ -875,7 +875,7 @@ Reply in **{{LANG_NAME}}**.
 - `get_symbol_data_coverage` requires `market` and `symbol`.
 - Keep patches minimal: prefer `replace`/`add`/`remove` and include `test` guards when practical.
 - Use `get_indicator_catalog` to inspect available factor categories and registry contracts.
-- Use `get_indicator_detail` when you need full skill detail for one or more indicators.
+- Use `get_indicator_catalog` metadata fields (`full_name`, `description`, `outputs`, `params`, lifecycle status) for indicator selection.
 - `get_indicator_catalog` categories: `overlap`, `momentum`, `volatility`, `volume`, `utils` (exclude `candle`).
 - Keep retries deterministic: only update changed JSON fields/patch ops.
 
@@ -1036,6 +1036,7 @@ Reply in **{{LANG_NAME}}**.
 - In this phase, only use:
   - `backtest_create_job`
   - `backtest_get_job`
+  - `backtest_trade_snapshots`
   - `backtest_entry_hour_pnl_heatmap`
   - `backtest_entry_weekday_pnl`
   - `backtest_monthly_return_table`
@@ -2048,7 +2049,6 @@ Enforces: field existence, types, enums, recursive structure, `additionalPropert
 - `strategy_get_version_dsl`：读取指定版本 DSL。
 - `strategy_diff_versions`：比较两个版本并输出 patch diff。
 - `strategy_rollback_dsl`：回滚到历史版本并生成新版本。
-- `get_indicator_detail`：返回一个或多个指标的 skill/registry 详细信息。
 - `get_indicator_catalog`：返回指标目录（按 category）。
 
 ## D.2 backtest (10)

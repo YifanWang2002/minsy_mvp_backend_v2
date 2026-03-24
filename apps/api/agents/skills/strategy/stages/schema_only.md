@@ -3,7 +3,7 @@ Stage objective:
 - Produce first-draft strategy DSL, validate it, and hand off `strategy_draft_id` for frontend review/confirmation.
 - Output should include:
   1) concise rationale text
-  2) inspect available indicators first with `get_indicator_catalog` (and `get_indicator_detail` only if you need one specific indicator contract)
+  2) inspect available indicators first with `get_indicator_catalog` and rely on returned `full_name/description/params/outputs`
   3) `strategy_validate_dsl(dsl_json, session_id=tool_compat_session_id)` when `tool_compat_session_id` is available
   4) one `strategy_ref` GenUI payload with `strategy_draft_id`
 - Do not call persistence tools that require confirmed strategy ownership at this stage.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 from pathlib import Path
 from typing import Any
 
@@ -90,9 +91,7 @@ def _build_strategy_static_instructions_cached(
     template = _load_md(_STRATEGY_SKILLS_MD)
     ui_knowledge = _load_md(_UTILS_SKILLS_MD)
     patch_knowledge = (
-        _load_md(_STRATEGY_PATCH_SKILLS_MD)
-        if phase_stage == "artifact_ops"
-        else ""
+        _load_md(_STRATEGY_PATCH_SKILLS_MD) if phase_stage == "artifact_ops" else ""
     )
     stage_addendum = _load_optional_stage_addendum(phase_stage)
     include_full_dsl = prompt_profile == "full_bootstrap"
@@ -129,7 +128,9 @@ def build_strategy_static_instructions(
     prompt_profile: str | None = None,
 ) -> str:
     """Build static strategy instructions from markdown templates."""
-    normalized_language = language.strip().lower() if isinstance(language, str) else "en"
+    normalized_language = (
+        language.strip().lower() if isinstance(language, str) else "en"
+    )
     normalized_stage = _normalize_phase_stage(phase_stage)
     normalized_prompt_profile = _normalize_prompt_profile(prompt_profile)
     return _build_strategy_static_instructions_cached(
@@ -146,6 +147,9 @@ def build_strategy_dynamic_state(
     pre_strategy_fields: dict[str, str] | None = None,
     pre_strategy_runtime: dict[str, Any] | None = None,
     session_id: str | None = None,
+    choice_selection: dict[str, Any] | None = None,
+    trade_snapshot_request: dict[str, Any] | None = None,
+    pending_trade_patch: dict[str, Any] | None = None,
 ) -> str:
     """Build `[SESSION STATE]` block for strategy phase."""
 
@@ -156,26 +160,32 @@ def build_strategy_dynamic_state(
 
     has_missing = bool(missing_fields)
     next_missing = missing_fields[0] if missing_fields else "none"
-    missing_str = ", ".join(missing_fields) if missing_fields else "none - all collected"
+    missing_str = (
+        ", ".join(missing_fields) if missing_fields else "none - all collected"
+    )
 
-    collected = ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
-    pre_scope = ", ".join(f"{key}={value}" for key, value in pre.items() if value) or "none"
+    collected = (
+        ", ".join(f"{key}={value}" for key, value in fields.items() if value) or "none"
+    )
+    pre_scope = (
+        ", ".join(f"{key}={value}" for key, value in pre.items() if value) or "none"
+    )
     pre_runtime = dict(pre_strategy_runtime or {})
-    pre_strategy_instrument_data_status = str(
-        pre_runtime.get("instrument_data_status", "")
-    ).strip() or "unknown"
-    pre_strategy_instrument_data_symbol = str(
-        pre_runtime.get("instrument_data_symbol", "")
-    ).strip() or "none"
-    pre_strategy_instrument_data_market = str(
-        pre_runtime.get("instrument_data_market", "")
-    ).strip() or "none"
+    pre_strategy_instrument_data_status = (
+        str(pre_runtime.get("instrument_data_status", "")).strip() or "unknown"
+    )
+    pre_strategy_instrument_data_symbol = (
+        str(pre_runtime.get("instrument_data_symbol", "")).strip() or "none"
+    )
+    pre_strategy_instrument_data_market = (
+        str(pre_runtime.get("instrument_data_market", "")).strip() or "none"
+    )
     pre_strategy_instrument_available_locally = bool(
         pre_runtime.get("instrument_available_locally")
     )
-    pre_strategy_family_choice = str(
-        pre.get("strategy_family_choice", "")
-    ).strip() or "none"
+    pre_strategy_family_choice = (
+        str(pre.get("strategy_family_choice", "")).strip() or "none"
+    )
     timeframe_plan = pre_runtime.get("timeframe_plan")
     if isinstance(timeframe_plan, dict):
         pre_strategy_timeframe_primary = (
@@ -188,21 +198,52 @@ def build_strategy_dynamic_state(
     )
     strategy_id = str(fields.get("strategy_id", "")).strip() or "none"
     strategy_market = str(fields.get("strategy_market", "")).strip() or "none"
-    strategy_primary_symbol = str(fields.get("strategy_primary_symbol", "")).strip() or "none"
+    strategy_primary_symbol = (
+        str(fields.get("strategy_primary_symbol", "")).strip() or "none"
+    )
     raw_tickers_csv = str(fields.get("strategy_tickers_csv", "")).strip()
     if raw_tickers_csv:
         strategy_tickers_csv = raw_tickers_csv
     else:
         raw_tickers = fields.get("strategy_tickers")
         if isinstance(raw_tickers, list):
-            strategy_tickers_csv = ",".join(
-                str(item).strip() for item in raw_tickers if str(item).strip()
-            ) or "none"
+            strategy_tickers_csv = (
+                ",".join(str(item).strip() for item in raw_tickers if str(item).strip())
+                or "none"
+            )
         else:
             strategy_tickers_csv = "none"
     strategy_timeframe = str(fields.get("strategy_timeframe", "")).strip() or "none"
     tool_compat_session_id = (
-        session_id.strip() if isinstance(session_id, str) and session_id.strip() else "none"
+        session_id.strip()
+        if isinstance(session_id, str) and session_id.strip()
+        else "none"
+    )
+    normalized_choice_selection = _normalize_choice_selection(choice_selection)
+    choice_selection_present = normalized_choice_selection is not None
+    choice_selection_json = (
+        _compact_json(normalized_choice_selection)
+        if normalized_choice_selection is not None
+        else "none"
+    )
+    normalized_trade_snapshot_request = _normalize_trade_snapshot_request(
+        trade_snapshot_request
+    )
+    trade_snapshot_request_present = normalized_trade_snapshot_request is not None
+    trade_snapshot_request_json = (
+        _compact_json(normalized_trade_snapshot_request)
+        if normalized_trade_snapshot_request is not None
+        else "none"
+    )
+    normalized_pending_trade_patch = _normalize_pending_trade_patch(pending_trade_patch)
+    pending_trade_patch_present = normalized_pending_trade_patch is not None
+    pending_trade_patch_summary = _summarize_pending_trade_patch(
+        normalized_pending_trade_patch
+    )
+    pending_trade_patch_json = (
+        _compact_json(normalized_pending_trade_patch)
+        if normalized_pending_trade_patch is not None
+        else "none"
     )
 
     return (
@@ -222,8 +263,131 @@ def build_strategy_dynamic_state(
         f"- strategy_tickers_csv: {strategy_tickers_csv}\n"
         f"- strategy_timeframe: {strategy_timeframe}\n"
         f"- tool_compat_session_id: {tool_compat_session_id}\n"
+        f"- structured_choice_selection_present: {str(choice_selection_present).lower()}\n"
+        f"- structured_choice_selection_json: {choice_selection_json}\n"
+        f"- trade_snapshot_request_present: {str(trade_snapshot_request_present).lower()}\n"
+        f"- trade_snapshot_request_json: {trade_snapshot_request_json}\n"
+        f"- pending_trade_patch_present: {str(pending_trade_patch_present).lower()}\n"
+        f"- pending_trade_patch_summary: {pending_trade_patch_summary}\n"
+        f"- pending_trade_patch_json: {pending_trade_patch_json}\n"
         f"- still_missing: {missing_str}\n"
         f"- has_missing_fields: {str(has_missing).lower()}\n"
         f"- next_missing_field: {next_missing}\n"
         "[/SESSION STATE]\n\n"
     )
+
+
+def _compact_json(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return "none"
+    try:
+        return json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+    except Exception:  # noqa: BLE001
+        return "none"
+
+
+def _normalize_choice_selection(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    choice_id = payload.get("choice_id")
+    selected_option_id = payload.get("selected_option_id")
+    if not isinstance(choice_id, str) or not choice_id.strip():
+        return None
+    if not isinstance(selected_option_id, str) or not selected_option_id.strip():
+        return None
+    normalized: dict[str, Any] = {
+        "choice_id": choice_id.strip(),
+        "selected_option_id": selected_option_id.strip(),
+    }
+    label = payload.get("selected_option_label")
+    if isinstance(label, str) and label.strip():
+        normalized["selected_option_label"] = label.strip()
+    return normalized
+
+
+def _normalize_trade_snapshot_request(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    job_id = payload.get("job_id")
+    trade_index = payload.get("trade_index")
+    if not isinstance(job_id, str) or not job_id.strip():
+        return None
+    try:
+        normalized_trade_index = int(trade_index)
+    except (TypeError, ValueError):
+        return None
+    if normalized_trade_index < 0:
+        return None
+    normalized: dict[str, Any] = {
+        "job_id": job_id.strip(),
+        "trade_index": normalized_trade_index,
+    }
+    trade_uid = payload.get("trade_uid")
+    if isinstance(trade_uid, str) and trade_uid.strip():
+        normalized["trade_uid"] = trade_uid.strip()
+    visible_keys = payload.get("visible_indicator_keys")
+    if isinstance(visible_keys, list):
+        normalized["visible_indicator_keys"] = [
+            str(item).strip()
+            for item in visible_keys
+            if isinstance(item, str) and item.strip()
+        ]
+    filters = payload.get("filters")
+    if isinstance(filters, dict):
+        normalized["filters"] = {
+            key: value.strip()
+            for key, value in filters.items()
+            if isinstance(key, str) and isinstance(value, str) and value.strip()
+        }
+    lookback_bars = payload.get("lookback_bars")
+    lookforward_bars = payload.get("lookforward_bars")
+    if isinstance(lookback_bars, int) and lookback_bars >= 0:
+        normalized["lookback_bars"] = lookback_bars
+    if isinstance(lookforward_bars, int) and lookforward_bars >= 0:
+        normalized["lookforward_bars"] = lookforward_bars
+    user_prompt = payload.get("user_prompt")
+    if isinstance(user_prompt, str) and user_prompt.strip():
+        normalized["user_prompt"] = user_prompt.strip()
+    return normalized
+
+
+def _normalize_pending_trade_patch(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    strategy_id = payload.get("strategy_id")
+    patch_ops = payload.get("patch_ops")
+    if not isinstance(strategy_id, str) or not strategy_id.strip():
+        return None
+    if not isinstance(patch_ops, list) or not patch_ops:
+        return None
+    normalized_ops = [dict(item) for item in patch_ops if isinstance(item, dict)]
+    if not normalized_ops:
+        return None
+    normalized: dict[str, Any] = {
+        "strategy_id": strategy_id.strip(),
+        "patch_ops": normalized_ops,
+    }
+    source_trade = payload.get("source_trade")
+    if isinstance(source_trade, dict):
+        normalized["source_trade"] = dict(source_trade)
+    backtest_request = payload.get("backtest_request")
+    if isinstance(backtest_request, dict):
+        normalized["backtest_request"] = dict(backtest_request)
+    return normalized
+
+
+def _summarize_pending_trade_patch(payload: dict[str, Any] | None) -> str:
+    if not isinstance(payload, dict):
+        return "none"
+    strategy_id = str(payload.get("strategy_id", "")).strip() or "none"
+    patch_ops = payload.get("patch_ops")
+    patch_count = len(patch_ops) if isinstance(patch_ops, list) else 0
+    source_trade = payload.get("source_trade")
+    source_summary = "none"
+    if isinstance(source_trade, dict):
+        job_id = str(source_trade.get("job_id", "")).strip() or "none"
+        trade_index = source_trade.get("trade_index")
+        source_summary = f"job_id={job_id},trade_index={trade_index}"
+    return f"strategy_id={strategy_id},patch_ops={patch_count},source={source_summary}"

@@ -45,7 +45,6 @@ _STRATEGY_SCHEMA_ONLY_TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
     "strategy_upsert_dsl",
     "get_indicator_catalog",
-    "get_indicator_detail",
 )
 _STRATEGY_ARTIFACT_OPS_TOOL_NAMES: tuple[str, ...] = (
     "strategy_validate_dsl",
@@ -57,7 +56,6 @@ _STRATEGY_ARTIFACT_OPS_TOOL_NAMES: tuple[str, ...] = (
     "strategy_get_version_dsl",
     "strategy_diff_versions",
     "strategy_rollback_dsl",
-    "get_indicator_detail",
     "get_indicator_catalog",
 )
 _STRATEGY_MARKET_DATA_TOOL_NAMES: tuple[str, ...] = (
@@ -77,6 +75,7 @@ _BACKTEST_BOOTSTRAP_TOOL_NAMES: tuple[str, ...] = (
 _BACKTEST_FEEDBACK_TOOL_NAMES: tuple[str, ...] = (
     "backtest_create_job",
     "backtest_get_job",
+    "backtest_trade_snapshots",
     "backtest_entry_hour_pnl_heatmap",
     "backtest_entry_weekday_pnl",
     "backtest_monthly_return_table",
