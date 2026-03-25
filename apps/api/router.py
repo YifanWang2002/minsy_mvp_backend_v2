@@ -9,6 +9,8 @@ from apps.api.routes.backtests import router as backtests_router
 from apps.api.routes.billing import router as billing_router
 from apps.api.routes.broker_accounts import router as broker_accounts_router
 from apps.api.routes.chat import router as chat_router
+from apps.api.routes.chart_datafeed import router as chart_datafeed_router
+from apps.api.routes.chart_annotations import router as chart_annotations_router
 from apps.api.routes.deployments import router as deployments_router
 from apps.api.routes.health import router as health_router
 from apps.api.routes.issue_reports import router as issue_reports_router
@@ -28,6 +30,8 @@ api_router.include_router(health_router)
 api_router.include_router(auth_router)
 api_router.include_router(issue_reports_router)
 api_router.include_router(chat_router)
+api_router.include_router(chart_datafeed_router)
+api_router.include_router(chart_annotations_router)
 api_router.include_router(sessions_router)
 api_router.include_router(strategies_router)
 api_router.include_router(backtests_router)

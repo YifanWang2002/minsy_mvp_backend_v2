@@ -45,11 +45,27 @@ class User(Base):
             "current_tier IN ('free', 'go', 'plus', 'pro')",
             name="ck_users_current_tier",
         ),
+        CheckConstraint(
+            "auth_provider IN ('legacy_password', 'clerk', 'google_oauth', 'apple_oauth')",
+            name="ck_users_auth_provider",
+        ),
     )
 
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    clerk_user_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    auth_provider: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="legacy_password",
+        server_default="legacy_password",
+    )
     current_tier: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

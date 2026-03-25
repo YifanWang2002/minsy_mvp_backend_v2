@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,14 @@ change_password_rate_limiter = RateLimiter(
 )
 _ONBOARDING_SECTION_KEYS = ("home", "strategies", "portfolio")
 _ONBOARDING_ALLOWED_STATUS = {"pending", "completed", "canceled"}
+
+
+def _ensure_legacy_auth_endpoints_enabled() -> None:
+    if settings.auth_mode.strip().lower() == "clerk":
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Legacy password authentication endpoints are disabled.",
+        )
 
 
 def _resolve_kyc_status(user: User) -> str:
@@ -121,6 +129,7 @@ async def register(
     payload: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ) -> AuthResponse:
+    _ensure_legacy_auth_endpoints_enabled()
     service = AuthService(db)
     user, token_pair = await service.register(
         email=payload.email,
@@ -143,6 +152,7 @@ async def login(
     payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> AuthResponse:
+    _ensure_legacy_auth_endpoints_enabled()
     service = AuthService(db)
     user, token_pair = await service.login(
         email=payload.email, password=payload.password
@@ -165,6 +175,7 @@ async def refresh(
     payload: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
+    _ensure_legacy_auth_endpoints_enabled()
     service = AuthService(db)
     token_pair = await service.refresh(payload.refresh_token)
     return TokenResponse(
@@ -279,6 +290,7 @@ async def change_password(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DetailResponse:
+    _ensure_legacy_auth_endpoints_enabled()
     service = AuthService(db)
     await service.change_password(
         user=user,

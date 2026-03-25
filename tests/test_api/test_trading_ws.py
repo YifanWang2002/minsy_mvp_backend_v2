@@ -226,6 +226,236 @@ class TestTradingWebSocket:
                 assert resp["symbol"] == "AAPL"
                 assert resp["timeframe"] == "1m"
 
+    def test_subscribe_annotations_returns_snapshot_and_confirmation(self, client):
+        """subscribe_annotations should send annotations_snapshot + ack."""
+        fake_user = _make_fake_user()
+        fake_session = AsyncMock()
+
+        async def _fake_get_db_session():
+            yield fake_session
+
+        with patch(
+            "apps.api.routes.trading_ws._authenticate_ws",
+            new_callable=AsyncMock,
+            return_value=fake_user,
+        ), patch(
+            "apps.api.routes.trading_ws.get_db_session",
+            side_effect=_fake_get_db_session,
+        ), patch(
+            "apps.api.routes.trading_ws.append_chart_annotation_snapshot",
+            new_callable=AsyncMock,
+            return_value={
+                "annotations": [
+                    {
+                        "id": "ann-1",
+                        "scope": {
+                            "market": "stocks",
+                            "symbol": "AAPL",
+                            "timeframe": "1m",
+                        },
+                    }
+                ],
+                "cursor": 12,
+            },
+        ), patch(
+            "apps.api.routes.trading_ws.project_execution_annotations_for_scope",
+            new_callable=AsyncMock,
+            return_value=[],
+        ), patch(
+            "apps.api.routes.trading_ws.project_backtest_annotations_for_scope",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            with client.websocket_connect("/api/v1/ws/trading?token=valid") as ws:
+                ws.send_text(
+                    json.dumps(
+                        {
+                            "action": "subscribe_annotations",
+                            "market": "stocks",
+                            "symbol": "AAPL",
+                            "timeframe": "1m",
+                        }
+                    )
+                )
+                first = json.loads(ws.receive_text())
+                assert first["event"] == "annotations_snapshot"
+                assert first["cursor"] == 12
+                assert first["annotations"][0]["id"] == "ann-1"
+
+                second = json.loads(ws.receive_text())
+                assert second["event"] == "annotations_subscribed"
+                assert second["scope"]["symbol"] == "AAPL"
+
+    def test_subscribe_bars_supports_multiple_symbol_timeframe_channels(
+        self,
+        client,
+    ):
+        """Independent symbol/timeframe subscriptions should each snapshot cleanly."""
+        from datetime import UTC, datetime
+
+        fake_user = _make_fake_user()
+
+        first_bar = MagicMock()
+        first_bar.timestamp = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        first_bar.open = 100.0
+        first_bar.high = 101.0
+        first_bar.low = 99.5
+        first_bar.close = 100.5
+        first_bar.volume = 1000.0
+
+        second_bar = MagicMock()
+        second_bar.timestamp = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+        second_bar.open = 200.0
+        second_bar.high = 202.0
+        second_bar.low = 198.0
+        second_bar.close = 201.0
+        second_bar.volume = 2500.0
+
+        async def _fake_load_bar_snapshot(*, market, symbol, timeframe, limit):
+            del market, limit
+            if symbol == "AAPL" and timeframe == "1m":
+                return [first_bar]
+            if symbol == "BTCUSD" and timeframe == "5m":
+                return [second_bar]
+            return []
+
+        with patch(
+            "apps.api.routes.trading_ws._authenticate_ws",
+            new_callable=AsyncMock,
+            return_value=fake_user,
+        ), patch(
+            "apps.api.routes.trading_ws.market_data_runtime",
+        ) as mock_runtime, patch(
+            "apps.api.routes.trading_ws._load_bar_snapshot",
+            new_callable=AsyncMock,
+            side_effect=_fake_load_bar_snapshot,
+        ):
+            mock_runtime.subscribe.return_value = None
+
+            with client.websocket_connect("/api/v1/ws/trading?token=valid") as ws:
+                ws.send_text(
+                    json.dumps(
+                        {
+                            "action": "subscribe_bars",
+                            "market": "stocks",
+                            "symbol": "AAPL",
+                            "timeframe": "1m",
+                            "limit": 10,
+                        }
+                    )
+                )
+                ws.send_text(
+                    json.dumps(
+                        {
+                            "action": "subscribe_bars",
+                            "market": "crypto",
+                            "symbol": "BTCUSD",
+                            "timeframe": "5m",
+                            "limit": 10,
+                        }
+                    )
+                )
+
+                messages = [json.loads(ws.receive_text()) for _ in range(4)]
+                snapshot_keys = {
+                    (message["symbol"], message["timeframe"])
+                    for message in messages
+                    if message["event"] == "bar_snapshot"
+                }
+                subscribed_keys = {
+                    (message["symbol"], message["timeframe"])
+                    for message in messages
+                    if message["event"] == "bars_subscribed"
+                }
+
+                assert snapshot_keys == {("AAPL", "1m"), ("BTCUSD", "5m")}
+                assert subscribed_keys == {("AAPL", "1m"), ("BTCUSD", "5m")}
+
+    def test_resubscribe_bars_after_reconnect_receives_newer_snapshot(
+        self,
+        client,
+    ):
+        """A fresh WS connection should receive an up-to-date snapshot for the same bar stream."""
+        from datetime import UTC, datetime
+
+        fake_user = _make_fake_user()
+
+        first_bar = MagicMock()
+        first_bar.timestamp = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+        first_bar.open = 100.0
+        first_bar.high = 101.0
+        first_bar.low = 99.0
+        first_bar.close = 100.5
+        first_bar.volume = 1000.0
+
+        second_bar = MagicMock()
+        second_bar.timestamp = datetime(2026, 1, 1, 0, 1, tzinfo=UTC)
+        second_bar.open = 101.0
+        second_bar.high = 102.0
+        second_bar.low = 100.0
+        second_bar.close = 101.5
+        second_bar.volume = 1100.0
+
+        snapshot_call_count = {"count": 0}
+
+        async def _fake_load_bar_snapshot(*, market, symbol, timeframe, limit):
+            del market, symbol, timeframe, limit
+            snapshot_call_count["count"] += 1
+            return [first_bar] if snapshot_call_count["count"] == 1 else [second_bar]
+
+        with patch(
+            "apps.api.routes.trading_ws._authenticate_ws",
+            new_callable=AsyncMock,
+            return_value=fake_user,
+        ), patch(
+            "apps.api.routes.trading_ws.market_data_runtime",
+        ) as mock_runtime, patch(
+            "apps.api.routes.trading_ws._load_bar_snapshot",
+            new_callable=AsyncMock,
+            side_effect=_fake_load_bar_snapshot,
+        ):
+            mock_runtime.subscribe.return_value = None
+
+            with client.websocket_connect("/api/v1/ws/trading?token=valid") as first_ws:
+                first_ws.send_text(
+                    json.dumps(
+                        {
+                            "action": "subscribe_bars",
+                            "market": "stocks",
+                            "symbol": "AAPL",
+                            "timeframe": "1m",
+                            "limit": 10,
+                        }
+                    )
+                )
+                first_messages = [json.loads(first_ws.receive_text()) for _ in range(2)]
+                first_snapshot = next(
+                    message
+                    for message in first_messages
+                    if message["event"] == "bar_snapshot"
+                )
+
+            with client.websocket_connect("/api/v1/ws/trading?token=valid") as second_ws:
+                second_ws.send_text(
+                    json.dumps(
+                        {
+                            "action": "subscribe_bars",
+                            "market": "stocks",
+                            "symbol": "AAPL",
+                            "timeframe": "1m",
+                            "limit": 10,
+                        }
+                    )
+                )
+                second_messages = [json.loads(second_ws.receive_text()) for _ in range(2)]
+                second_snapshot = next(
+                    message
+                    for message in second_messages
+                    if message["event"] == "bar_snapshot"
+                )
+
+            assert second_snapshot["bars"][0]["t"] > first_snapshot["bars"][0]["t"]
+
     def test_forwards_manual_action_update_event(self, client):
         """Subscribed WS client should receive manual_action_update events."""
         fake_user = _make_fake_user()

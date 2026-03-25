@@ -17,6 +17,7 @@ from pydantic_settings import (
 )
 
 _ALLOWED_ENV_PROFILES: frozenset[str] = frozenset({"dev", "prod"})
+_ALLOWED_AUTH_MODES: frozenset[str] = frozenset({"legacy", "hybrid", "clerk"})
 _ALLOWED_INCREMENTAL_EXECUTION_MODES: frozenset[str] = frozenset(
     {"disabled", "local_collector", "remote_importer"}
 )
@@ -163,6 +164,21 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = Field(default=7, alias="REFRESH_TOKEN_EXPIRE_DAYS")
     auth_rate_limit: int = Field(default=30, alias="AUTH_RATE_LIMIT")
     auth_rate_window: int = Field(default=60, alias="AUTH_RATE_WINDOW")
+    auth_mode: str = Field(default="legacy", alias="AUTH_MODE")
+    clerk_frontend_api_url: str = Field(default="", alias="CLERK_FRONTEND_API_URL")
+    clerk_backend_api_url: str = Field(
+        default="https://api.clerk.com",
+        alias="CLERK_BACKEND_API_URL",
+    )
+    clerk_jwks_url: str = Field(default="", alias="CLERK_JWKS_URL")
+    clerk_jwt_key: str = Field(default="", alias="CLERK_JWT_KEY")
+    clerk_publishable_key: str = Field(default="", alias="CLERK_PUBLISHABLE_KEY")
+    clerk_secret_key: str = Field(default="", alias="CLERK_SECRET_KEY")
+    clerk_api_version: str = Field(default="", alias="CLERK_API_VERSION")
+    clerk_authorized_parties: list[str] = Field(
+        default_factory=list,
+        alias="CLERK_AUTHORIZED_PARTIES",
+    )
     openai_response_model: str = Field(default="gpt-5.2", alias="OPENAI_RESPONSE_MODEL")
     openai_chain_reset_turns_per_phase: int = Field(
         default=8,
@@ -899,6 +915,35 @@ class Settings(BaseSettings):
             return [item.strip() for item in normalized.split(",") if item.strip()]
         return []
 
+    @field_validator("auth_mode", mode="before")
+    @classmethod
+    def _validate_auth_mode(cls, value: object) -> str:
+        if value is None:
+            return "legacy"
+        normalized = str(value).strip().lower()
+        if not normalized:
+            return "legacy"
+        if normalized not in _ALLOWED_AUTH_MODES:
+            allowed = ", ".join(sorted(_ALLOWED_AUTH_MODES))
+            raise ValueError(
+                f"Unsupported AUTH_MODE '{normalized}'. Use one of: {allowed}."
+            )
+        return normalized
+
+    @field_validator("clerk_authorized_parties", mode="before")
+    @classmethod
+    def _parse_clerk_authorized_parties(cls, value: object) -> object:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return []
+            if normalized.startswith("["):
+                return json.loads(normalized)
+            return [item.strip() for item in normalized.split(",") if item.strip()]
+        return []
+
     @field_validator(
         "billing_pricing_json",
         "billing_config_json",
@@ -940,6 +985,26 @@ class Settings(BaseSettings):
         if self.sentry_http_status_min_code > self.sentry_http_status_max_code:
             raise ValueError(
                 "SENTRY_HTTP_STATUS_MIN_CODE must be <= SENTRY_HTTP_STATUS_MAX_CODE."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_clerk_auth_configuration(self) -> Settings:
+        if self.auth_mode == "legacy":
+            return self
+
+        required: dict[str, str] = {
+            "CLERK_FRONTEND_API_URL": self.clerk_frontend_api_url,
+            "CLERK_PUBLISHABLE_KEY": self.clerk_publishable_key,
+            "CLERK_SECRET_KEY": self.clerk_secret_key,
+            "CLERK_JWKS_URL": self.clerk_jwks_url,
+            "CLERK_JWT_KEY": self.clerk_jwt_key,
+        }
+        missing = [name for name, value in required.items() if not value.strip()]
+        if missing:
+            raise ValueError(
+                f"Missing Clerk configuration for AUTH_MODE={self.auth_mode}: "
+                f"{', '.join(missing)}."
             )
         return self
 

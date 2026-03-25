@@ -7,10 +7,21 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 
+from packages.domain.chart_annotations.pubsub import (
+    chart_annotation_channel,
+    decode_chart_annotation_event,
+)
+from packages.domain.chart_annotations.service import (
+    ChartAnnotationFilter,
+    append_chart_annotation_snapshot,
+    list_chart_annotation_events,
+    project_backtest_annotations_for_scope,
+    project_execution_annotations_for_scope,
+)
 from apps.api.services.trading_queue_service import enqueue_market_data_refresh
 from apps.api.services.trading_stream_replay_service import (
     load_owned_deployment,
@@ -357,6 +368,7 @@ class ConnectionRuntimeState:
 
     transport: RealtimeTransportState
     bar_last_payload_signature: dict[tuple[str, str, str], str]
+    annotation_last_payload_signature: dict[str, str]
 
 
 def _bars_payload_signature(bars: list[dict]) -> str:
@@ -367,6 +379,57 @@ def _bars_payload_signature(bars: list[dict]) -> str:
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def _annotation_subscription_scope(msg: dict) -> dict[str, str | None]:
+    deployment_id = str(msg.get("deployment_id") or "").strip() or None
+    strategy_id = str(msg.get("strategy_id") or "").strip() or None
+    backtest_id = str(msg.get("backtest_id") or "").strip() or None
+    chart_layout_id = str(msg.get("chart_layout_id") or "").strip() or None
+    return {
+        "market": str(msg.get("market", "stocks")).strip().lower() or "stocks",
+        "symbol": str(msg.get("symbol", "")).strip().upper() or None,
+        "timeframe": str(msg.get("timeframe", "1m")).strip().lower() or "1m",
+        "deployment_id": deployment_id,
+        "strategy_id": strategy_id,
+        "backtest_id": backtest_id,
+        "chart_layout_id": chart_layout_id,
+    }
+
+
+def _annotation_scope_key(scope: dict[str, str | None]) -> str:
+    return json.dumps(scope, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _annotation_filters(scope: dict[str, str | None]) -> ChartAnnotationFilter:
+    deployment_id = scope.get("deployment_id")
+    strategy_id = scope.get("strategy_id")
+    backtest_id = scope.get("backtest_id")
+    return ChartAnnotationFilter(
+        market=scope.get("market"),
+        symbol=scope.get("symbol"),
+        timeframe=scope.get("timeframe"),
+        deployment_id=UUID(deployment_id) if deployment_id else None,
+        strategy_id=UUID(strategy_id) if strategy_id else None,
+        backtest_id=UUID(backtest_id) if backtest_id else None,
+        chart_layout_id=scope.get("chart_layout_id"),
+    )
+
+
+def _annotation_scope_matches(
+    *,
+    subscription_scope: dict[str, str | None],
+    payload_scope: dict[str, object],
+) -> bool:
+    for key, value in subscription_scope.items():
+        if value is None:
+            continue
+        payload_value = payload_scope.get(key)
+        if payload_value is None:
+            return False
+        if str(payload_value).strip().lower() != str(value).strip().lower():
+            return False
+    return True
 
 
 @router.websocket("/trading")
@@ -383,6 +446,8 @@ async def ws_trading(
         {"action": "unsubscribe", "deployment_ids": ["d1"]}
         {"action": "subscribe_bars", "market": "stocks", "symbol": "AAPL", "timeframe": "1m", "limit": 600}
         {"action": "unsubscribe_bars", "market": "stocks", "symbol": "AAPL", "timeframe": "1m"}
+        {"action": "subscribe_annotations", "market": "stocks", "symbol": "AAPL", "timeframe": "1m", "cursor": 0}
+        {"action": "unsubscribe_annotations", "market": "stocks", "symbol": "AAPL", "timeframe": "1m"}
         {"action": "ping"}
 
     Server → Client:
@@ -394,6 +459,9 @@ async def ws_trading(
         {"event": "bar_update", "market": "stocks", "symbol": "AAPL", "timeframe": "1m", "bars": [...]}  # realtime pub/sub
         {"event": "bars_subscribed", "market": "stocks", "symbol": "AAPL", "timeframe": "1m"}
         {"event": "bars_unsubscribed", "market": "stocks", "symbol": "AAPL", "timeframe": "1m"}
+        {"event": "annotations_snapshot", "scope": {...}, "annotations": [...], "cursor": 12}
+        {"event": "annotation_upsert", "annotation_id": "...", "event_seq": 13, "payload": {...}}
+        {"event": "annotation_remove", "annotation_id": "...", "event_seq": 14, "payload": {...}}
         {"event": "pong", "server_time": "..."}
         {"event": "heartbeat", "server_time": "...", "subscriptions": ["d1"]}
         {"event": "error", "message": "..."}
@@ -414,6 +482,9 @@ async def ws_trading(
     bar_subscriptions: dict[tuple[str, str, str], int] = {}
     bar_runtime_subscribers: dict[tuple[str, str, str], str] = {}
     bar_pubsub_channel_refs: dict[str, int] = {}
+    annotation_subscriptions: dict[str, dict[str, str | None]] = {}
+    annotation_subscription_cursors: dict[str, int] = {}
+    annotation_channel_ref_count = 0
     running = True
 
     try:
@@ -438,6 +509,7 @@ async def ws_trading(
             now=time.monotonic(),
         ),
         bar_last_payload_signature={},
+        annotation_last_payload_signature={},
     )
 
     async def _send_json(data: dict) -> None:
@@ -456,6 +528,7 @@ async def ws_trading(
                 "event": "heartbeat",
                 "server_time": datetime.now(UTC).isoformat(),
                 "subscriptions": list(subscriptions.keys()),
+                "annotation_subscriptions": list(annotation_subscriptions.values()),
             }
         )
         return now
@@ -525,6 +598,112 @@ async def ws_trading(
             event_seq=seq,
             payload=payload,
         )
+
+    async def _send_annotation_snapshot(scope: dict[str, str | None]) -> int:
+        async for db in get_db_session():
+            try:
+                filters = _annotation_filters(scope)
+                snapshot = await append_chart_annotation_snapshot(
+                    db,
+                    owner_user_id=user.id,
+                    filters=filters,
+                )
+                projected = await project_execution_annotations_for_scope(
+                    db,
+                    owner_user_id=user.id,
+                    filters=filters,
+                )
+                projected.extend(
+                    await project_backtest_annotations_for_scope(
+                        db,
+                        filters=filters,
+                    )
+                )
+                payload = {
+                    "event": "annotations_snapshot",
+                    "scope": scope,
+                    "annotations": list(snapshot["annotations"]) + projected,
+                    "cursor": int(snapshot["cursor"]),
+                }
+                await _send_json(payload)
+                return int(snapshot["cursor"])
+            finally:
+                await db.rollback()
+            break
+        return 0
+
+    async def _forward_annotation_event(
+        *,
+        event_type: str,
+        event_seq: int,
+        payload: dict,
+    ) -> None:
+        payload_scope = payload.get("scope") if isinstance(payload.get("scope"), dict) else {}
+        matched_keys = [
+            key
+            for key, scope in annotation_subscriptions.items()
+            if _annotation_scope_matches(
+                subscription_scope=scope,
+                payload_scope=payload_scope,
+            )
+            and event_seq > annotation_subscription_cursors.get(key, 0)
+        ]
+        if not matched_keys:
+            return
+        signature = json.dumps(
+            {
+                "event": event_type,
+                "event_seq": event_seq,
+                "payload": payload,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        should_send = any(
+            runtime_state.annotation_last_payload_signature.get(key) != signature
+            for key in matched_keys
+        )
+        if should_send:
+            await _send_json(
+                {
+                    "event": event_type,
+                    "annotation_id": payload.get("annotation_id"),
+                    "event_seq": event_seq,
+                    "payload": payload,
+                }
+            )
+        for key in matched_keys:
+            annotation_subscription_cursors[key] = max(
+                annotation_subscription_cursors.get(key, 0),
+                event_seq,
+            )
+            runtime_state.annotation_last_payload_signature[key] = signature
+
+    async def _poll_annotation_outbox_once(*, limit: int) -> None:
+        if not annotation_subscriptions:
+            return
+        async for db in get_db_session():
+            try:
+                for key, scope in list(annotation_subscriptions.items()):
+                    cursor = annotation_subscription_cursors.get(key, 0)
+                    rows = await list_chart_annotation_events(
+                        db,
+                        owner_user_id=user.id,
+                        filters=_annotation_filters(scope),
+                        cursor=cursor,
+                        limit=limit,
+                    )
+                    for row in rows:
+                        payload = row.payload if isinstance(row.payload, dict) else {}
+                        await _forward_annotation_event(
+                            event_type=str(row.event_type),
+                            event_seq=int(row.event_seq),
+                            payload=dict(payload),
+                        )
+            finally:
+                await db.rollback()
+            break
 
     def _unsubscribe_bar_key(key: tuple[str, str, str]) -> None:
         subscriber_id = bar_runtime_subscribers.pop(key, None)
@@ -773,6 +952,57 @@ async def ws_trading(
             }
         )
 
+    async def _handle_subscribe_annotations(msg: dict) -> None:
+        nonlocal annotation_channel_ref_count
+        scope = _annotation_subscription_scope(msg)
+        if scope.get("symbol") is None:
+            await _send_json(
+                {"event": "error", "message": "symbol is required for subscribe_annotations"}
+            )
+            return
+        key = _annotation_scope_key(scope)
+        was_existing = key in annotation_subscriptions
+        requested_cursor = msg.get("cursor")
+        cursor = 0
+        if isinstance(requested_cursor, int) and requested_cursor > 0:
+            cursor = requested_cursor
+        elif isinstance(requested_cursor, str):
+            try:
+                cursor = max(0, int(requested_cursor))
+            except ValueError:
+                cursor = 0
+        annotation_subscriptions[key] = scope
+        annotation_subscription_cursors[key] = cursor
+        if pubsub_enabled and not was_existing and annotation_channel_ref_count == 0:
+            subscribed = await _subscribe_pubsub_channel(chart_annotation_channel(user_id))
+            if not subscribed:
+                await _switch_to_fallback("pubsub_subscribe_failed")
+            else:
+                annotation_channel_ref_count = 1
+        elif pubsub_enabled and not was_existing:
+            annotation_channel_ref_count += 1
+        snapshot_cursor = await _send_annotation_snapshot(scope)
+        annotation_subscription_cursors[key] = max(
+            annotation_subscription_cursors.get(key, 0),
+            snapshot_cursor,
+        )
+        await _send_json({"event": "annotations_subscribed", "scope": scope})
+
+    async def _handle_unsubscribe_annotations(msg: dict) -> None:
+        nonlocal annotation_channel_ref_count
+        scope = _annotation_subscription_scope(msg)
+        key = _annotation_scope_key(scope)
+        if key in annotation_subscriptions:
+            del annotation_subscriptions[key]
+            annotation_subscription_cursors.pop(key, None)
+            runtime_state.annotation_last_payload_signature.pop(key, None)
+        if pubsub_enabled and annotation_channel_ref_count > 0:
+            annotation_channel_ref_count -= 1
+            if annotation_channel_ref_count <= 0:
+                annotation_channel_ref_count = 0
+                await _unsubscribe_pubsub_channel(chart_annotation_channel(user_id))
+        await _send_json({"event": "annotations_unsubscribed", "scope": scope})
+
     async def _read_client_messages() -> None:
         """Read and dispatch incoming client messages."""
         nonlocal running
@@ -804,6 +1034,10 @@ async def ws_trading(
                     await _handle_subscribe_bars(msg)
                 elif action == "unsubscribe_bars":
                     await _handle_unsubscribe_bars(msg)
+                elif action == "subscribe_annotations":
+                    await _handle_subscribe_annotations(msg)
+                elif action == "unsubscribe_annotations":
+                    await _handle_unsubscribe_annotations(msg)
                 else:
                     await _send_json({"event": "error", "message": f"unknown action: {action}"})
         except WebSocketDisconnect:
@@ -816,6 +1050,14 @@ async def ws_trading(
         if not isinstance(message, dict):
             return
         data = message.get("data")
+        annotation_event = decode_chart_annotation_event(data)
+        if annotation_event is not None:
+            await _forward_annotation_event(
+                event_type=annotation_event.event_type,
+                event_seq=annotation_event.event_seq,
+                payload=annotation_event.payload,
+            )
+            return
         realtime_event = decode_realtime_event(data)
         if realtime_event is not None:
             await _forward_deployment_event(
@@ -894,6 +1136,7 @@ async def ws_trading(
             else:
                 if transport_policy.should_poll_fallback(runtime_state.transport, now=now):
                     await _poll_outbox_once(limit=120)
+                    await _poll_annotation_outbox_once(limit=120)
                     transport_policy.mark_fallback_poll(runtime_state.transport, now=time.monotonic())
                     did_poll = True
                 if (
@@ -915,10 +1158,22 @@ async def ws_trading(
                             error=f"pubsub_probe_error:{type(exc).__name__}",
                         )
 
-            if subscriptions and transport_policy.should_reconcile(runtime_state.transport, now=time.monotonic()):
-                await _poll_outbox_once(limit=300)
-                transport_policy.mark_reconcile(runtime_state.transport, now=time.monotonic())
-                did_poll = True
+            reconcile_now = transport_policy.should_reconcile(
+                runtime_state.transport,
+                now=time.monotonic(),
+            )
+            if reconcile_now:
+                if subscriptions:
+                    await _poll_outbox_once(limit=300)
+                    did_poll = True
+                if annotation_subscriptions:
+                    await _poll_annotation_outbox_once(limit=300)
+                    did_poll = True
+                if did_poll:
+                    transport_policy.mark_reconcile(
+                        runtime_state.transport,
+                        now=time.monotonic(),
+                    )
 
             last_heartbeat = await _maybe_send_heartbeat(last_heartbeat)
             if runtime_state.transport.mode == "polling_fallback" and not did_poll:

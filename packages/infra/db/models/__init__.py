@@ -9,6 +9,9 @@ from packages.infra.db.models.billing_usage_monthly import BillingUsageMonthly
 from packages.infra.db.models.billing_webhook_event import BillingWebhookEvent
 from packages.infra.db.models.broker_account import BrokerAccount
 from packages.infra.db.models.broker_account_audit_log import BrokerAccountAuditLog
+from packages.infra.db.models.chart_annotation import ChartAnnotation
+from packages.infra.db.models.chart_annotation_outbox import ChartAnnotationOutbox
+from packages.infra.db.models.chart_annotation_revision import ChartAnnotationRevision
 from packages.infra.db.models.deployment import Deployment
 from packages.infra.db.models.deployment_run import DeploymentRun
 from packages.infra.db.models.fill import Fill
@@ -61,6 +64,9 @@ __all__ = [
     "BillingWebhookEvent",
     "BrokerAccount",
     "BrokerAccountAuditLog",
+    "ChartAnnotation",
+    "ChartAnnotationOutbox",
+    "ChartAnnotationRevision",
     "Deployment",
     "DeploymentRun",
     "Fill",

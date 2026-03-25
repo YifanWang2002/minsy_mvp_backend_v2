@@ -48,6 +48,9 @@ def _import_all_models() -> None:
     import packages.infra.db.models.billing_webhook_event  # noqa: F401
     import packages.infra.db.models.broker_account  # noqa: F401
     import packages.infra.db.models.broker_account_audit_log  # noqa: F401
+    import packages.infra.db.models.chart_annotation  # noqa: F401
+    import packages.infra.db.models.chart_annotation_outbox  # noqa: F401
+    import packages.infra.db.models.chart_annotation_revision  # noqa: F401
     import packages.infra.db.models.deployment  # noqa: F401
     import packages.infra.db.models.deployment_run  # noqa: F401
     import packages.infra.db.models.fill  # noqa: F401
@@ -454,10 +457,56 @@ async def _ensure_broker_account_audit_log_constraint() -> None:
 
 
 async def _ensure_user_billing_columns() -> None:
-    """Ensure users table has tier column and matching check constraint."""
+    """Ensure users table has auth + billing columns and matching constraints."""
     assert engine is not None
     tier_constraint_sql = "current_tier IN ('free', 'go', 'plus', 'pro')"
+    auth_provider_constraint_sql = (
+        "auth_provider IN ('legacy_password', 'clerk', 'google_oauth', 'apple_oauth')"
+    )
     async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS clerk_user_id VARCHAR(128)"
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32)"
+            ),
+        )
+        await connection.execute(
+            text("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"),
+        )
+        await connection.execute(
+            text(
+                "UPDATE users "
+                "SET auth_provider = COALESCE(NULLIF(auth_provider, ''), 'legacy_password')"
+            ),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE users ALTER COLUMN auth_provider SET DEFAULT 'legacy_password'"
+            ),
+        )
+        await connection.execute(
+            text("ALTER TABLE users ALTER COLUMN auth_provider SET NOT NULL"),
+        )
+        await connection.execute(
+            text("ALTER TABLE users DROP CONSTRAINT IF EXISTS ck_users_auth_provider"),
+        )
+        await connection.execute(
+            text(
+                "ALTER TABLE users "
+                f"ADD CONSTRAINT ck_users_auth_provider CHECK ({auth_provider_constraint_sql})",
+            ),
+        )
+        await connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_clerk_user_id "
+                "ON users (clerk_user_id) "
+                "WHERE clerk_user_id IS NOT NULL",
+            ),
+        )
         await connection.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS current_tier VARCHAR(20)"),
         )
