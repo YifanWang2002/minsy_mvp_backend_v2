@@ -91,3 +91,76 @@ def test_normalize_annotation_payload_accepts_legacy_fib_without_native_state():
     assert metadata["tool_family"] == "fib"
     assert metadata["tool_vendor_type"] == "fib_channel"
     assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_profile_vendor_native_state_round_trip():
+    payload = _base_payload(family="profile", vendor_type="Anchored_VWAP")
+    payload["anchors"] = {
+        "points": [
+            {"time": 1717000000, "price": 71234.56},
+        ]
+    }
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-profile-1",
+            "type": "LineToolAnchoredVWAP",
+            "state": {"bandLineColor": "#2563EB"},
+        },
+        "properties": {"linecolor": "#2563EB"},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "profile"
+    assert metadata["tool_vendor_type"] == "anchored_vwap"
+    assert document["vendor_native"]["state"]["id"] == "line-tool-profile-1"
+    assert document["vendor_native"]["state"]["type"] == "LineToolAnchoredVWAP"
+
+
+@pytest.mark.parametrize(
+    ("family", "vendor_type"),
+    [
+        ("profile", "fib_retracement"),
+        ("profile", "gannbox"),
+    ],
+)
+def test_normalize_annotation_payload_rejects_profile_vendor_type_mismatch(
+    family: str,
+    vendor_type: str,
+):
+    payload = _base_payload(family=family, vendor_type=vendor_type)
+
+    with pytest.raises(ValueError, match="tool\\.vendor_type"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_rejects_non_object_profile_vendor_native_state():
+    payload = _base_payload(family="profile", vendor_type="anchored_vwap")
+    payload["anchors"] = {
+        "points": [
+            {"time": 1717000000, "price": 71234.56},
+        ]
+    }
+    payload["vendor_native"] = {"state": "bad"}
+
+    with pytest.raises(ValueError, match="vendor_native\\.state"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_accepts_legacy_profile_without_native_state():
+    payload = _base_payload(
+        family="profile",
+        vendor_type="fixed_range_volume_profile",
+    )
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "profile"
+    assert metadata["tool_vendor_type"] == "fixed_range_volume_profile"
+    assert document["vendor_native"] == {}

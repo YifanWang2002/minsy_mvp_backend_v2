@@ -104,9 +104,14 @@ _GANN_VENDOR_TYPES = {
     "gannbox_fixed",
     "gannbox_fan",
 }
+_PROFILE_VENDOR_TYPES = {
+    "anchored_vwap",
+    "fixed_range_volume_profile",
+}
 _STRICT_VENDOR_TYPES_BY_FAMILY = {
     "fib": _FIB_VENDOR_TYPES,
     "gann": _GANN_VENDOR_TYPES,
+    "profile": _PROFILE_VENDOR_TYPES,
 }
 _GEOMETRY_TYPES = {
     "point",

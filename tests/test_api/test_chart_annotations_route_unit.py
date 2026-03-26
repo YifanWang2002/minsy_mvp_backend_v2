@@ -255,3 +255,45 @@ def test_batch_upsert_chart_annotations_returns_422_for_invalid_payload(
     payload = response.json()
     assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
     assert payload["detail"]["message"] == "unsupported gann vendor type"
+
+
+def test_create_chart_annotation_returns_422_for_invalid_profile_payload(
+    client,
+    app,
+    monkeypatch,
+):
+    _override_dependencies(
+        app=app,
+        user=SimpleNamespace(id=uuid4()),
+        db=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        chart_annotations,
+        "create_chart_annotation",
+        AsyncMock(
+            side_effect=ValueError(
+                "tool.vendor_type 'fib_retracement' is not supported for family 'profile'"
+            )
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/chart-annotations",
+        json={
+            "annotation": {
+                "source": {"type": "user_manual"},
+                "scope": {
+                    "market": "crypto",
+                    "symbol": "BTCUSD",
+                    "timeframe": "15m",
+                },
+                "semantic": {"kind": "profile", "role": "markup"},
+                "tool": {"family": "profile", "vendor_type": "anchored_vwap"},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
+    assert "family 'profile'" in payload["detail"]["message"]
