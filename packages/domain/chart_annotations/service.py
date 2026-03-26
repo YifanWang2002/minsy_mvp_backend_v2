@@ -86,6 +86,28 @@ _TOOL_FAMILIES = {
     "table",
     "anchored",
 }
+_FIB_VENDOR_TYPES = {
+    "fib_retracement",
+    "fib_trend_ext",
+    "fib_speed_resist_fan",
+    "fib_timezone",
+    "fib_trend_time",
+    "fib_circles",
+    "fib_spiral",
+    "fib_speed_resist_arcs",
+    "fib_channel",
+    "fib_wedge",
+}
+_GANN_VENDOR_TYPES = {
+    "gannbox",
+    "gannbox_square",
+    "gannbox_fixed",
+    "gannbox_fan",
+}
+_STRICT_VENDOR_TYPES_BY_FAMILY = {
+    "fib": _FIB_VENDOR_TYPES,
+    "gann": _GANN_VENDOR_TYPES,
+}
 _GEOMETRY_TYPES = {
     "point",
     "polyline",
@@ -260,6 +282,25 @@ def _default_geometry_type(
     return "point"
 
 
+def _validate_native_line_tool_payload(
+    *,
+    tool_family: str,
+    tool_vendor_type: str | None,
+    vendor_native: Mapping[str, Any],
+) -> None:
+    allowed_vendor_types = _STRICT_VENDOR_TYPES_BY_FAMILY.get(tool_family)
+    if not allowed_vendor_types:
+        return
+    if tool_vendor_type is None or tool_vendor_type not in allowed_vendor_types:
+        raise ValueError(
+            f"tool.vendor_type '{tool_vendor_type or ''}' is not supported for family '{tool_family}'"
+        )
+    if "state" in vendor_native and not isinstance(vendor_native.get("state"), Mapping):
+        raise ValueError(
+            f"vendor_native.state must be an object for family '{tool_family}'"
+        )
+
+
 def _normalize_annotation_payload(
     payload: Mapping[str, Any],
     *,
@@ -362,6 +403,8 @@ def _normalize_annotation_payload(
     )
     tool_vendor = _string(tool.get("vendor") or getattr(existing, "tool_vendor", None), default="tradingview").lower()
     tool_vendor_type = _optional_string(tool.get("vendor_type") or getattr(existing, "tool_vendor_type", None))
+    if tool_vendor_type is not None:
+        tool_vendor_type = tool_vendor_type.lower()
     normalized_tool: dict[str, Any] = {
         "family": tool_family,
         "vendor": tool_vendor,
@@ -387,6 +430,11 @@ def _normalize_annotation_payload(
     relations = _normalize_json_map(document.get("relations"))
     lifecycle = _normalize_json_map(document.get("lifecycle"))
     vendor_native = _normalize_json_map(document.get("vendor_native"))
+    _validate_native_line_tool_payload(
+        tool_family=tool_family,
+        tool_vendor_type=tool_vendor_type,
+        vendor_native=vendor_native,
+    )
 
     is_editable = bool(
         lifecycle.get("editable")

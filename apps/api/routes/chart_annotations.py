@@ -36,6 +36,16 @@ from packages.infra.db.models.user import User
 router = APIRouter(prefix="/chart-annotations", tags=["chart-annotations"])
 
 
+def _invalid_annotation_payload_error(exc: ValueError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail={
+            "code": "CHART_ANNOTATION_INVALID_PAYLOAD",
+            "message": str(exc),
+        },
+    )
+
+
 def _parse_dt(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -145,11 +155,14 @@ async def create_chart_annotation_endpoint(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    return await create_chart_annotation(
-        db,
-        owner_user_id=user.id,
-        payload=request.annotation.model_dump(mode="json", exclude_none=True),
-    )
+    try:
+        return await create_chart_annotation(
+            db,
+            owner_user_id=user.id,
+            payload=request.annotation.model_dump(mode="json", exclude_none=True),
+        )
+    except ValueError as exc:
+        raise _invalid_annotation_payload_error(exc) from exc
 
 
 @router.patch("/{annotation_id}", response_model=dict)
@@ -185,6 +198,8 @@ async def update_chart_annotation_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "CHART_ANNOTATION_NOT_FOUND", "message": str(exc)},
         ) from exc
+    except ValueError as exc:
+        raise _invalid_annotation_payload_error(exc) from exc
 
 
 @router.delete("/{annotation_id}", response_model=dict)
@@ -227,14 +242,17 @@ async def batch_upsert_chart_annotations_endpoint(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    return await batch_upsert_chart_annotations(
-        db,
-        owner_user_id=user.id,
-        annotations=[
-            item.model_dump(mode="json", exclude_none=True)
-            for item in request.annotations
-        ],
-    )
+    try:
+        return await batch_upsert_chart_annotations(
+            db,
+            owner_user_id=user.id,
+            annotations=[
+                item.model_dump(mode="json", exclude_none=True)
+                for item in request.annotations
+            ],
+        )
+    except ValueError as exc:
+        raise _invalid_annotation_payload_error(exc) from exc
 
 
 @router.post("/demo-seed", response_model=list[dict])
