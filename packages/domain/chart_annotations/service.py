@@ -108,10 +108,30 @@ _PROFILE_VENDOR_TYPES = {
     "anchored_vwap",
     "fixed_range_volume_profile",
 }
+_FORK_VENDOR_TYPES = {
+    "pitchfork",
+    "schiff_pitchfork_modified",
+    "schiff_pitchfork",
+    "inside_pitchfork",
+    "pitchfan",
+}
+_MEASUREMENT_VENDOR_TYPES = {
+    "price_range",
+    "date_range",
+    "date_and_price_range",
+}
+_CYCLE_VENDOR_TYPES = {
+    "cyclic_lines",
+    "time_cycles",
+    "sine_line",
+}
 _STRICT_VENDOR_TYPES_BY_FAMILY = {
     "fib": _FIB_VENDOR_TYPES,
     "gann": _GANN_VENDOR_TYPES,
     "profile": _PROFILE_VENDOR_TYPES,
+    "fork": _FORK_VENDOR_TYPES,
+    "measurement": _MEASUREMENT_VENDOR_TYPES,
+    "cycle": _CYCLE_VENDOR_TYPES,
 }
 _GEOMETRY_TYPES = {
     "point",

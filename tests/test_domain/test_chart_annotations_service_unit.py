@@ -164,3 +164,73 @@ def test_normalize_annotation_payload_accepts_legacy_profile_without_native_stat
     assert metadata["tool_family"] == "profile"
     assert metadata["tool_vendor_type"] == "fixed_range_volume_profile"
     assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_fork_vendor_native_state_round_trip():
+    payload = _base_payload(
+        family="fork",
+        vendor_type="Schiff_Pitchfork_Modified",
+    )
+    payload["anchors"]["points"].append(
+        {"time": 1717003600, "price": 70654.44},
+    )
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-fork-1",
+            "type": "LineToolSchiffPitchfork2",
+            "state": {"style": 2},
+        },
+        "properties": {"linewidth": 2},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "fork"
+    assert metadata["tool_vendor_type"] == "schiff_pitchfork_modified"
+    assert document["vendor_native"]["state"]["type"] == "LineToolSchiffPitchfork2"
+
+
+@pytest.mark.parametrize(
+    ("family", "vendor_type"),
+    [
+        ("fork", "anchored_vwap"),
+        ("measurement", "pitchfork"),
+        ("cycle", "price_range"),
+    ],
+)
+def test_normalize_annotation_payload_rejects_additional_family_vendor_type_mismatch(
+    family: str,
+    vendor_type: str,
+):
+    payload = _base_payload(family=family, vendor_type=vendor_type)
+
+    with pytest.raises(ValueError, match="tool\\.vendor_type"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_rejects_non_object_cycle_vendor_native_state():
+    payload = _base_payload(family="cycle", vendor_type="time_cycles")
+    payload["vendor_native"] = {"state": ["bad"]}
+
+    with pytest.raises(ValueError, match="vendor_native\\.state"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_accepts_legacy_measurement_without_native_state():
+    payload = _base_payload(
+        family="measurement",
+        vendor_type="date_range",
+    )
+    payload["geometry"] = {"type": "range"}
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "measurement"
+    assert metadata["tool_vendor_type"] == "date_range"
+    assert document["vendor_native"] == {}

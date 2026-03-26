@@ -297,3 +297,60 @@ def test_create_chart_annotation_returns_422_for_invalid_profile_payload(
     payload = response.json()
     assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
     assert "family 'profile'" in payload["detail"]["message"]
+
+
+@pytest.mark.parametrize(
+    "family,error_message",
+    [
+        (
+            "fork",
+            "tool.vendor_type 'anchored_vwap' is not supported for family 'fork'",
+        ),
+        (
+            "measurement",
+            "tool.vendor_type 'pitchfork' is not supported for family 'measurement'",
+        ),
+        (
+            "cycle",
+            "tool.vendor_type 'price_range' is not supported for family 'cycle'",
+        ),
+    ],
+)
+def test_create_chart_annotation_returns_422_for_invalid_additional_line_tool_payload(
+    client,
+    app,
+    monkeypatch,
+    family,
+    error_message,
+):
+    _override_dependencies(
+        app=app,
+        user=SimpleNamespace(id=uuid4()),
+        db=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        chart_annotations,
+        "create_chart_annotation",
+        AsyncMock(side_effect=ValueError(error_message)),
+    )
+
+    response = client.post(
+        "/api/v1/chart-annotations",
+        json={
+            "annotation": {
+                "source": {"type": "user_manual"},
+                "scope": {
+                    "market": "crypto",
+                    "symbol": "BTCUSD",
+                    "timeframe": "15m",
+                },
+                "semantic": {"kind": family, "role": "markup"},
+                "tool": {"family": family, "vendor_type": family},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
+    assert f"family '{family}'" in payload["detail"]["message"]
