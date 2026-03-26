@@ -199,6 +199,7 @@ def test_normalize_annotation_payload_accepts_fork_vendor_native_state_round_tri
         ("fork", "anchored_vwap"),
         ("measurement", "pitchfork"),
         ("cycle", "price_range"),
+        ("forecast", "pitchfork"),
     ],
 )
 def test_normalize_annotation_payload_rejects_additional_family_vendor_type_mismatch(
@@ -233,4 +234,52 @@ def test_normalize_annotation_payload_accepts_legacy_measurement_without_native_
 
     assert metadata["tool_family"] == "measurement"
     assert metadata["tool_vendor_type"] == "date_range"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_forecast_vendor_native_state_round_trip():
+    payload = _base_payload(
+        family="forecast",
+        vendor_type="Projection",
+    )
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-forecast-1",
+            "type": "LineToolProjection",
+            "state": {"linewidth": 2},
+        },
+        "properties": {"linewidth": 2},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "forecast"
+    assert metadata["tool_vendor_type"] == "projection"
+    assert document["vendor_native"]["state"]["type"] == "LineToolProjection"
+
+
+def test_normalize_annotation_payload_rejects_non_object_forecast_vendor_native_state():
+    payload = _base_payload(family="forecast", vendor_type="forecast")
+    payload["vendor_native"] = {"state": ["bad"]}
+
+    with pytest.raises(ValueError, match="vendor_native\\.state"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_accepts_legacy_forecast_without_native_state():
+    payload = _base_payload(
+        family="forecast",
+        vendor_type="bars_pattern",
+    )
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "forecast"
+    assert metadata["tool_vendor_type"] == "bars_pattern"
     assert document["vendor_native"] == {}

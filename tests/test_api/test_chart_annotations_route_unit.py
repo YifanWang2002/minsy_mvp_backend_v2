@@ -314,6 +314,10 @@ def test_create_chart_annotation_returns_422_for_invalid_profile_payload(
             "cycle",
             "tool.vendor_type 'price_range' is not supported for family 'cycle'",
         ),
+        (
+            "forecast",
+            "tool.vendor_type 'pitchfork' is not supported for family 'forecast'",
+        ),
     ],
 )
 def test_create_chart_annotation_returns_422_for_invalid_additional_line_tool_payload(

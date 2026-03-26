@@ -125,6 +125,12 @@ _CYCLE_VENDOR_TYPES = {
     "time_cycles",
     "sine_line",
 }
+_FORECAST_VENDOR_TYPES = {
+    "forecast",
+    "bars_pattern",
+    "ghost_feed",
+    "projection",
+}
 _STRICT_VENDOR_TYPES_BY_FAMILY = {
     "fib": _FIB_VENDOR_TYPES,
     "gann": _GANN_VENDOR_TYPES,
@@ -132,6 +138,7 @@ _STRICT_VENDOR_TYPES_BY_FAMILY = {
     "fork": _FORK_VENDOR_TYPES,
     "measurement": _MEASUREMENT_VENDOR_TYPES,
     "cycle": _CYCLE_VENDOR_TYPES,
+    "forecast": _FORECAST_VENDOR_TYPES,
 }
 _GEOMETRY_TYPES = {
     "point",
