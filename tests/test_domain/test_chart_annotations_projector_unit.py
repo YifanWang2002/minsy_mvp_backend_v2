@@ -85,6 +85,10 @@ def test_build_execution_annotation_documents_emits_position_bundle_and_managed_
     assert position_doc["vendor_native"]["trade"]["stop_price"] == 96.5
     assert position_doc["vendor_native"]["trade"]["target_price"] == 110.25
     assert position_doc["vendor_native"]["trade"]["qty"] == 1.25
+    assert position_doc["vendor_native"]["properties"]["stopLevel"] == 96.5
+    assert position_doc["vendor_native"]["properties"]["profitLevel"] == 110.25
+    assert position_doc["vendor_native"]["properties"]["qty"] == 1.25
+    assert position_doc["vendor_native"]["properties"]["linecolor"] == "#16A34A"
     assert position_doc["content"]["trade"]["direction"] == "long"
     assert position_doc["content"]["trade"]["risk_reward_ratio"] == 1.75
     assert position_doc["relations"]["group_id"] == f"execution:{deployment_id}:BTCUSD:trade_bundle"
@@ -195,8 +199,23 @@ def test_build_execution_annotation_documents_emits_signal_and_order_trade_summa
                 submitted_at=bar_time,
                 client_order_id="ord-3",
                 status="filled",
+                type="limit",
                 price=101.25,
                 qty=1.5,
+                metadata_={
+                    "signal": "OPEN_LONG",
+                    "reason": "breakout_confirmed",
+                    "unified_action": "open",
+                    "provider_status": "filled",
+                    "unified_order_type": "limit",
+                    "unified_time_in_force": "gtc",
+                    "unified_limit_price": "101.25",
+                    "submitted_mark_price": "101.75",
+                    "execution_price_source": "quote.mid",
+                    "execution_quote_bid": "101.5",
+                    "execution_quote_ask": "102.0",
+                    "execution_quote_last": "101.75",
+                },
             )
         ],
         fills=[
@@ -228,6 +247,19 @@ def test_build_execution_annotation_documents_emits_signal_and_order_trade_summa
     assert order_doc["content"]["trade"]["direction"] == "long"
     assert order_doc["content"]["trade"]["entry_price"] == 101.5
     assert order_doc["content"]["trade"]["qty"] == 1.5
+    assert order_doc["content"]["trade"]["status"] == "filled"
+    assert order_doc["content"]["trade"]["provider_status"] == "filled"
+    assert order_doc["content"]["trade"]["signal"] == "OPEN_LONG"
+    assert order_doc["content"]["trade"]["action"] == "open"
+    assert order_doc["content"]["trade"]["reason"] == "breakout_confirmed"
+    assert order_doc["content"]["trade"]["order_type"] == "limit"
+    assert order_doc["content"]["trade"]["time_in_force"] == "gtc"
+    assert order_doc["content"]["trade"]["limit_price"] == 101.25
+    assert order_doc["content"]["trade"]["submitted_mark_price"] == 101.75
+    assert order_doc["content"]["trade"]["execution_price_source"] == "quote.mid"
+    assert order_doc["content"]["trade"]["quote_bid"] == 101.5
+    assert order_doc["content"]["trade"]["quote_ask"] == 102.0
+    assert order_doc["content"]["trade"]["quote_last"] == 101.75
     assert order_doc["vendor_native"]["trade"]["mark_price"] == 101.5
     assert order_doc["relations"]["group_id"] == f"execution:{deployment_id}:{order_id}:order_flow"
 
@@ -249,11 +281,14 @@ def test_build_execution_annotation_documents_maps_close_sell_order_to_long_exit
                 submitted_at=_dt(2026, 3, 27, 12, 0),
                 client_order_id="ord-close",
                 status="filled",
+                type="stop",
                 price=109.0,
                 qty=1.0,
                 metadata_={
                     "signal": "CLOSE",
                     "unified_direction": "long",
+                    "unified_order_type": "stop",
+                    "unified_stop_price": "108.5",
                 },
             )
         ],
@@ -275,6 +310,127 @@ def test_build_execution_annotation_documents_maps_close_sell_order_to_long_exit
     assert "entry_price" not in order_doc["content"]["trade"]
     assert order_doc["content"]["trade"]["exit_price"] == 109.0
     assert order_doc["content"]["trade"]["direction"] == "long"
+    assert order_doc["content"]["trade"]["order_type"] == "stop"
+    assert order_doc["content"]["trade"]["trigger_price"] == 108.5
+
+
+def test_build_execution_annotation_documents_uses_metadata_price_for_pending_order() -> None:
+    deployment_id = uuid4()
+    order_id = uuid4()
+    docs = build_execution_annotation_documents(
+        market="crypto",
+        symbol="BTCUSD",
+        timeframe="15m",
+        deployment_id=deployment_id,
+        signal_events=[],
+        orders=[
+            SimpleNamespace(
+                id=order_id,
+                symbol="BTCUSD",
+                side="buy",
+                submitted_at=_dt(2026, 3, 27, 12, 20),
+                client_order_id="ord-pending",
+                status="accepted",
+                type="market",
+                price=None,
+                qty=0.75,
+                metadata_={
+                    "signal": "OPEN_LONG",
+                    "reason": "order_pending_sync",
+                    "unified_action": "open",
+                    "provider_status": "pending_new",
+                    "execution_price": "104.25",
+                    "submitted_mark_price": "104.25",
+                    "execution_price_source": "strategy.last_close",
+                },
+            )
+        ],
+        fills=[],
+        positions=[],
+        managed_exit_state=None,
+    )
+
+    order_doc = {doc["id"]: doc for doc in docs}[f"order:{order_id}"]
+    assert order_doc["anchors"]["points"][0]["price"] == 104.25
+    assert order_doc["content"]["trade"]["entry_price"] == 104.25
+    assert order_doc["content"]["trade"]["mark_price"] == 104.25
+    assert order_doc["content"]["trade"]["signal"] == "OPEN_LONG"
+    assert order_doc["content"]["trade"]["action"] == "open"
+    assert order_doc["content"]["trade"]["reason"] == "order_pending_sync"
+    assert order_doc["content"]["trade"]["provider_status"] == "pending_new"
+    assert order_doc["content"]["trade"]["execution_price_source"] == "strategy.last_close"
+
+
+def test_build_execution_annotation_documents_maps_close_signal_to_position_side() -> None:
+    deployment_id = uuid4()
+    signal_id = uuid4()
+    docs = build_execution_annotation_documents(
+        market="crypto",
+        symbol="BTCUSD",
+        timeframe="15m",
+        deployment_id=deployment_id,
+        signal_events=[
+            SimpleNamespace(
+                id=signal_id,
+                bar_time=_dt(2026, 3, 27, 12, 30),
+                signal="CLOSE",
+                reason="stop_loss",
+                metadata_={
+                    "position_side": "long",
+                    "exit_price": 97.5,
+                    "managed_stop_price": 97.5,
+                },
+            )
+        ],
+        orders=[],
+        fills=[],
+        positions=[],
+        managed_exit_state=None,
+    )
+
+    signal_doc = {doc["id"]: doc for doc in docs}[f"signal:{signal_id}"]
+    assert signal_doc["semantic"]["direction"] == "long"
+    assert signal_doc["content"]["trade"]["direction"] == "long"
+    assert signal_doc["content"]["trade"]["exit_price"] == 97.5
+
+
+def test_build_execution_annotation_documents_maps_managed_exit_fields_in_signal_trade() -> None:
+    deployment_id = uuid4()
+    signal_id = uuid4()
+    docs = build_execution_annotation_documents(
+        market="crypto",
+        symbol="BTCUSD",
+        timeframe="15m",
+        deployment_id=deployment_id,
+        signal_events=[
+            SimpleNamespace(
+                id=signal_id,
+                bar_time=_dt(2026, 3, 27, 12, 45),
+                signal="CLOSE",
+                reason="take_profit",
+                metadata_={
+                    "position_side": "short",
+                    "current_position_entry_price": 105.0,
+                    "exit_price": 99.0,
+                    "managed_stop_price": 108.0,
+                    "managed_take_price": 99.0,
+                    "qty": "2.0",
+                },
+            )
+        ],
+        orders=[],
+        fills=[],
+        positions=[],
+        managed_exit_state=None,
+    )
+
+    signal_doc = {doc["id"]: doc for doc in docs}[f"signal:{signal_id}"]
+    assert signal_doc["semantic"]["direction"] == "short"
+    assert signal_doc["content"]["trade"]["entry_price"] == 105.0
+    assert signal_doc["content"]["trade"]["exit_price"] == 99.0
+    assert signal_doc["content"]["trade"]["stop_price"] == 108.0
+    assert signal_doc["content"]["trade"]["target_price"] == 99.0
+    assert signal_doc["content"]["trade"]["qty"] == 2.0
 
 
 def test_build_backtest_trade_annotation_documents_emits_grouped_risk_reward_bundle() -> None:
@@ -334,6 +490,9 @@ def test_build_backtest_trade_annotation_documents_emits_grouped_risk_reward_bun
     ]
     assert risk_reward["vendor_native"]["trade"]["stop_price"] == 95.0
     assert risk_reward["vendor_native"]["trade"]["target_price"] == 110.0
+    assert risk_reward["vendor_native"]["properties"]["stopLevel"] == 95.0
+    assert risk_reward["vendor_native"]["properties"]["profitLevel"] == 110.0
+    assert risk_reward["vendor_native"]["properties"]["linecolor"] == "#16A34A"
     assert risk_reward["content"]["trade"]["exit_price"] == 109.0
     assert risk_reward["content"]["trade"]["risk_reward_ratio"] == 2.0
 

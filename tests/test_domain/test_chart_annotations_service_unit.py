@@ -663,6 +663,9 @@ def test_normalize_annotation_payload_accepts_legacy_trading_box_without_native_
         family="trading_box",
         vendor_type="short_position",
     )
+    payload["anchors"]["points"] = [
+        {"time": 1717000000, "price": 71234.56},
+    ]
     payload["vendor_native"] = {
         "trade": {
             "entry_time": 1717000000,
@@ -683,6 +686,42 @@ def test_normalize_annotation_payload_accepts_legacy_trading_box_without_native_
     assert metadata["tool_vendor_type"] == "short_position"
     assert document["vendor_native"]["trade"]["direction"] == "short"
     assert document["content"]["trade"]["qty"] == 2.0
+    assert document["anchors"]["points"] == [
+        {"time": 1717000000, "price": 71234.56},
+        {"time": 1717003600, "price": 71234.56},
+    ]
+    assert document["vendor_native"]["properties"]["stopLevel"] == 71999.0
+    assert document["vendor_native"]["properties"]["profitLevel"] == 70123.0
+    assert document["vendor_native"]["properties"]["qty"] == 2.0
+    assert document["vendor_native"]["properties"]["linecolor"] == "#DC2626"
+
+
+def test_normalize_annotation_payload_normalizes_legacy_risk_reward_vendor_type():
+    payload = _base_payload(
+        family="trading_box",
+        vendor_type="risk_reward",
+    )
+    payload["semantic"]["direction"] = "short"
+    payload["vendor_native"] = {
+        "trade": {
+            "entry_time": 1717000000,
+            "exit_time": 1717003600,
+            "entry_price": 71234.56,
+            "stop_price": 71999.0,
+            "target_price": 70123.0,
+        }
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "trading_box"
+    assert metadata["tool_vendor_type"] == "short_position"
+    assert document["tool"]["vendor_type"] == "short_position"
+    assert document["vendor_native"]["trade"]["direction"] == "short"
+    assert document["vendor_native"]["properties"]["linecolor"] == "#DC2626"
 
 
 def test_normalize_annotation_payload_accepts_media_without_native_state():

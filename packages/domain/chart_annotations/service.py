@@ -266,6 +266,16 @@ def _optional_string(value: Any) -> str | None:
     return text or None
 
 
+def _normalized_trade_direction(value: Any) -> str | None:
+    candidate = _optional_string(value)
+    if candidate is None:
+        return None
+    normalized = candidate.lower()
+    if normalized in {"long", "short"}:
+        return normalized
+    return None
+
+
 def _normalize_enum(value: Any, *, allowed: set[str], default: str) -> str:
     candidate = _string(value, default=default).lower()
     if candidate not in allowed:
@@ -588,6 +598,130 @@ def _derive_trading_box_summary(
     return normalized_summary
 
 
+def _derive_trading_box_properties(
+    *,
+    tool_vendor_type: str | None,
+    trade_summary: Mapping[str, Any],
+    existing_properties: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    properties = dict(_normalize_json_map(existing_properties))
+    summary = _normalize_json_map(trade_summary)
+
+    def assign_number(property_key: str, value: Any) -> None:
+        if property_key in properties:
+            return
+        number = _coerce_number(value)
+        if number is not None:
+            properties[property_key] = number
+
+    def assign_string(property_key: str, value: Any) -> None:
+        if property_key in properties:
+            return
+        text = _optional_string(value)
+        if text is not None:
+            properties[property_key] = text
+
+    def assign_boolean(property_key: str, value: Any) -> None:
+        if property_key in properties:
+            return
+        if isinstance(value, bool):
+            properties[property_key] = value
+
+    assign_number("stopLevel", summary.get("stop_price"))
+    assign_number("profitLevel", summary.get("target_price"))
+    assign_number("qty", summary.get("qty"))
+    assign_number("risk", summary.get("risk"))
+    assign_number("accountSize", summary.get("account_size"))
+    assign_number("lotSize", summary.get("lot_size"))
+    assign_number("leverage", summary.get("leverage"))
+    assign_number("amountStop", summary.get("amount_stop"))
+    assign_number("amountTarget", summary.get("amount_target"))
+
+    assign_string("currency", summary.get("currency"))
+    assign_string(
+        "riskDisplayMode",
+        summary.get("risk_display_mode")
+        or ("currency" if _coerce_number(summary.get("risk")) is not None else None),
+    )
+    assign_string(
+        "linecolor",
+        summary.get("line_color")
+        or ("#DC2626" if tool_vendor_type == "short_position" else "#16A34A"),
+    )
+    assign_string("textcolor", summary.get("text_color") or "#0F172A")
+
+    assign_boolean("compact", summary.get("compact"))
+    assign_boolean("alwaysShowStats", summary.get("always_show_stats"))
+    assign_boolean("showPriceLabels", summary.get("show_price_labels"))
+
+    return properties
+
+
+def _derive_trading_box_points(
+    *,
+    anchors: Mapping[str, Any],
+    trade_summary: Mapping[str, Any],
+) -> list[dict[str, Any]] | None:
+    raw_points = anchors.get("points")
+    normalized_points = (
+        [item for item in raw_points if isinstance(item, Mapping)]
+        if isinstance(raw_points, list)
+        else []
+    )
+    first_point = normalized_points[0] if normalized_points else {}
+    second_point = normalized_points[1] if len(normalized_points) > 1 else {}
+
+    entry_time = (
+        _coerce_epoch_seconds(first_point.get("time"))
+        or _coerce_epoch_seconds(trade_summary.get("entry_time"))
+    )
+    entry_price = (
+        _coerce_number(first_point.get("price"))
+        or _coerce_number(trade_summary.get("entry_price"))
+    )
+    exit_time = (
+        _coerce_epoch_seconds(second_point.get("time"))
+        or _coerce_epoch_seconds(trade_summary.get("exit_time"))
+    )
+    second_price = (
+        _coerce_number(second_point.get("price"))
+        or entry_price
+    )
+    if (
+        entry_time is None
+        or entry_price is None
+        or exit_time is None
+        or second_price is None
+    ):
+        return None
+    return [
+        {"time": entry_time, "price": entry_price},
+        {"time": exit_time, "price": second_price},
+    ]
+
+
+def _resolve_trading_box_vendor_type(
+    *,
+    tool_vendor_type: str | None,
+    semantic_direction: str | None,
+    content: Mapping[str, Any],
+    vendor_native: Mapping[str, Any],
+) -> str | None:
+    if tool_vendor_type is None:
+        return None
+    if tool_vendor_type not in {"risk_reward", "position"}:
+        return tool_vendor_type
+    for candidate in (
+        semantic_direction,
+        _normalize_json_map(vendor_native.get("trade")).get("direction"),
+        _normalize_json_map(content.get("trade")).get("direction"),
+    ):
+        direction = _normalized_trade_direction(candidate)
+        if direction is not None:
+            return "short_position" if direction == "short" else "long_position"
+    return "long_position"
+
+
 def _derive_content_summary(
     *,
     tool_family: str,
@@ -769,13 +903,6 @@ def _normalize_annotation_payload(
     tool_vendor_type = _optional_string(tool.get("vendor_type") or getattr(existing, "tool_vendor_type", None))
     if tool_vendor_type is not None:
         tool_vendor_type = tool_vendor_type.lower()
-    normalized_tool: dict[str, Any] = {
-        "family": tool_family,
-        "vendor": tool_vendor,
-    }
-    if tool_vendor_type is not None:
-        normalized_tool["vendor_type"] = tool_vendor_type
-
     anchors = _normalize_json_map(document.get("anchors"))
     geometry = _normalize_json_map(document.get("geometry"))
     geometry_type = _normalize_enum(
@@ -795,6 +922,19 @@ def _normalize_annotation_payload(
     relations = _normalize_json_map(document.get("relations"))
     lifecycle = _normalize_json_map(document.get("lifecycle"))
     vendor_native = _normalize_json_map(document.get("vendor_native"))
+    if tool_family == "trading_box":
+        tool_vendor_type = _resolve_trading_box_vendor_type(
+            tool_vendor_type=tool_vendor_type,
+            semantic_direction=semantic_direction,
+            content=content,
+            vendor_native=vendor_native,
+        )
+    normalized_tool: dict[str, Any] = {
+        "family": tool_family,
+        "vendor": tool_vendor,
+    }
+    if tool_vendor_type is not None:
+        normalized_tool["vendor_type"] = tool_vendor_type
     _validate_native_line_tool_payload(
         tool_family=tool_family,
         tool_vendor_type=tool_vendor_type,
@@ -808,6 +948,17 @@ def _normalize_annotation_payload(
         )
         if trade_summary:
             vendor_native["trade"] = trade_summary
+            vendor_native["properties"] = _derive_trading_box_properties(
+                tool_vendor_type=tool_vendor_type,
+                trade_summary=trade_summary,
+                existing_properties=vendor_native.get("properties"),
+            )
+            derived_points = _derive_trading_box_points(
+                anchors=anchors,
+                trade_summary=trade_summary,
+            )
+            if derived_points is not None:
+                anchors["points"] = derived_points
     content = _derive_content_summary(
         tool_family=tool_family,
         tool_vendor_type=tool_vendor_type,

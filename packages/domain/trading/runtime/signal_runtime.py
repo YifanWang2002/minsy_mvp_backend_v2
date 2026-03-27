@@ -169,7 +169,15 @@ class LiveSignalRuntime:
                     signal="CLOSE",
                     reason="short_entry_reversal",
                     bar_time=bar_time,
-                    metadata={"exit_price": float(enriched.iloc[bar_index]["close"])},
+                    metadata={
+                        **self._exit_metadata(
+                            stop_price=current_position_stop_price,
+                            take_price=current_position_take_price,
+                            side_name="long",
+                            entry_price=current_position_entry_price,
+                        ),
+                        "exit_price": float(enriched.iloc[bar_index]["close"]),
+                    },
                 )
             return SignalDecision(signal="NOOP", reason="hold_long", bar_time=bar_time)
 
@@ -186,7 +194,15 @@ class LiveSignalRuntime:
                     signal="CLOSE",
                     reason="long_entry_reversal",
                     bar_time=bar_time,
-                    metadata={"exit_price": float(enriched.iloc[bar_index]["close"])},
+                    metadata={
+                        **self._exit_metadata(
+                            stop_price=current_position_stop_price,
+                            take_price=current_position_take_price,
+                            side_name="short",
+                            entry_price=current_position_entry_price,
+                        ),
+                        "exit_price": float(enriched.iloc[bar_index]["close"]),
+                    },
                 )
             return SignalDecision(signal="NOOP", reason="hold_short", bar_time=bar_time)
 
@@ -298,6 +314,8 @@ class LiveSignalRuntime:
         metadata = self._exit_metadata(
             stop_price=stop_price,
             take_price=take_price,
+            side_name=side_name,
+            entry_price=entry_price,
         )
 
         if stop_price is not None:
@@ -494,8 +512,14 @@ class LiveSignalRuntime:
         *,
         stop_price: float | None,
         take_price: float | None,
+        side_name: str,
+        entry_price: float | None = None,
     ) -> dict[str, Any]:
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, Any] = {
+            "position_side": str(side_name).strip().lower(),
+        }
+        if entry_price is not None:
+            metadata["current_position_entry_price"] = float(entry_price)
         if stop_price is not None:
             metadata["managed_stop_price"] = stop_price
         if take_price is not None:
