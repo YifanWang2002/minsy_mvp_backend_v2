@@ -289,11 +289,19 @@ def test_normalize_annotation_payload_accepts_fork_vendor_native_state_round_tri
 @pytest.mark.parametrize(
     ("family", "vendor_type"),
     [
+        ("text", "pitchfork"),
+        ("line", "callout"),
+        ("channel", "pitchfork"),
+        ("shape", "pitchfork"),
+        ("brush", "pitchfork"),
         ("pattern", "pitchfork"),
         ("fork", "anchored_vwap"),
         ("measurement", "pitchfork"),
         ("cycle", "price_range"),
         ("forecast", "pitchfork"),
+        ("trading_box", "pitchfork"),
+        ("media", "pitchfork"),
+        ("table", "pitchfork"),
     ],
 )
 def test_normalize_annotation_payload_rejects_additional_family_vendor_type_mismatch(
@@ -309,6 +317,40 @@ def test_normalize_annotation_payload_rejects_additional_family_vendor_type_mism
 def test_normalize_annotation_payload_rejects_non_object_cycle_vendor_native_state():
     payload = _base_payload(family="cycle", vendor_type="time_cycles")
     payload["vendor_native"] = {"state": ["bad"]}
+
+    with pytest.raises(ValueError, match="vendor_native\\.state"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_accepts_brush_vendor_native_state_round_trip():
+    payload = _base_payload(family="brush", vendor_type="Brush")
+    payload["geometry"] = {}
+    payload["anchors"]["points"].append(
+        {"time": 1717003600, "price": 70654.44},
+    )
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-brush-1",
+            "type": "LineToolBrush",
+            "state": {"color": "#F59E0B"},
+        },
+        "properties": {"linewidth": 3},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "brush"
+    assert metadata["tool_vendor_type"] == "brush"
+    assert document["geometry"]["type"] == "path"
+    assert document["vendor_native"]["state"]["type"] == "LineToolBrush"
+
+
+def test_normalize_annotation_payload_rejects_non_object_brush_vendor_native_state():
+    payload = _base_payload(family="brush", vendor_type="highlighter")
+    payload["vendor_native"] = {"state": "bad"}
 
     with pytest.raises(ValueError, match="vendor_native\\.state"):
         _normalize_annotation_payload(payload, owner_user_id=uuid4())
@@ -355,9 +397,158 @@ def test_normalize_annotation_payload_accepts_forecast_vendor_native_state_round
     assert document["vendor_native"]["state"]["type"] == "LineToolProjection"
 
 
+def test_normalize_annotation_payload_accepts_text_extension_without_native_state():
+    payload = _base_payload(
+        family="text",
+        vendor_type="callout",
+    )
+    payload["anchors"] = {
+        "points": [
+            {"time": 1717000000, "price": 71234.56},
+            {"time": 1717001800, "price": 70654.44},
+        ]
+    }
+    payload["content"] = {"text": "Callout 1"}
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "text"
+    assert metadata["tool_vendor_type"] == "callout"
+    assert document["content"]["text"] == "Callout 1"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_advanced_line_without_native_state():
+    payload = _base_payload(
+        family="line",
+        vendor_type="regression_trend",
+    )
+    payload["geometry"] = {"type": "polyline"}
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "line"
+    assert metadata["tool_vendor_type"] == "regression_trend"
+    assert document["geometry"]["type"] == "polyline"
+
+
+def test_normalize_annotation_payload_accepts_channel_vendor_native_state_round_trip():
+    payload = _base_payload(
+        family="channel",
+        vendor_type="Parallel_Channel",
+    )
+    payload["anchors"]["points"].append(
+        {"time": 1717003600, "price": 70654.44},
+    )
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-channel-1",
+            "type": "LineToolParallelChannel",
+            "state": {"showMidline": True},
+        },
+        "properties": {"showMidline": True},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "channel"
+    assert metadata["tool_vendor_type"] == "parallel_channel"
+    assert document["vendor_native"]["state"]["type"] == "LineToolParallelChannel"
+
+
+def test_normalize_annotation_payload_accepts_shape_path_geometry_without_native_state():
+    payload = _base_payload(
+        family="shape",
+        vendor_type="arc",
+    )
+    payload["anchors"]["points"].append(
+        {"time": 1717003600, "price": 70654.44},
+    )
+    payload["geometry"] = {}
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "shape"
+    assert metadata["tool_vendor_type"] == "arc"
+    assert document["geometry"]["type"] == "path"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_polygon_shape_without_native_state():
+    payload = _base_payload(
+        family="shape",
+        vendor_type="rotated_rectangle",
+    )
+    payload["geometry"] = {}
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "shape"
+    assert metadata["tool_vendor_type"] == "rotated_rectangle"
+    assert document["geometry"]["type"] == "polygon"
+
+
+def test_normalize_annotation_payload_accepts_trading_box_vendor_native_state_round_trip():
+    payload = _base_payload(
+        family="trading_box",
+        vendor_type="Long_Position",
+    )
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-trading-1",
+            "type": "LineToolRiskRewardLong",
+            "state": {"risk": 1200},
+        },
+        "properties": {"linecolor": "#16A34A"},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "trading_box"
+    assert metadata["tool_vendor_type"] == "long_position"
+    assert document["vendor_native"]["state"]["type"] == "LineToolRiskRewardLong"
+
+
 def test_normalize_annotation_payload_rejects_non_object_forecast_vendor_native_state():
     payload = _base_payload(family="forecast", vendor_type="forecast")
     payload["vendor_native"] = {"state": ["bad"]}
+
+    with pytest.raises(ValueError, match="vendor_native\\.state"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_rejects_non_object_channel_vendor_native_state():
+    payload = _base_payload(family="channel", vendor_type="flat_bottom")
+    payload["anchors"]["points"].append(
+        {"time": 1717003600, "price": 70654.44},
+    )
+    payload["vendor_native"] = {"state": "bad"}
+
+    with pytest.raises(ValueError, match="vendor_native\\.state"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_rejects_non_object_trading_box_vendor_native_state():
+    payload = _base_payload(family="trading_box", vendor_type="short_position")
+    payload["vendor_native"] = {"state": "bad"}
 
     with pytest.raises(ValueError, match="vendor_native\\.state"):
         _normalize_annotation_payload(payload, owner_user_id=uuid4())
@@ -376,4 +567,87 @@ def test_normalize_annotation_payload_accepts_legacy_forecast_without_native_sta
 
     assert metadata["tool_family"] == "forecast"
     assert metadata["tool_vendor_type"] == "bars_pattern"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_legacy_channel_without_native_state():
+    payload = _base_payload(
+        family="channel",
+        vendor_type="disjoint_angle",
+    )
+    payload["anchors"]["points"].append(
+        {"time": 1717003600, "price": 70654.44},
+    )
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "channel"
+    assert metadata["tool_vendor_type"] == "disjoint_angle"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_legacy_trading_box_without_native_state():
+    payload = _base_payload(
+        family="trading_box",
+        vendor_type="short_position",
+    )
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "trading_box"
+    assert metadata["tool_vendor_type"] == "short_position"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_media_without_native_state():
+    payload = _base_payload(
+        family="media",
+        vendor_type="emoji",
+    )
+    payload["geometry"] = {}
+    payload["anchors"] = {
+        "points": [
+            {"time": 1717000000, "price": 71234.56},
+        ]
+    }
+    payload["content"] = {"emoji": "🚀"}
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "media"
+    assert metadata["tool_vendor_type"] == "emoji"
+    assert document["geometry"]["type"] == "point"
+    assert document["content"]["emoji"] == "🚀"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_table_without_native_state():
+    payload = _base_payload(
+        family="table",
+        vendor_type="table",
+    )
+    payload["geometry"] = {}
+    payload["anchors"] = {
+        "points": [
+            {"time": 1717000000, "price": 71234.56},
+        ]
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "table"
+    assert metadata["tool_vendor_type"] == "table"
+    assert document["geometry"]["type"] == "point"
     assert document["vendor_native"] == {}

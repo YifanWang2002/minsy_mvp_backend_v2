@@ -303,6 +303,26 @@ def test_create_chart_annotation_returns_422_for_invalid_profile_payload(
     "family,error_message",
     [
         (
+            "text",
+            "tool.vendor_type 'pitchfork' is not supported for family 'text'",
+        ),
+        (
+            "line",
+            "tool.vendor_type 'callout' is not supported for family 'line'",
+        ),
+        (
+            "channel",
+            "tool.vendor_type 'pitchfork' is not supported for family 'channel'",
+        ),
+        (
+            "shape",
+            "tool.vendor_type 'pitchfork' is not supported for family 'shape'",
+        ),
+        (
+            "brush",
+            "tool.vendor_type 'pitchfork' is not supported for family 'brush'",
+        ),
+        (
             "pattern",
             "tool.vendor_type 'pitchfork' is not supported for family 'pattern'",
         ),
@@ -321,6 +341,18 @@ def test_create_chart_annotation_returns_422_for_invalid_profile_payload(
         (
             "forecast",
             "tool.vendor_type 'pitchfork' is not supported for family 'forecast'",
+        ),
+        (
+            "trading_box",
+            "tool.vendor_type 'pitchfork' is not supported for family 'trading_box'",
+        ),
+        (
+            "media",
+            "tool.vendor_type 'pitchfork' is not supported for family 'media'",
+        ),
+        (
+            "table",
+            "tool.vendor_type 'pitchfork' is not supported for family 'table'",
         ),
     ],
 )

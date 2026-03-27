@@ -144,7 +144,66 @@ _FORECAST_VENDOR_TYPES = {
     "ghost_feed",
     "projection",
 }
+_TEXT_VENDOR_TYPES = {
+    "text",
+    "note",
+    "text_note",
+    "callout",
+    "comment",
+    "balloon",
+}
+_LINE_VENDOR_TYPES = {
+    "trend_line",
+    "ray",
+    "horizontal_line",
+    "vertical_line",
+    "horizontal_ray",
+    "cross_line",
+    "info_line",
+    "trend_angle",
+    "arrow",
+    "extended",
+    "regression_trend",
+}
+_CHANNEL_VENDOR_TYPES = {
+    "parallel_channel",
+    "disjoint_angle",
+    "flat_bottom",
+}
+_SHAPE_VENDOR_TYPES = {
+    "rectangle",
+    "rotated_rectangle",
+    "circle",
+    "ellipse",
+    "triangle",
+    "polyline",
+    "path",
+    "curve",
+    "double_curve",
+    "arc",
+}
+_BRUSH_VENDOR_TYPES = {
+    "brush",
+    "highlighter",
+}
+_TRADING_BOX_VENDOR_TYPES = {
+    "long_position",
+    "short_position",
+}
+_MEDIA_VENDOR_TYPES = {
+    "icon",
+    "emoji",
+    "sticker",
+}
+_TABLE_VENDOR_TYPES = {
+    "table",
+}
 _STRICT_VENDOR_TYPES_BY_FAMILY = {
+    "text": _TEXT_VENDOR_TYPES,
+    "line": _LINE_VENDOR_TYPES,
+    "channel": _CHANNEL_VENDOR_TYPES,
+    "shape": _SHAPE_VENDOR_TYPES,
+    "brush": _BRUSH_VENDOR_TYPES,
     "fib": _FIB_VENDOR_TYPES,
     "gann": _GANN_VENDOR_TYPES,
     "profile": _PROFILE_VENDOR_TYPES,
@@ -153,6 +212,9 @@ _STRICT_VENDOR_TYPES_BY_FAMILY = {
     "measurement": _MEASUREMENT_VENDOR_TYPES,
     "cycle": _CYCLE_VENDOR_TYPES,
     "forecast": _FORECAST_VENDOR_TYPES,
+    "trading_box": _TRADING_BOX_VENDOR_TYPES,
+    "media": _MEDIA_VENDOR_TYPES,
+    "table": _TABLE_VENDOR_TYPES,
 }
 _GEOMETRY_TYPES = {
     "point",
@@ -308,6 +370,7 @@ def _default_geometry_type(
     *,
     anchor_space: str,
     tool_family: str,
+    tool_vendor_type: str | None,
     anchors: dict[str, Any],
 ) -> str:
     if anchor_space == "viewport_percent":
@@ -323,6 +386,11 @@ def _default_geometry_type(
         if len(points) <= 1:
             return "point"
         if tool_family == "shape":
+            normalized_vendor_type = _optional_string(tool_vendor_type)
+            if normalized_vendor_type == "polyline":
+                return "polyline"
+            if normalized_vendor_type in {"path", "curve", "double_curve", "arc"}:
+                return "path"
             return "polygon"
         return "polyline"
     return "point"
@@ -466,6 +534,7 @@ def _normalize_annotation_payload(
         default=_default_geometry_type(
             anchor_space=anchor_space,
             tool_family=tool_family,
+            tool_vendor_type=tool_vendor_type,
             anchors=anchors,
         ),
     )
