@@ -526,6 +526,74 @@ def test_normalize_annotation_payload_accepts_trading_box_vendor_native_state_ro
     assert metadata["tool_family"] == "trading_box"
     assert metadata["tool_vendor_type"] == "long_position"
     assert document["vendor_native"]["state"]["type"] == "LineToolRiskRewardLong"
+    assert document["content"]["trade"]["direction"] == "long"
+    assert document["content"]["trade"]["risk"] == 1200.0
+
+
+def test_normalize_annotation_payload_derives_trading_box_trade_summary_from_native_state():
+    payload = _base_payload(
+        family="trading_box",
+        vendor_type="long_position",
+    )
+    payload["anchors"]["points"] = [
+        {"time": 1717000000, "price": 71234.56},
+        {"time": 1717003600, "price": 71234.56},
+    ]
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-trading-2",
+            "state": {
+                "type": "LineToolRiskRewardLong",
+                "state": {
+                    "qty": 1.5,
+                    "risk": 800,
+                    "lotSize": 2,
+                    "accountSize": 25000,
+                    "currency": "USD",
+                    "riskDisplayMode": "currency",
+                    "linecolor": "#16A34A",
+                    "textcolor": "#0F172A",
+                    "stopLevel": 70500.0,
+                    "profitLevel": 72600.0,
+                    "amountStop": -800.0,
+                    "amountTarget": 1600.0,
+                    "compact": True,
+                    "alwaysShowStats": True,
+                    "showPriceLabels": True,
+                },
+            },
+        },
+        "properties": {"linewidth": 2},
+    }
+
+    document, _ = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert document["vendor_native"]["trade"] == {
+        "direction": "long",
+        "entry_time": 1717000000,
+        "exit_time": 1717003600,
+        "entry_price": 71234.56,
+        "stop_price": 70500.0,
+        "target_price": 72600.0,
+        "qty": 1.5,
+        "risk": 800.0,
+        "account_size": 25000.0,
+        "lot_size": 2.0,
+        "amount_stop": -800.0,
+        "amount_target": 1600.0,
+        "currency": "USD",
+        "risk_display_mode": "currency",
+        "line_color": "#16A34A",
+        "text_color": "#0F172A",
+        "compact": True,
+        "always_show_stats": True,
+        "show_price_labels": True,
+        "risk_reward_ratio": 1.8589,
+    }
+    assert document["content"]["trade"] == document["vendor_native"]["trade"]
 
 
 def test_normalize_annotation_payload_rejects_non_object_forecast_vendor_native_state():
@@ -595,6 +663,16 @@ def test_normalize_annotation_payload_accepts_legacy_trading_box_without_native_
         family="trading_box",
         vendor_type="short_position",
     )
+    payload["vendor_native"] = {
+        "trade": {
+            "entry_time": 1717000000,
+            "exit_time": 1717003600,
+            "entry_price": 71234.56,
+            "stop_price": 71999.0,
+            "target_price": 70123.0,
+            "qty": 2,
+        }
+    }
 
     document, metadata = _normalize_annotation_payload(
         payload,
@@ -603,7 +681,8 @@ def test_normalize_annotation_payload_accepts_legacy_trading_box_without_native_
 
     assert metadata["tool_family"] == "trading_box"
     assert metadata["tool_vendor_type"] == "short_position"
-    assert document["vendor_native"] == {}
+    assert document["vendor_native"]["trade"]["direction"] == "short"
+    assert document["content"]["trade"]["qty"] == 2.0
 
 
 def test_normalize_annotation_payload_accepts_media_without_native_state():

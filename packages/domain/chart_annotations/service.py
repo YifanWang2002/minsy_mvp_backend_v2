@@ -434,9 +434,164 @@ def _normalize_table_cells_preview(value: Any) -> list[list[str]]:
     return preview
 
 
+def _coerce_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return float(value)
+    text = _optional_string(value)
+    if text is None:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _coerce_epoch_seconds(value: Any) -> int | None:
+    numeric = _coerce_number(value)
+    if numeric is None:
+        return None
+    if numeric > 9999999999:
+        numeric = numeric / 1000.0
+    return int(round(numeric))
+
+
+def _derive_trading_box_summary(
+    *,
+    tool_vendor_type: str | None,
+    anchors: dict[str, Any],
+    vendor_native: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _normalize_json_map(vendor_native.get("trade"))
+    line_tool_state = _normalize_json_map(vendor_native.get("state"))
+    root_state = _normalize_json_map(line_tool_state.get("state"))
+    nested_state = _normalize_json_map(root_state.get("state"))
+    state_payload = nested_state or root_state
+    properties = _normalize_json_map(vendor_native.get("properties"))
+    anchor_points = anchors.get("points")
+    normalized_anchor_points = (
+        [item for item in anchor_points if isinstance(item, Mapping)]
+        if isinstance(anchor_points, list)
+        else []
+    )
+    entry_point = normalized_anchor_points[0] if normalized_anchor_points else {}
+    second_point = (
+        normalized_anchor_points[1]
+        if len(normalized_anchor_points) > 1
+        else entry_point
+    )
+    entry_time = (
+        _coerce_epoch_seconds(summary.get("entry_time"))
+        or _coerce_epoch_seconds(entry_point.get("time"))
+    )
+    exit_time = (
+        _coerce_epoch_seconds(summary.get("exit_time"))
+        or _coerce_epoch_seconds(second_point.get("time"))
+    )
+    entry_price = (
+        _coerce_number(summary.get("entry_price"))
+        or _coerce_number(entry_point.get("price"))
+    )
+    stop_price = (
+        _coerce_number(summary.get("stop_price"))
+        or _coerce_number(state_payload.get("stopLevel"))
+        or _coerce_number(properties.get("stopLevel"))
+    )
+    target_price = (
+        _coerce_number(summary.get("target_price"))
+        or _coerce_number(state_payload.get("profitLevel"))
+        or _coerce_number(properties.get("profitLevel"))
+    )
+
+    direction = "short" if tool_vendor_type == "short_position" else "long"
+    normalized_summary = dict(summary)
+    normalized_summary["direction"] = direction
+    if entry_time is not None:
+        normalized_summary["entry_time"] = entry_time
+    if exit_time is not None:
+        normalized_summary["exit_time"] = exit_time
+    if entry_price is not None:
+        normalized_summary["entry_price"] = entry_price
+    if stop_price is not None:
+        normalized_summary["stop_price"] = stop_price
+    if target_price is not None:
+        normalized_summary["target_price"] = target_price
+
+    numeric_mapping = {
+        "qty": state_payload.get("qty"),
+        "risk": state_payload.get("risk"),
+        "account_size": state_payload.get("accountSize"),
+        "lot_size": state_payload.get("lotSize"),
+        "leverage": state_payload.get("leverage"),
+        "amount_stop": state_payload.get("amountStop"),
+        "amount_target": state_payload.get("amountTarget"),
+    }
+    property_mapping = {
+        "qty": properties.get("qty"),
+        "risk": properties.get("risk"),
+        "account_size": properties.get("accountSize"),
+        "lot_size": properties.get("lotSize"),
+        "leverage": properties.get("leverage"),
+        "amount_stop": properties.get("amountStop"),
+        "amount_target": properties.get("amountTarget"),
+    }
+    for key, nested_value in numeric_mapping.items():
+        number = (
+            _coerce_number(normalized_summary.get(key))
+            or _coerce_number(nested_value)
+            or _coerce_number(property_mapping.get(key))
+        )
+        if number is not None:
+            normalized_summary[key] = number
+
+    string_mapping = {
+        "currency": state_payload.get("currency") or properties.get("currency"),
+        "risk_display_mode": state_payload.get("riskDisplayMode")
+        or properties.get("riskDisplayMode"),
+        "line_color": state_payload.get("linecolor") or properties.get("linecolor"),
+        "text_color": state_payload.get("textcolor") or properties.get("textcolor"),
+    }
+    for key, fallback in string_mapping.items():
+        text = _optional_string(normalized_summary.get(key)) or _optional_string(fallback)
+        if text is not None:
+            normalized_summary[key] = text
+
+    boolean_mapping = {
+        "compact": state_payload.get("compact")
+        if isinstance(state_payload.get("compact"), bool)
+        else properties.get("compact"),
+        "always_show_stats": state_payload.get("alwaysShowStats")
+        if isinstance(state_payload.get("alwaysShowStats"), bool)
+        else properties.get("alwaysShowStats"),
+        "show_price_labels": state_payload.get("showPriceLabels")
+        if isinstance(state_payload.get("showPriceLabels"), bool)
+        else properties.get("showPriceLabels"),
+    }
+    for key, fallback in boolean_mapping.items():
+        existing = normalized_summary.get(key)
+        if isinstance(existing, bool):
+            continue
+        if isinstance(fallback, bool):
+            normalized_summary[key] = fallback
+
+    if (
+        entry_price is not None
+        and stop_price is not None
+        and target_price is not None
+        and abs(entry_price - stop_price) > 0
+    ):
+        normalized_summary["risk_reward_ratio"] = round(
+            abs(target_price - entry_price) / abs(entry_price - stop_price),
+            4,
+        )
+    return normalized_summary
+
+
 def _derive_content_summary(
     *,
     tool_family: str,
+    tool_vendor_type: str | None,
     content: dict[str, Any],
     anchors: dict[str, Any],
     vendor_native: Mapping[str, Any],
@@ -496,6 +651,17 @@ def _derive_content_summary(
         icon_code = nested_state.get("icon")
         if isinstance(icon_code, (int, float)):
             normalized["icon_code"] = int(icon_code)
+    elif tool_family == "trading_box":
+        trade_payload = _normalize_json_map(normalized.get("trade"))
+        trade_payload.update(
+            _derive_trading_box_summary(
+                tool_vendor_type=tool_vendor_type,
+                anchors=anchors,
+                vendor_native=vendor_native,
+            )
+        )
+        if trade_payload:
+            normalized["trade"] = trade_payload
     return normalized
 
 
@@ -634,8 +800,17 @@ def _normalize_annotation_payload(
         tool_vendor_type=tool_vendor_type,
         vendor_native=vendor_native,
     )
+    if tool_family == "trading_box":
+        trade_summary = _derive_trading_box_summary(
+            tool_vendor_type=tool_vendor_type,
+            anchors=anchors,
+            vendor_native=vendor_native,
+        )
+        if trade_summary:
+            vendor_native["trade"] = trade_summary
     content = _derive_content_summary(
         tool_family=tool_family,
+        tool_vendor_type=tool_vendor_type,
         content=content,
         anchors=anchors,
         vendor_native=vendor_native,
