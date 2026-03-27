@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -43,6 +43,177 @@ def _base_scope(
     return payload
 
 
+def _positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _timeframe_step_seconds(timeframe: str) -> int:
+    text = str(timeframe or "").strip().lower()
+    if not text:
+        return 15 * 60
+    if text.isdigit():
+        return max(60, int(text) * 60)
+    suffix = text[-1]
+    amount = text[:-1]
+    if not amount.isdigit():
+        return 15 * 60
+    multiplier = {
+        "m": 60,
+        "h": 60 * 60,
+        "d": 24 * 60 * 60,
+        "w": 7 * 24 * 60 * 60,
+    }.get(suffix)
+    if multiplier is None:
+        return 15 * 60
+    return max(60, int(amount) * multiplier)
+
+
+def _timestamps_for_symbol_orders(*, symbol: str, orders: Iterable[Order]) -> list[int]:
+    normalized_symbol = str(symbol or "").strip().upper()
+    timestamps: list[int] = []
+    for order in orders:
+        if str(order.symbol or "").strip().upper() != normalized_symbol:
+            continue
+        timestamp = _iso_seconds(order.submitted_at)
+        if timestamp is not None:
+            timestamps.append(timestamp)
+    return timestamps
+
+
+def _signed_fill_events_for_symbol(
+    *,
+    symbol: str,
+    orders: Iterable[Order],
+    fills: Iterable[Fill],
+) -> list[dict[str, Any]]:
+    normalized_symbol = str(symbol or "").strip().upper()
+    order_by_id = {
+        order.id: order
+        for order in orders
+        if str(order.symbol or "").strip().upper() == normalized_symbol
+    }
+    events: list[dict[str, Any]] = []
+    for fill in fills:
+        order = order_by_id.get(fill.order_id)
+        if order is None:
+            continue
+        timestamp = _iso_seconds(fill.filled_at)
+        if timestamp is None:
+            continue
+        qty = _positive_float(fill.fill_qty)
+        if qty is None:
+            continue
+        side = str(order.side or "").strip().lower()
+        signed_qty = qty if side == "buy" else -qty
+        events.append(
+            {
+                "time": timestamp,
+                "signed_qty": signed_qty,
+            }
+        )
+    events.sort(key=lambda item: (int(item["time"]), float(item["signed_qty"])))
+    return events
+
+
+def _infer_position_window(
+    *,
+    symbol: str,
+    side: str,
+    timeframe: str,
+    orders: Iterable[Order],
+    fills: Iterable[Fill],
+) -> tuple[int | None, int | None]:
+    normalized_side = str(side or "").strip().lower()
+    if normalized_side not in {"long", "short"}:
+        return None, None
+    step_seconds = _timeframe_step_seconds(timeframe)
+    events = _signed_fill_events_for_symbol(symbol=symbol, orders=orders, fills=fills)
+    window_start: int | None = None
+    latest_time: int | None = None
+    running_qty = 0.0
+    if events:
+        for event in events:
+            event_time = int(event["time"])
+            latest_time = event_time
+            previous_qty = running_qty
+            running_qty += float(event["signed_qty"])
+            if normalized_side == "long":
+                if previous_qty <= 0 < running_qty:
+                    window_start = event_time
+                elif running_qty <= 0:
+                    window_start = None
+            else:
+                if previous_qty >= 0 > running_qty:
+                    window_start = event_time
+                elif running_qty >= 0:
+                    window_start = None
+    if window_start is None:
+        order_times = _timestamps_for_symbol_orders(symbol=symbol, orders=orders)
+        if order_times:
+            window_start = min(order_times)
+            latest_time = max(order_times)
+    if window_start is None:
+        return None, None
+    base_end_time = latest_time if latest_time is not None else window_start
+    window_end = max(base_end_time, window_start + step_seconds * 12)
+    return window_start, window_end
+
+
+def _managed_exit_prices(
+    *,
+    managed_exit_state: Mapping[str, Any] | None,
+    symbol: str,
+    side: str,
+) -> tuple[float | None, float | None]:
+    payload = managed_exit_state if isinstance(managed_exit_state, Mapping) else {}
+    if not payload:
+        return None, None
+    managed_symbol = str(payload.get("symbol") or "").strip().upper()
+    normalized_symbol = str(symbol or "").strip().upper()
+    if managed_symbol and managed_symbol != normalized_symbol:
+        return None, None
+    managed_side = str(payload.get("side") or "").strip().lower()
+    normalized_side = str(side or "").strip().lower()
+    if managed_side and managed_side != normalized_side:
+        return None, None
+    return (
+        _positive_float(payload.get("stop_price")),
+        _positive_float(payload.get("take_price")),
+    )
+
+
+def _line_points(*, start_time: int, end_time: int, price: float) -> list[dict[str, Any]]:
+    return [
+        {"time": int(start_time), "price": float(price)},
+        {"time": int(end_time), "price": float(price)},
+    ]
+
+
+def _bundle_member_ids(stop_loss_id: str | None, take_profit_id: str | None) -> list[str]:
+    return [
+        member_id
+        for member_id in [stop_loss_id, take_profit_id]
+        if isinstance(member_id, str) and member_id
+    ]
+
+
+def _trade_annotation_timestamp(raw_value: Any) -> int | None:
+    if isinstance(raw_value, datetime):
+        return _iso_seconds(raw_value)
+    if isinstance(raw_value, (int, float)):
+        return int(raw_value)
+    if isinstance(raw_value, str):
+        try:
+            return int(datetime.fromisoformat(raw_value.replace("Z", "+00:00")).astimezone(UTC).timestamp())
+        except ValueError:
+            return None
+    return None
+
+
 def build_execution_annotation_documents(
     *,
     market: str,
@@ -53,6 +224,7 @@ def build_execution_annotation_documents(
     orders: Iterable[Order],
     fills: Iterable[Fill],
     positions: Iterable[Position],
+    managed_exit_state: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Project execution facts into canonical annotation documents."""
     scope = _base_scope(
@@ -97,8 +269,9 @@ def build_execution_annotation_documents(
             }
         )
     fill_by_order_id = {fill.order_id: fill for fill in fills}
+    normalized_symbol = str(symbol or "").strip().upper()
     for order in orders:
-        if order.symbol != symbol:
+        if str(order.symbol or "").strip().upper() != normalized_symbol:
             continue
         fill = fill_by_order_id.get(order.id)
         fill_time = _iso_seconds(fill.filled_at if fill is not None else order.submitted_at)
@@ -140,40 +313,185 @@ def build_execution_annotation_documents(
             }
         )
     for position in positions:
-        if position.symbol != symbol or str(position.side).lower() == "flat":
+        if (
+            str(position.symbol or "").strip().upper() != normalized_symbol
+            or str(position.side).strip().lower() == "flat"
+        ):
             continue
+        direction = str(position.side).strip().lower()
+        entry_price = _positive_float(position.avg_entry_price)
+        if entry_price is None:
+            continue
+        entry_time, exit_time = _infer_position_window(
+            symbol=normalized_symbol,
+            side=direction,
+            timeframe=timeframe,
+            orders=orders,
+            fills=fills,
+        )
+        if entry_time is None:
+            entry_time = int(datetime.now(UTC).timestamp())
+        if exit_time is None or exit_time <= entry_time:
+            exit_time = entry_time + _timeframe_step_seconds(timeframe) * 12
+        stop_price, take_price = _managed_exit_prices(
+            managed_exit_state=managed_exit_state,
+            symbol=normalized_symbol,
+            side=direction,
+        )
+        group_id = f"execution:{deployment_id}:{normalized_symbol}:trade_bundle"
+        stop_loss_id = (
+            f"stop_loss:{deployment_id}:{normalized_symbol}"
+            if stop_price is not None
+            else None
+        )
+        take_profit_id = (
+            f"take_profit:{deployment_id}:{normalized_symbol}"
+            if take_price is not None
+            else None
+        )
+        composite_members = _bundle_member_ids(stop_loss_id, take_profit_id)
         docs.append(
             {
-                "id": f"position:{deployment_id}:{symbol}",
+                "id": f"position:{deployment_id}:{normalized_symbol}",
                 "source": {
                     "type": "strategy_runtime",
-                    "source_id": f"{deployment_id}:{symbol}",
+                    "source_id": f"{deployment_id}:{normalized_symbol}",
                 },
                 "scope": scope,
                 "semantic": {
                     "kind": "position",
                     "role": "execution",
-                    "direction": str(position.side).lower(),
+                    "direction": direction,
                     "status": "active",
                 },
                 "tool": {
                     "family": "trading_box",
                     "vendor": "tradingview",
                     "vendor_type": "long_position"
-                    if str(position.side).lower() == "long"
+                    if direction == "long"
                     else "short_position",
                 },
                 "anchors": {
-                    "points": [{"time": int(datetime.now(UTC).timestamp()), "price": float(position.avg_entry_price)}],
+                    "points": [
+                        {"time": int(entry_time), "price": float(entry_price)},
+                        {"time": int(exit_time), "price": float(entry_price)},
+                    ],
                 },
                 "geometry": {"type": "composite"},
                 "content": {},
                 "style": {},
-                "relations": {},
+                "relations": (
+                    {
+                        "group_id": group_id,
+                        "composite_members": composite_members,
+                    }
+                    if composite_members
+                    else {"group_id": group_id}
+                ),
                 "lifecycle": {"editable": False},
-                "vendor_native": {},
+                "vendor_native": {
+                    "trade": {
+                        "entry_time": int(entry_time),
+                        "exit_time": int(exit_time),
+                        "entry_price": float(entry_price),
+                        "stop_price": stop_price,
+                        "target_price": take_price,
+                        "qty": _positive_float(position.qty),
+                        "mark_price": _positive_float(position.mark_price),
+                    }
+                },
             }
         )
+        if stop_price is not None:
+            docs.append(
+                {
+                    "id": stop_loss_id,
+                    "source": {
+                        "type": "strategy_runtime",
+                        "source_id": f"{deployment_id}:{normalized_symbol}:stop_loss",
+                    },
+                    "scope": scope,
+                    "semantic": {
+                        "kind": "stop_loss",
+                        "role": "risk",
+                        "direction": direction,
+                        "status": "active",
+                    },
+                    "tool": {
+                        "family": "line",
+                        "vendor": "tradingview",
+                        "vendor_type": "horizontal_line",
+                    },
+                    "anchors": {
+                        "points": _line_points(
+                            start_time=entry_time,
+                            end_time=exit_time,
+                            price=stop_price,
+                        ),
+                    },
+                    "geometry": {"type": "polyline"},
+                    "content": {"text": "Stop Loss"},
+                    "style": {},
+                    "relations": {
+                        "group_id": group_id,
+                        "parent_id": f"position:{deployment_id}:{normalized_symbol}",
+                    },
+                    "lifecycle": {"editable": False},
+                    "vendor_native": {
+                        "trade": {
+                            "entry_time": int(entry_time),
+                            "exit_time": int(exit_time),
+                            "entry_price": float(entry_price),
+                            "stop_price": stop_price,
+                        }
+                    },
+                }
+            )
+        if take_price is not None:
+            docs.append(
+                {
+                    "id": take_profit_id,
+                    "source": {
+                        "type": "strategy_runtime",
+                        "source_id": f"{deployment_id}:{normalized_symbol}:take_profit",
+                    },
+                    "scope": scope,
+                    "semantic": {
+                        "kind": "take_profit",
+                        "role": "risk",
+                        "direction": direction,
+                        "status": "active",
+                    },
+                    "tool": {
+                        "family": "line",
+                        "vendor": "tradingview",
+                        "vendor_type": "horizontal_line",
+                    },
+                    "anchors": {
+                        "points": _line_points(
+                            start_time=entry_time,
+                            end_time=exit_time,
+                            price=take_price,
+                        ),
+                    },
+                    "geometry": {"type": "polyline"},
+                    "content": {"text": "Take Profit"},
+                    "style": {},
+                    "relations": {
+                        "group_id": group_id,
+                        "parent_id": f"position:{deployment_id}:{normalized_symbol}",
+                    },
+                    "lifecycle": {"editable": False},
+                    "vendor_native": {
+                        "trade": {
+                            "entry_time": int(entry_time),
+                            "exit_time": int(exit_time),
+                            "entry_price": float(entry_price),
+                            "target_price": take_price,
+                        }
+                    },
+                }
+            )
     return docs
 
 
@@ -198,58 +516,117 @@ def build_backtest_trade_annotation_documents(
     side = str(trade.get("side") or "long").strip().lower()
     entry_price = trade.get("entry_price")
     exit_price = trade.get("exit_price")
+    group_id = f"backtest:{trade_uid}:trade_bundle"
+    entry_time = _trade_annotation_timestamp(trade.get("entry_time"))
+    exit_time = _trade_annotation_timestamp(trade.get("exit_time"))
+    stop_price = _positive_float(trade.get("stop_price"))
+    take_price = _positive_float(trade.get("take_price"))
+    stop_loss_id: str | None = None
+    take_profit_id: str | None = None
+    normalized_annotations: list[dict[str, Any]] = []
     for item in trade_annotations:
         kind = str(item.get("kind") or "").strip().lower()
         if kind in {"trade_entry", "trade_exit", "stop_loss", "take_profit"}:
-            raw_time = item.get("time")
-            timestamp = None
-            if isinstance(raw_time, str):
-                try:
-                    timestamp = int(datetime.fromisoformat(raw_time.replace("Z", "+00:00")).astimezone(UTC).timestamp())
-                except ValueError:
-                    timestamp = None
+            timestamp = _trade_annotation_timestamp(item.get("time"))
             if timestamp is None:
                 continue
-            semantic_kind = {
-                "trade_entry": "entry",
-                "trade_exit": "exit",
-                "stop_loss": "stop_loss",
-                "take_profit": "take_profit",
-            }[kind]
-            vendor_type = {
-                "trade_entry": "arrow_up" if side != "short" else "arrow_down",
-                "trade_exit": "flag",
-                "stop_loss": "horizontal_line",
-                "take_profit": "horizontal_line",
-            }[kind]
-            docs.append(
+            if kind == "trade_entry" and entry_time is None:
+                entry_time = timestamp
+            if kind == "trade_exit":
+                exit_time = timestamp
+            if kind == "stop_loss":
+                stop_price = _positive_float(item.get("price"))
+                stop_loss_id = f"backtest:{trade_uid}:stop_loss"
+            if kind == "take_profit":
+                take_price = _positive_float(item.get("price"))
+                take_profit_id = f"backtest:{trade_uid}:take_profit"
+            normalized_annotations.append(
                 {
-                    "id": f"backtest:{trade_uid}:{kind}",
-                    "source": {"type": "backtest", "source_id": trade_uid},
-                    "scope": scope,
-                    "semantic": {
-                        "kind": semantic_kind,
-                        "role": "execution",
-                        "direction": side,
-                        "status": "closed",
-                    },
-                    "tool": {
-                        "family": "marker" if kind.startswith("trade_") else "line",
-                        "vendor": "tradingview",
-                        "vendor_type": vendor_type,
-                    },
-                    "anchors": {
-                        "points": [{"time": timestamp, "price": item.get("price")}],
-                    },
-                    "geometry": {"type": "point" if kind.startswith("trade_") else "polyline"},
-                    "content": {"text": item.get("label")},
-                    "style": {},
-                    "relations": {},
-                    "lifecycle": {"editable": False},
-                    "vendor_native": {},
+                    "kind": kind,
+                    "timestamp": timestamp,
+                    "price": _positive_float(item.get("price")),
+                    "label": item.get("label"),
                 }
             )
+    effective_entry_time = entry_time
+    if effective_entry_time is None and normalized_annotations:
+        effective_entry_time = int(normalized_annotations[0]["timestamp"])
+    if effective_entry_time is None:
+        effective_entry_time = int(datetime.now(UTC).timestamp())
+    effective_exit_time = exit_time
+    if effective_exit_time is None or effective_exit_time <= effective_entry_time:
+        effective_exit_time = effective_entry_time + _timeframe_step_seconds(timeframe) * 12
+    for item in normalized_annotations:
+        kind = str(item["kind"])
+        timestamp = int(item["timestamp"])
+        point_price = item["price"]
+        semantic_kind = {
+            "trade_entry": "entry",
+            "trade_exit": "exit",
+            "stop_loss": "stop_loss",
+            "take_profit": "take_profit",
+        }[kind]
+        vendor_type = {
+            "trade_entry": "arrow_up" if side != "short" else "arrow_down",
+            "trade_exit": "flag",
+            "stop_loss": "horizontal_line",
+            "take_profit": "horizontal_line",
+        }[kind]
+        docs.append(
+            {
+                "id": f"backtest:{trade_uid}:{kind}",
+                "source": {"type": "backtest", "source_id": trade_uid},
+                "scope": scope,
+                "semantic": {
+                    "kind": semantic_kind,
+                    "role": "execution",
+                    "direction": side,
+                    "status": "closed",
+                },
+                "tool": {
+                    "family": "marker" if kind.startswith("trade_") else "line",
+                    "vendor": "tradingview",
+                    "vendor_type": vendor_type,
+                },
+                "anchors": {
+                    "points": (
+                        _line_points(
+                            start_time=effective_entry_time,
+                            end_time=effective_exit_time,
+                            price=point_price,
+                        )
+                        if kind in {"stop_loss", "take_profit"} and point_price is not None
+                        else [{"time": timestamp, "price": point_price}]
+                    ),
+                },
+                "geometry": {"type": "point" if kind.startswith("trade_") else "polyline"},
+                "content": {"text": item["label"]},
+                "style": {},
+                "relations": {
+                    "group_id": group_id,
+                    **(
+                        {"parent_id": f"backtest:{trade_uid}:risk_reward"}
+                        if kind in {"stop_loss", "take_profit"}
+                        else {}
+                    ),
+                },
+                "lifecycle": {"editable": False},
+                "vendor_native": {
+                    "trade": {
+                        "entry_time": effective_entry_time,
+                        "exit_time": effective_exit_time,
+                        "entry_price": _positive_float(entry_price),
+                        "exit_price": _positive_float(exit_price),
+                        "stop_price": stop_price,
+                        "target_price": take_price,
+                    }
+                },
+            }
+        )
     if entry_price is not None:
+        normalized_entry_price = _positive_float(entry_price)
+        if normalized_entry_price is None:
+            return docs
         docs.append(
             {
                 "id": f"backtest:{trade_uid}:risk_reward",
@@ -266,16 +643,28 @@ def build_backtest_trade_annotation_documents(
                     "vendor": "tradingview",
                     "vendor_type": "long_position" if side != "short" else "short_position",
                 },
-                "anchors": {"points": [{"time": int(datetime.now(UTC).timestamp()), "price": float(entry_price)}]},
+                "anchors": {
+                    "points": [
+                        {"time": int(effective_entry_time), "price": float(normalized_entry_price)},
+                        {"time": int(effective_exit_time), "price": float(normalized_entry_price)},
+                    ]
+                },
                 "geometry": {"type": "composite"},
                 "content": {},
                 "style": {},
-                "relations": {},
+                "relations": {
+                    "group_id": group_id,
+                    "composite_members": _bundle_member_ids(stop_loss_id, take_profit_id),
+                },
                 "lifecycle": {"editable": False},
                 "vendor_native": {
                     "trade": {
-                        "entry_price": entry_price,
-                        "exit_price": exit_price,
+                        "entry_time": int(effective_entry_time),
+                        "exit_time": int(effective_exit_time),
+                        "entry_price": normalized_entry_price,
+                        "exit_price": _positive_float(exit_price),
+                        "stop_price": stop_price,
+                        "target_price": take_price,
                     }
                 },
             }

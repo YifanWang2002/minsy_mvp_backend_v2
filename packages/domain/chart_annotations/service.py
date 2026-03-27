@@ -26,6 +26,7 @@ from packages.infra.db.models.chart_annotation import ChartAnnotation
 from packages.infra.db.models.chart_annotation_outbox import ChartAnnotationOutbox
 from packages.infra.db.models.chart_annotation_revision import ChartAnnotationRevision
 from packages.infra.db.models.deployment import Deployment
+from packages.infra.db.models.deployment_run import DeploymentRun
 from packages.infra.db.models.fill import Fill
 from packages.infra.db.models.order import Order
 from packages.infra.db.models.position import Position
@@ -1252,6 +1253,19 @@ async def project_execution_annotations_for_scope(
             )
         )
     ).all()
+    latest_run = await db.scalar(
+        select(DeploymentRun)
+        .where(DeploymentRun.deployment_id == deployment.id)
+        .order_by(DeploymentRun.updated_at.desc(), DeploymentRun.created_at.desc())
+        .limit(1)
+    )
+    managed_exit_state = (
+        latest_run.runtime_state.get("managed_exit")
+        if latest_run is not None
+        and isinstance(latest_run.runtime_state, dict)
+        and isinstance(latest_run.runtime_state.get("managed_exit"), dict)
+        else None
+    )
     market = filters.market or "stocks"
     return build_execution_annotation_documents(
         market=market,
@@ -1262,6 +1276,7 @@ async def project_execution_annotations_for_scope(
         orders=orders,
         fills=fills,
         positions=positions,
+        managed_exit_state=managed_exit_state,
     )
 
 
