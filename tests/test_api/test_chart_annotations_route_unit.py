@@ -303,6 +303,10 @@ def test_create_chart_annotation_returns_422_for_invalid_profile_payload(
     "family,error_message",
     [
         (
+            "pattern",
+            "tool.vendor_type 'pitchfork' is not supported for family 'pattern'",
+        ),
+        (
             "fork",
             "tool.vendor_type 'anchored_vwap' is not supported for family 'fork'",
         ),

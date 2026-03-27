@@ -108,6 +108,19 @@ _PROFILE_VENDOR_TYPES = {
     "anchored_vwap",
     "fixed_range_volume_profile",
 }
+_PATTERN_VENDOR_TYPES = {
+    "xabcd_pattern",
+    "cypher_pattern",
+    "abcd_pattern",
+    "triangle_pattern",
+    "3divers_pattern",
+    "head_and_shoulders",
+    "elliott_impulse_wave",
+    "elliott_triangle_wave",
+    "elliott_triple_combo",
+    "elliott_correction",
+    "elliott_double_combo",
+}
 _FORK_VENDOR_TYPES = {
     "pitchfork",
     "schiff_pitchfork_modified",
@@ -135,6 +148,7 @@ _STRICT_VENDOR_TYPES_BY_FAMILY = {
     "fib": _FIB_VENDOR_TYPES,
     "gann": _GANN_VENDOR_TYPES,
     "profile": _PROFILE_VENDOR_TYPES,
+    "pattern": _PATTERN_VENDOR_TYPES,
     "fork": _FORK_VENDOR_TYPES,
     "measurement": _MEASUREMENT_VENDOR_TYPES,
     "cycle": _CYCLE_VENDOR_TYPES,

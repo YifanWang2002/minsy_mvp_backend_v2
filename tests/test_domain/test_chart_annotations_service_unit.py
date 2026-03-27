@@ -93,6 +93,99 @@ def test_normalize_annotation_payload_accepts_legacy_fib_without_native_state():
     assert document["vendor_native"] == {}
 
 
+def test_normalize_annotation_payload_accepts_pattern_vendor_native_state_round_trip():
+    payload = _base_payload(
+        family="pattern",
+        vendor_type="XABCD_Pattern",
+    )
+    payload["anchors"]["points"].extend(
+        [
+            {"time": 1717003600, "price": 70654.44},
+            {"time": 1717005400, "price": 69980.11},
+            {"time": 1717007200, "price": 70420.32},
+        ]
+    )
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-pattern-1",
+            "type": "LineToolXABCDPattern",
+            "state": {"linewidth": 2},
+        },
+        "properties": {"linewidth": 2},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "pattern"
+    assert metadata["tool_vendor_type"] == "xabcd_pattern"
+    assert document["vendor_native"]["state"]["type"] == "LineToolXABCDPattern"
+
+
+def test_normalize_annotation_payload_rejects_non_object_pattern_vendor_native_state():
+    payload = _base_payload(family="pattern", vendor_type="triangle_pattern")
+    payload["vendor_native"] = {"state": "bad"}
+
+    with pytest.raises(ValueError, match="vendor_native\\.state"):
+        _normalize_annotation_payload(payload, owner_user_id=uuid4())
+
+
+def test_normalize_annotation_payload_accepts_legacy_pattern_without_native_state():
+    payload = _base_payload(
+        family="pattern",
+        vendor_type="head_and_shoulders",
+    )
+    payload["anchors"]["points"].extend(
+        [
+            {"time": 1717003600, "price": 70654.44},
+            {"time": 1717005400, "price": 69980.11},
+            {"time": 1717007200, "price": 70420.32},
+        ]
+    )
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "pattern"
+    assert metadata["tool_vendor_type"] == "head_and_shoulders"
+    assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_accepts_elliott_vendor_native_state_round_trip():
+    payload = _base_payload(
+        family="pattern",
+        vendor_type="Elliott_Impulse_Wave",
+    )
+    payload["anchors"]["points"].extend(
+        [
+            {"time": 1717003600, "price": 70654.44},
+            {"time": 1717005400, "price": 69980.11},
+            {"time": 1717007200, "price": 70420.32},
+        ]
+    )
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-elliott-1",
+            "type": "LineToolElliottImpulseWave",
+            "state": {"linewidth": 2},
+        },
+        "properties": {"linewidth": 2},
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "pattern"
+    assert metadata["tool_vendor_type"] == "elliott_impulse_wave"
+    assert document["vendor_native"]["state"]["type"] == "LineToolElliottImpulseWave"
+
+
 def test_normalize_annotation_payload_accepts_profile_vendor_native_state_round_trip():
     payload = _base_payload(family="profile", vendor_type="Anchored_VWAP")
     payload["anchors"] = {
@@ -196,6 +289,7 @@ def test_normalize_annotation_payload_accepts_fork_vendor_native_state_round_tri
 @pytest.mark.parametrize(
     ("family", "vendor_type"),
     [
+        ("pattern", "pitchfork"),
         ("fork", "anchored_vwap"),
         ("measurement", "pitchfork"),
         ("cycle", "price_range"),
