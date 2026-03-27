@@ -26,6 +26,7 @@ from packages.infra.db.models.chart_annotation import ChartAnnotation
 from packages.infra.db.models.chart_annotation_outbox import ChartAnnotationOutbox
 from packages.infra.db.models.chart_annotation_revision import ChartAnnotationRevision
 from packages.infra.db.models.deployment import Deployment
+from packages.infra.db.models.deployment_run import DeploymentRun
 from packages.infra.db.models.fill import Fill
 from packages.infra.db.models.order import Order
 from packages.infra.db.models.position import Position
@@ -86,6 +87,136 @@ _TOOL_FAMILIES = {
     "table",
     "anchored",
 }
+_FIB_VENDOR_TYPES = {
+    "fib_retracement",
+    "fib_trend_ext",
+    "fib_speed_resist_fan",
+    "fib_timezone",
+    "fib_trend_time",
+    "fib_circles",
+    "fib_spiral",
+    "fib_speed_resist_arcs",
+    "fib_channel",
+    "fib_wedge",
+}
+_GANN_VENDOR_TYPES = {
+    "gannbox",
+    "gannbox_square",
+    "gannbox_fixed",
+    "gannbox_fan",
+}
+_PROFILE_VENDOR_TYPES = {
+    "anchored_vwap",
+    "fixed_range_volume_profile",
+}
+_PATTERN_VENDOR_TYPES = {
+    "xabcd_pattern",
+    "cypher_pattern",
+    "abcd_pattern",
+    "triangle_pattern",
+    "3divers_pattern",
+    "head_and_shoulders",
+    "elliott_impulse_wave",
+    "elliott_triangle_wave",
+    "elliott_triple_combo",
+    "elliott_correction",
+    "elliott_double_combo",
+}
+_FORK_VENDOR_TYPES = {
+    "pitchfork",
+    "schiff_pitchfork_modified",
+    "schiff_pitchfork",
+    "inside_pitchfork",
+    "pitchfan",
+}
+_MEASUREMENT_VENDOR_TYPES = {
+    "price_range",
+    "date_range",
+    "date_and_price_range",
+}
+_CYCLE_VENDOR_TYPES = {
+    "cyclic_lines",
+    "time_cycles",
+    "sine_line",
+}
+_FORECAST_VENDOR_TYPES = {
+    "forecast",
+    "bars_pattern",
+    "ghost_feed",
+    "projection",
+}
+_TEXT_VENDOR_TYPES = {
+    "text",
+    "note",
+    "text_note",
+    "callout",
+    "comment",
+    "balloon",
+}
+_LINE_VENDOR_TYPES = {
+    "trend_line",
+    "ray",
+    "horizontal_line",
+    "vertical_line",
+    "horizontal_ray",
+    "cross_line",
+    "info_line",
+    "trend_angle",
+    "arrow",
+    "extended",
+    "regression_trend",
+}
+_CHANNEL_VENDOR_TYPES = {
+    "parallel_channel",
+    "disjoint_angle",
+    "flat_bottom",
+}
+_SHAPE_VENDOR_TYPES = {
+    "rectangle",
+    "rotated_rectangle",
+    "circle",
+    "ellipse",
+    "triangle",
+    "polyline",
+    "path",
+    "curve",
+    "double_curve",
+    "arc",
+}
+_BRUSH_VENDOR_TYPES = {
+    "brush",
+    "highlighter",
+}
+_TRADING_BOX_VENDOR_TYPES = {
+    "long_position",
+    "short_position",
+}
+_MEDIA_VENDOR_TYPES = {
+    "icon",
+    "emoji",
+    "sticker",
+}
+_TABLE_VENDOR_TYPES = {
+    "table",
+}
+_STRICT_VENDOR_TYPES_BY_FAMILY = {
+    "text": _TEXT_VENDOR_TYPES,
+    "line": _LINE_VENDOR_TYPES,
+    "channel": _CHANNEL_VENDOR_TYPES,
+    "shape": _SHAPE_VENDOR_TYPES,
+    "brush": _BRUSH_VENDOR_TYPES,
+    "fib": _FIB_VENDOR_TYPES,
+    "gann": _GANN_VENDOR_TYPES,
+    "profile": _PROFILE_VENDOR_TYPES,
+    "pattern": _PATTERN_VENDOR_TYPES,
+    "fork": _FORK_VENDOR_TYPES,
+    "measurement": _MEASUREMENT_VENDOR_TYPES,
+    "cycle": _CYCLE_VENDOR_TYPES,
+    "forecast": _FORECAST_VENDOR_TYPES,
+    "trading_box": _TRADING_BOX_VENDOR_TYPES,
+    "media": _MEDIA_VENDOR_TYPES,
+    "table": _TABLE_VENDOR_TYPES,
+}
 _GEOMETRY_TYPES = {
     "point",
     "polyline",
@@ -97,6 +228,8 @@ _GEOMETRY_TYPES = {
 }
 _EDITABLE_SOURCE_TYPES = {"ai_agent", "user_manual", "system"}
 _OUTBOX_RETENTION_PER_OWNER = 4000
+_TABLE_CONTENT_PREVIEW_ROWS = 8
+_TABLE_CONTENT_PREVIEW_COLS = 8
 
 
 class ChartAnnotationConflictError(RuntimeError):
@@ -131,6 +264,16 @@ def _string(value: Any, *, default: str = "") -> str:
 def _optional_string(value: Any) -> str | None:
     text = _string(value)
     return text or None
+
+
+def _normalized_trade_direction(value: Any) -> str | None:
+    candidate = _optional_string(value)
+    if candidate is None:
+        return None
+    normalized = candidate.lower()
+    if normalized in {"long", "short"}:
+        return normalized
+    return None
 
 
 def _normalize_enum(value: Any, *, allowed: set[str], default: str) -> str:
@@ -240,6 +383,7 @@ def _default_geometry_type(
     *,
     anchor_space: str,
     tool_family: str,
+    tool_vendor_type: str | None,
     anchors: dict[str, Any],
 ) -> str:
     if anchor_space == "viewport_percent":
@@ -255,9 +399,404 @@ def _default_geometry_type(
         if len(points) <= 1:
             return "point"
         if tool_family == "shape":
+            normalized_vendor_type = _optional_string(tool_vendor_type)
+            if normalized_vendor_type == "polyline":
+                return "polyline"
+            if normalized_vendor_type in {"path", "curve", "double_curve", "arc"}:
+                return "path"
             return "polygon"
         return "polyline"
     return "point"
+
+
+def _validate_native_line_tool_payload(
+    *,
+    tool_family: str,
+    tool_vendor_type: str | None,
+    vendor_native: Mapping[str, Any],
+) -> None:
+    allowed_vendor_types = _STRICT_VENDOR_TYPES_BY_FAMILY.get(tool_family)
+    if not allowed_vendor_types:
+        return
+    if tool_vendor_type is None or tool_vendor_type not in allowed_vendor_types:
+        raise ValueError(
+            f"tool.vendor_type '{tool_vendor_type or ''}' is not supported for family '{tool_family}'"
+        )
+    if "state" in vendor_native and not isinstance(vendor_native.get("state"), Mapping):
+        raise ValueError(
+            f"vendor_native.state must be an object for family '{tool_family}'"
+        )
+
+
+def _normalize_table_cells_preview(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    preview: list[list[str]] = []
+    for row in value[:_TABLE_CONTENT_PREVIEW_ROWS]:
+        if not isinstance(row, list):
+            continue
+        preview.append(
+            [
+                _string(cell)
+                for cell in row[:_TABLE_CONTENT_PREVIEW_COLS]
+            ]
+        )
+    return preview
+
+
+def _coerce_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        return float(value)
+    text = _optional_string(value)
+    if text is None:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _coerce_epoch_seconds(value: Any) -> int | None:
+    numeric = _coerce_number(value)
+    if numeric is None:
+        return None
+    if numeric > 9999999999:
+        numeric = numeric / 1000.0
+    return int(round(numeric))
+
+
+def _derive_trading_box_summary(
+    *,
+    tool_vendor_type: str | None,
+    anchors: dict[str, Any],
+    vendor_native: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = _normalize_json_map(vendor_native.get("trade"))
+    line_tool_state = _normalize_json_map(vendor_native.get("state"))
+    root_state = _normalize_json_map(line_tool_state.get("state"))
+    nested_state = _normalize_json_map(root_state.get("state"))
+    state_payload = nested_state or root_state
+    properties = _normalize_json_map(vendor_native.get("properties"))
+    anchor_points = anchors.get("points")
+    normalized_anchor_points = (
+        [item for item in anchor_points if isinstance(item, Mapping)]
+        if isinstance(anchor_points, list)
+        else []
+    )
+    entry_point = normalized_anchor_points[0] if normalized_anchor_points else {}
+    second_point = (
+        normalized_anchor_points[1]
+        if len(normalized_anchor_points) > 1
+        else entry_point
+    )
+    entry_time = (
+        _coerce_epoch_seconds(summary.get("entry_time"))
+        or _coerce_epoch_seconds(entry_point.get("time"))
+    )
+    exit_time = (
+        _coerce_epoch_seconds(summary.get("exit_time"))
+        or _coerce_epoch_seconds(second_point.get("time"))
+    )
+    entry_price = (
+        _coerce_number(summary.get("entry_price"))
+        or _coerce_number(entry_point.get("price"))
+    )
+    stop_price = (
+        _coerce_number(summary.get("stop_price"))
+        or _coerce_number(state_payload.get("stopLevel"))
+        or _coerce_number(properties.get("stopLevel"))
+    )
+    target_price = (
+        _coerce_number(summary.get("target_price"))
+        or _coerce_number(state_payload.get("profitLevel"))
+        or _coerce_number(properties.get("profitLevel"))
+    )
+
+    direction = "short" if tool_vendor_type == "short_position" else "long"
+    normalized_summary = dict(summary)
+    normalized_summary["direction"] = direction
+    if entry_time is not None:
+        normalized_summary["entry_time"] = entry_time
+    if exit_time is not None:
+        normalized_summary["exit_time"] = exit_time
+    if entry_price is not None:
+        normalized_summary["entry_price"] = entry_price
+    if stop_price is not None:
+        normalized_summary["stop_price"] = stop_price
+    if target_price is not None:
+        normalized_summary["target_price"] = target_price
+
+    numeric_mapping = {
+        "qty": state_payload.get("qty"),
+        "risk": state_payload.get("risk"),
+        "account_size": state_payload.get("accountSize"),
+        "lot_size": state_payload.get("lotSize"),
+        "leverage": state_payload.get("leverage"),
+        "amount_stop": state_payload.get("amountStop"),
+        "amount_target": state_payload.get("amountTarget"),
+    }
+    property_mapping = {
+        "qty": properties.get("qty"),
+        "risk": properties.get("risk"),
+        "account_size": properties.get("accountSize"),
+        "lot_size": properties.get("lotSize"),
+        "leverage": properties.get("leverage"),
+        "amount_stop": properties.get("amountStop"),
+        "amount_target": properties.get("amountTarget"),
+    }
+    for key, nested_value in numeric_mapping.items():
+        number = (
+            _coerce_number(normalized_summary.get(key))
+            or _coerce_number(nested_value)
+            or _coerce_number(property_mapping.get(key))
+        )
+        if number is not None:
+            normalized_summary[key] = number
+
+    string_mapping = {
+        "currency": state_payload.get("currency") or properties.get("currency"),
+        "risk_display_mode": state_payload.get("riskDisplayMode")
+        or properties.get("riskDisplayMode"),
+        "line_color": state_payload.get("linecolor") or properties.get("linecolor"),
+        "text_color": state_payload.get("textcolor") or properties.get("textcolor"),
+    }
+    for key, fallback in string_mapping.items():
+        text = _optional_string(normalized_summary.get(key)) or _optional_string(fallback)
+        if text is not None:
+            normalized_summary[key] = text
+
+    boolean_mapping = {
+        "compact": state_payload.get("compact")
+        if isinstance(state_payload.get("compact"), bool)
+        else properties.get("compact"),
+        "always_show_stats": state_payload.get("alwaysShowStats")
+        if isinstance(state_payload.get("alwaysShowStats"), bool)
+        else properties.get("alwaysShowStats"),
+        "show_price_labels": state_payload.get("showPriceLabels")
+        if isinstance(state_payload.get("showPriceLabels"), bool)
+        else properties.get("showPriceLabels"),
+    }
+    for key, fallback in boolean_mapping.items():
+        existing = normalized_summary.get(key)
+        if isinstance(existing, bool):
+            continue
+        if isinstance(fallback, bool):
+            normalized_summary[key] = fallback
+
+    if (
+        entry_price is not None
+        and stop_price is not None
+        and target_price is not None
+        and abs(entry_price - stop_price) > 0
+    ):
+        normalized_summary["risk_reward_ratio"] = round(
+            abs(target_price - entry_price) / abs(entry_price - stop_price),
+            4,
+        )
+    return normalized_summary
+
+
+def _derive_trading_box_properties(
+    *,
+    tool_vendor_type: str | None,
+    trade_summary: Mapping[str, Any],
+    existing_properties: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    properties = dict(_normalize_json_map(existing_properties))
+    summary = _normalize_json_map(trade_summary)
+
+    def assign_number(property_key: str, value: Any) -> None:
+        if property_key in properties:
+            return
+        number = _coerce_number(value)
+        if number is not None:
+            properties[property_key] = number
+
+    def assign_string(property_key: str, value: Any) -> None:
+        if property_key in properties:
+            return
+        text = _optional_string(value)
+        if text is not None:
+            properties[property_key] = text
+
+    def assign_boolean(property_key: str, value: Any) -> None:
+        if property_key in properties:
+            return
+        if isinstance(value, bool):
+            properties[property_key] = value
+
+    assign_number("stopLevel", summary.get("stop_price"))
+    assign_number("profitLevel", summary.get("target_price"))
+    assign_number("qty", summary.get("qty"))
+    assign_number("risk", summary.get("risk"))
+    assign_number("accountSize", summary.get("account_size"))
+    assign_number("lotSize", summary.get("lot_size"))
+    assign_number("leverage", summary.get("leverage"))
+    assign_number("amountStop", summary.get("amount_stop"))
+    assign_number("amountTarget", summary.get("amount_target"))
+
+    assign_string("currency", summary.get("currency"))
+    assign_string(
+        "riskDisplayMode",
+        summary.get("risk_display_mode")
+        or ("currency" if _coerce_number(summary.get("risk")) is not None else None),
+    )
+    assign_string(
+        "linecolor",
+        summary.get("line_color")
+        or ("#DC2626" if tool_vendor_type == "short_position" else "#16A34A"),
+    )
+    assign_string("textcolor", summary.get("text_color") or "#0F172A")
+
+    assign_boolean("compact", summary.get("compact"))
+    assign_boolean("alwaysShowStats", summary.get("always_show_stats"))
+    assign_boolean("showPriceLabels", summary.get("show_price_labels"))
+
+    return properties
+
+
+def _derive_trading_box_points(
+    *,
+    anchors: Mapping[str, Any],
+    trade_summary: Mapping[str, Any],
+) -> list[dict[str, Any]] | None:
+    raw_points = anchors.get("points")
+    normalized_points = (
+        [item for item in raw_points if isinstance(item, Mapping)]
+        if isinstance(raw_points, list)
+        else []
+    )
+    first_point = normalized_points[0] if normalized_points else {}
+    second_point = normalized_points[1] if len(normalized_points) > 1 else {}
+
+    entry_time = (
+        _coerce_epoch_seconds(first_point.get("time"))
+        or _coerce_epoch_seconds(trade_summary.get("entry_time"))
+    )
+    entry_price = (
+        _coerce_number(first_point.get("price"))
+        or _coerce_number(trade_summary.get("entry_price"))
+    )
+    exit_time = (
+        _coerce_epoch_seconds(second_point.get("time"))
+        or _coerce_epoch_seconds(trade_summary.get("exit_time"))
+    )
+    second_price = (
+        _coerce_number(second_point.get("price"))
+        or entry_price
+    )
+    if (
+        entry_time is None
+        or entry_price is None
+        or exit_time is None
+        or second_price is None
+    ):
+        return None
+    return [
+        {"time": entry_time, "price": entry_price},
+        {"time": exit_time, "price": second_price},
+    ]
+
+
+def _resolve_trading_box_vendor_type(
+    *,
+    tool_vendor_type: str | None,
+    semantic_direction: str | None,
+    content: Mapping[str, Any],
+    vendor_native: Mapping[str, Any],
+) -> str | None:
+    if tool_vendor_type is None:
+        return None
+    if tool_vendor_type not in {"risk_reward", "position"}:
+        return tool_vendor_type
+    for candidate in (
+        semantic_direction,
+        _normalize_json_map(vendor_native.get("trade")).get("direction"),
+        _normalize_json_map(content.get("trade")).get("direction"),
+    ):
+        direction = _normalized_trade_direction(candidate)
+        if direction is not None:
+            return "short_position" if direction == "short" else "long_position"
+    return "long_position"
+
+
+def _derive_content_summary(
+    *,
+    tool_family: str,
+    tool_vendor_type: str | None,
+    content: dict[str, Any],
+    anchors: dict[str, Any],
+    vendor_native: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(content)
+    line_tool_state = _normalize_json_map(vendor_native.get("state"))
+    nested_state = _normalize_json_map(line_tool_state.get("state"))
+    if tool_family == "table":
+        table_payload = _normalize_json_map(normalized.get("table"))
+        rows_count = int(nested_state.get("rowsCount") or 0)
+        cols_count = int(nested_state.get("colsCount") or 0)
+        if rows_count <= 0 or cols_count <= 0:
+            preview = _normalize_table_cells_preview(nested_state.get("cells"))
+            if rows_count <= 0:
+                rows_count = len(preview)
+            if cols_count <= 0:
+                cols_count = len(preview[0]) if preview else 0
+        else:
+            preview = _normalize_table_cells_preview(nested_state.get("cells"))
+        table_payload["rows"] = rows_count
+        table_payload["cols"] = cols_count
+        if preview:
+            table_payload["cells_preview"] = preview
+        title = _optional_string(nested_state.get("title"))
+        if title is not None:
+            table_payload["title"] = title
+        normalized["table"] = table_payload
+    elif tool_family == "brush":
+        stroke_payload = _normalize_json_map(normalized.get("stroke"))
+        line_tool_points = line_tool_state.get("points")
+        if isinstance(line_tool_points, list):
+            point_count = len(line_tool_points)
+        else:
+            anchor_points = anchors.get("points")
+            point_count = len(anchor_points) if isinstance(anchor_points, list) else 0
+        stroke_payload["point_count"] = point_count
+        smooth = nested_state.get("smooth")
+        if isinstance(smooth, (int, float)):
+            stroke_payload["smooth"] = float(smooth)
+        normalized["stroke"] = stroke_payload
+    elif tool_family == "media":
+        media_payload = _normalize_json_map(normalized.get("media"))
+        size = nested_state.get("size")
+        if isinstance(size, (int, float)):
+            media_payload["size"] = float(size)
+        angle = nested_state.get("angle")
+        if isinstance(angle, (int, float)):
+            media_payload["angle"] = float(angle)
+        if media_payload:
+            normalized["media"] = media_payload
+        emoji = _optional_string(nested_state.get("emoji"))
+        if emoji is not None:
+            normalized["emoji"] = emoji
+        sticker = _optional_string(nested_state.get("sticker"))
+        if sticker is not None:
+            normalized["sticker"] = sticker
+        icon_code = nested_state.get("icon")
+        if isinstance(icon_code, (int, float)):
+            normalized["icon_code"] = int(icon_code)
+    elif tool_family == "trading_box":
+        trade_payload = _normalize_json_map(normalized.get("trade"))
+        trade_payload.update(
+            _derive_trading_box_summary(
+                tool_vendor_type=tool_vendor_type,
+                anchors=anchors,
+                vendor_native=vendor_native,
+            )
+        )
+        if trade_payload:
+            normalized["trade"] = trade_payload
+    return normalized
 
 
 def _normalize_annotation_payload(
@@ -362,13 +901,8 @@ def _normalize_annotation_payload(
     )
     tool_vendor = _string(tool.get("vendor") or getattr(existing, "tool_vendor", None), default="tradingview").lower()
     tool_vendor_type = _optional_string(tool.get("vendor_type") or getattr(existing, "tool_vendor_type", None))
-    normalized_tool: dict[str, Any] = {
-        "family": tool_family,
-        "vendor": tool_vendor,
-    }
     if tool_vendor_type is not None:
-        normalized_tool["vendor_type"] = tool_vendor_type
-
+        tool_vendor_type = tool_vendor_type.lower()
     anchors = _normalize_json_map(document.get("anchors"))
     geometry = _normalize_json_map(document.get("geometry"))
     geometry_type = _normalize_enum(
@@ -377,6 +911,7 @@ def _normalize_annotation_payload(
         default=_default_geometry_type(
             anchor_space=anchor_space,
             tool_family=tool_family,
+            tool_vendor_type=tool_vendor_type,
             anchors=anchors,
         ),
     )
@@ -387,6 +922,50 @@ def _normalize_annotation_payload(
     relations = _normalize_json_map(document.get("relations"))
     lifecycle = _normalize_json_map(document.get("lifecycle"))
     vendor_native = _normalize_json_map(document.get("vendor_native"))
+    if tool_family == "trading_box":
+        tool_vendor_type = _resolve_trading_box_vendor_type(
+            tool_vendor_type=tool_vendor_type,
+            semantic_direction=semantic_direction,
+            content=content,
+            vendor_native=vendor_native,
+        )
+    normalized_tool: dict[str, Any] = {
+        "family": tool_family,
+        "vendor": tool_vendor,
+    }
+    if tool_vendor_type is not None:
+        normalized_tool["vendor_type"] = tool_vendor_type
+    _validate_native_line_tool_payload(
+        tool_family=tool_family,
+        tool_vendor_type=tool_vendor_type,
+        vendor_native=vendor_native,
+    )
+    if tool_family == "trading_box":
+        trade_summary = _derive_trading_box_summary(
+            tool_vendor_type=tool_vendor_type,
+            anchors=anchors,
+            vendor_native=vendor_native,
+        )
+        if trade_summary:
+            vendor_native["trade"] = trade_summary
+            vendor_native["properties"] = _derive_trading_box_properties(
+                tool_vendor_type=tool_vendor_type,
+                trade_summary=trade_summary,
+                existing_properties=vendor_native.get("properties"),
+            )
+            derived_points = _derive_trading_box_points(
+                anchors=anchors,
+                trade_summary=trade_summary,
+            )
+            if derived_points is not None:
+                anchors["points"] = derived_points
+    content = _derive_content_summary(
+        tool_family=tool_family,
+        tool_vendor_type=tool_vendor_type,
+        content=content,
+        anchors=anchors,
+        vendor_native=vendor_native,
+    )
 
     is_editable = bool(
         lifecycle.get("editable")
@@ -1089,6 +1668,19 @@ async def project_execution_annotations_for_scope(
             )
         )
     ).all()
+    latest_run = await db.scalar(
+        select(DeploymentRun)
+        .where(DeploymentRun.deployment_id == deployment.id)
+        .order_by(DeploymentRun.updated_at.desc(), DeploymentRun.created_at.desc())
+        .limit(1)
+    )
+    managed_exit_state = (
+        latest_run.runtime_state.get("managed_exit")
+        if latest_run is not None
+        and isinstance(latest_run.runtime_state, dict)
+        and isinstance(latest_run.runtime_state.get("managed_exit"), dict)
+        else None
+    )
     market = filters.market or "stocks"
     return build_execution_annotation_documents(
         market=market,
@@ -1099,6 +1691,7 @@ async def project_execution_annotations_for_scope(
         orders=orders,
         fills=fills,
         positions=positions,
+        managed_exit_state=managed_exit_state,
     )
 
 

@@ -136,3 +136,261 @@ def test_update_chart_annotation_returns_409_for_version_conflict(
     payload = response.json()
     assert payload["detail"]["code"] == "CHART_ANNOTATION_VERSION_CONFLICT"
     assert payload["detail"]["latest"] == latest
+
+
+def test_create_chart_annotation_returns_422_for_invalid_payload(
+    client,
+    app,
+    monkeypatch,
+):
+    _override_dependencies(
+        app=app,
+        user=SimpleNamespace(id=uuid4()),
+        db=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        chart_annotations,
+        "create_chart_annotation",
+        AsyncMock(side_effect=ValueError("invalid fib vendor type")),
+    )
+
+    response = client.post(
+        "/api/v1/chart-annotations",
+        json={
+            "annotation": {
+                "source": {"type": "user_manual"},
+                "scope": {
+                    "market": "crypto",
+                    "symbol": "BTCUSD",
+                    "timeframe": "15m",
+                },
+                "semantic": {"kind": "note", "role": "markup"},
+                "tool": {"family": "fib", "vendor_type": "fib_retracement"},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
+    assert payload["detail"]["message"] == "invalid fib vendor type"
+
+
+def test_update_chart_annotation_returns_422_for_invalid_payload(
+    client,
+    app,
+    monkeypatch,
+):
+    annotation_id = uuid4()
+    _override_dependencies(
+        app=app,
+        user=SimpleNamespace(id=uuid4()),
+        db=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        chart_annotations,
+        "update_chart_annotation",
+        AsyncMock(side_effect=ValueError("vendor_native.state must be object")),
+    )
+
+    response = client.patch(
+        f"/api/v1/chart-annotations/{annotation_id}",
+        json={
+            "base_version": 1,
+            "annotation": {
+                "id": str(annotation_id),
+                "source": {"type": "user_manual"},
+                "scope": {
+                    "market": "crypto",
+                    "symbol": "BTCUSD",
+                    "timeframe": "15m",
+                },
+                "semantic": {"kind": "note", "role": "markup"},
+                "tool": {"family": "gann", "vendor_type": "gannbox"},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
+    assert payload["detail"]["message"] == "vendor_native.state must be object"
+
+
+def test_batch_upsert_chart_annotations_returns_422_for_invalid_payload(
+    client,
+    app,
+    monkeypatch,
+):
+    _override_dependencies(
+        app=app,
+        user=SimpleNamespace(id=uuid4()),
+        db=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        chart_annotations,
+        "batch_upsert_chart_annotations",
+        AsyncMock(side_effect=ValueError("unsupported gann vendor type")),
+    )
+
+    response = client.post(
+        "/api/v1/chart-annotations/batch-upsert",
+        json={
+            "annotations": [
+                {
+                    "source": {"type": "system"},
+                    "scope": {
+                        "market": "crypto",
+                        "symbol": "BTCUSD",
+                        "timeframe": "15m",
+                    },
+                    "semantic": {"kind": "note", "role": "markup"},
+                    "tool": {"family": "gann", "vendor_type": "gannbox"},
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
+    assert payload["detail"]["message"] == "unsupported gann vendor type"
+
+
+def test_create_chart_annotation_returns_422_for_invalid_profile_payload(
+    client,
+    app,
+    monkeypatch,
+):
+    _override_dependencies(
+        app=app,
+        user=SimpleNamespace(id=uuid4()),
+        db=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        chart_annotations,
+        "create_chart_annotation",
+        AsyncMock(
+            side_effect=ValueError(
+                "tool.vendor_type 'fib_retracement' is not supported for family 'profile'"
+            )
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/chart-annotations",
+        json={
+            "annotation": {
+                "source": {"type": "user_manual"},
+                "scope": {
+                    "market": "crypto",
+                    "symbol": "BTCUSD",
+                    "timeframe": "15m",
+                },
+                "semantic": {"kind": "profile", "role": "markup"},
+                "tool": {"family": "profile", "vendor_type": "anchored_vwap"},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
+    assert "family 'profile'" in payload["detail"]["message"]
+
+
+@pytest.mark.parametrize(
+    "family,error_message",
+    [
+        (
+            "text",
+            "tool.vendor_type 'pitchfork' is not supported for family 'text'",
+        ),
+        (
+            "line",
+            "tool.vendor_type 'callout' is not supported for family 'line'",
+        ),
+        (
+            "channel",
+            "tool.vendor_type 'pitchfork' is not supported for family 'channel'",
+        ),
+        (
+            "shape",
+            "tool.vendor_type 'pitchfork' is not supported for family 'shape'",
+        ),
+        (
+            "brush",
+            "tool.vendor_type 'pitchfork' is not supported for family 'brush'",
+        ),
+        (
+            "pattern",
+            "tool.vendor_type 'pitchfork' is not supported for family 'pattern'",
+        ),
+        (
+            "fork",
+            "tool.vendor_type 'anchored_vwap' is not supported for family 'fork'",
+        ),
+        (
+            "measurement",
+            "tool.vendor_type 'pitchfork' is not supported for family 'measurement'",
+        ),
+        (
+            "cycle",
+            "tool.vendor_type 'price_range' is not supported for family 'cycle'",
+        ),
+        (
+            "forecast",
+            "tool.vendor_type 'pitchfork' is not supported for family 'forecast'",
+        ),
+        (
+            "trading_box",
+            "tool.vendor_type 'pitchfork' is not supported for family 'trading_box'",
+        ),
+        (
+            "media",
+            "tool.vendor_type 'pitchfork' is not supported for family 'media'",
+        ),
+        (
+            "table",
+            "tool.vendor_type 'pitchfork' is not supported for family 'table'",
+        ),
+    ],
+)
+def test_create_chart_annotation_returns_422_for_invalid_additional_line_tool_payload(
+    client,
+    app,
+    monkeypatch,
+    family,
+    error_message,
+):
+    _override_dependencies(
+        app=app,
+        user=SimpleNamespace(id=uuid4()),
+        db=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        chart_annotations,
+        "create_chart_annotation",
+        AsyncMock(side_effect=ValueError(error_message)),
+    )
+
+    response = client.post(
+        "/api/v1/chart-annotations",
+        json={
+            "annotation": {
+                "source": {"type": "user_manual"},
+                "scope": {
+                    "market": "crypto",
+                    "symbol": "BTCUSD",
+                    "timeframe": "15m",
+                },
+                "semantic": {"kind": family, "role": "markup"},
+                "tool": {"family": family, "vendor_type": family},
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["detail"]["code"] == "CHART_ANNOTATION_INVALID_PAYLOAD"
+    assert f"family '{family}'" in payload["detail"]["message"]
