@@ -201,6 +201,51 @@ def _bundle_member_ids(stop_loss_id: str | None, take_profit_id: str | None) -> 
     ]
 
 
+def _trade_summary_payload(
+    *,
+    direction: str,
+    entry_time: int,
+    exit_time: int,
+    entry_price: float | None,
+    exit_price: float | None = None,
+    stop_price: float | None = None,
+    target_price: float | None = None,
+    qty: float | None = None,
+    mark_price: float | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "direction": str(direction or "").strip().lower() or "long",
+        "entry_time": int(entry_time),
+        "exit_time": int(exit_time),
+    }
+    numeric_fields = {
+        "entry_price": entry_price,
+        "exit_price": exit_price,
+        "stop_price": stop_price,
+        "target_price": target_price,
+        "qty": qty,
+        "mark_price": mark_price,
+    }
+    for key, value in numeric_fields.items():
+        normalized = _positive_float(value)
+        if normalized is not None:
+            payload[key] = normalized
+    entry_value = payload.get("entry_price")
+    stop_value = payload.get("stop_price")
+    target_value = payload.get("target_price")
+    if (
+        isinstance(entry_value, float)
+        and isinstance(stop_value, float)
+        and isinstance(target_value, float)
+        and abs(entry_value - stop_value) > 0
+    ):
+        payload["risk_reward_ratio"] = round(
+            abs(target_value - entry_value) / abs(entry_value - stop_value),
+            4,
+        )
+    return payload
+
+
 def _trade_annotation_timestamp(raw_value: Any) -> int | None:
     if isinstance(raw_value, datetime):
         return _iso_seconds(raw_value)
@@ -212,6 +257,95 @@ def _trade_annotation_timestamp(raw_value: Any) -> int | None:
         except ValueError:
             return None
     return None
+
+
+def _trade_direction_from_signal(raw_signal: Any) -> str:
+    signal = str(raw_signal or "").strip().upper()
+    if signal == "OPEN_LONG":
+        return "long"
+    if signal == "OPEN_SHORT":
+        return "short"
+    if signal == "CLOSE":
+        return "flat"
+    return signal.lower() or "long"
+
+
+def _signal_trade_summary(
+    *,
+    signal: Any,
+    timestamp: int,
+    metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    payload = metadata if isinstance(metadata, Mapping) else {}
+    direction = _trade_direction_from_signal(signal)
+    exit_time = _trade_annotation_timestamp(payload.get("exit_time")) or timestamp
+    return _trade_summary_payload(
+        direction=direction,
+        entry_time=timestamp,
+        exit_time=exit_time,
+        entry_price=_positive_float(
+            payload.get("execution_price")
+            or payload.get("mark_price")
+            or payload.get("price")
+        ),
+        exit_price=_positive_float(payload.get("exit_price")),
+        stop_price=_positive_float(payload.get("stop_price")),
+        target_price=_positive_float(
+            payload.get("take_price")
+            or payload.get("target_price")
+        ),
+        qty=_positive_float(payload.get("qty")),
+        mark_price=_positive_float(payload.get("mark_price")),
+    )
+
+
+def _order_trade_summary(
+    *,
+    kind: str,
+    direction: str,
+    timestamp: int,
+    price: float | None,
+    qty: float | None,
+) -> dict[str, Any]:
+    return _trade_summary_payload(
+        direction=direction,
+        entry_time=timestamp,
+        exit_time=timestamp,
+        entry_price=price if kind == "entry" else None,
+        exit_price=price if kind != "entry" else None,
+        qty=qty,
+        mark_price=price,
+    )
+
+
+def _execution_order_group_id(*, deployment_id: UUID, order_id: Any) -> str | None:
+    normalized = str(order_id or "").strip()
+    if not normalized:
+        return None
+    return f"execution:{deployment_id}:{normalized}:order_flow"
+
+
+def _order_semantic_payload(order: Order) -> tuple[str, str]:
+    raw_metadata = getattr(order, "metadata_", None)
+    metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}
+    signal = str(metadata.get("signal") or "").strip().upper()
+    unified_direction = str(metadata.get("unified_direction") or "").strip().lower()
+    normalized_side = str(order.side or "").strip().lower()
+    if signal == "OPEN_LONG":
+        return "entry", "long"
+    if signal == "OPEN_SHORT":
+        return "entry", "short"
+    if signal == "CLOSE":
+        if unified_direction in {"long", "short"}:
+            return "exit", unified_direction
+        return "exit", "long" if normalized_side == "sell" else "short"
+    if unified_direction in {"long", "short"}:
+        is_entry = normalized_side == ("buy" if unified_direction == "long" else "sell")
+        return ("entry" if is_entry else "exit"), unified_direction
+    return (
+        "entry" if normalized_side == "buy" else "exit",
+        "long" if normalized_side == "buy" else "short",
+    )
 
 
 def build_execution_annotation_documents(
@@ -238,6 +372,19 @@ def build_execution_annotation_documents(
         timestamp = _iso_seconds(signal_event.bar_time)
         if timestamp is None:
             continue
+        signal_trade_summary = _signal_trade_summary(
+            signal=signal_event.signal,
+            timestamp=timestamp,
+            metadata=signal_event.metadata_,
+        )
+        signal_group_id = _execution_order_group_id(
+            deployment_id=deployment_id,
+            order_id=(
+                signal_event.metadata_.get("order_id")
+                if isinstance(signal_event.metadata_, Mapping)
+                else None
+            ),
+        )
         docs.append(
             {
                 "id": f"signal:{signal_event.id}",
@@ -249,7 +396,7 @@ def build_execution_annotation_documents(
                 "semantic": {
                     "kind": "signal",
                     "role": "execution",
-                    "direction": str(signal_event.signal).lower(),
+                    "direction": _trade_direction_from_signal(signal_event.signal),
                     "status": "active",
                 },
                 "tool": {
@@ -261,11 +408,20 @@ def build_execution_annotation_documents(
                     "points": [{"time": timestamp}],
                 },
                 "geometry": {"type": "point"},
-                "content": {"text": signal_event.reason},
+                "content": {
+                    "text": signal_event.reason,
+                    "trade": signal_trade_summary,
+                },
                 "style": {},
-                "relations": {},
+                "relations": (
+                    {"group_id": signal_group_id}
+                    if signal_group_id is not None
+                    else {}
+                ),
                 "lifecycle": {"editable": False},
-                "vendor_native": {},
+                "vendor_native": {
+                    "trade": signal_trade_summary,
+                },
             }
         )
     fill_by_order_id = {fill.order_id: fill for fill in fills}
@@ -277,6 +433,19 @@ def build_execution_annotation_documents(
         fill_time = _iso_seconds(fill.filled_at if fill is not None else order.submitted_at)
         if fill_time is None:
             continue
+        order_kind, order_direction = _order_semantic_payload(order)
+        anchor_price = _positive_float(fill.fill_price if fill is not None else order.price)
+        order_trade_summary = _order_trade_summary(
+            kind=order_kind,
+            direction=order_direction,
+            timestamp=fill_time,
+            price=anchor_price,
+            qty=_positive_float(fill.fill_qty if fill is not None else order.qty),
+        )
+        order_group_id = _execution_order_group_id(
+            deployment_id=deployment_id,
+            order_id=order.id,
+        )
         docs.append(
             {
                 "id": f"order:{order.id}",
@@ -286,9 +455,9 @@ def build_execution_annotation_documents(
                 },
                 "scope": scope,
                 "semantic": {
-                    "kind": "entry" if str(order.side).lower() == "buy" else "exit",
+                    "kind": order_kind,
                     "role": "execution",
-                    "direction": "long" if str(order.side).lower() == "buy" else "short",
+                    "direction": order_direction,
                     "status": str(order.status).lower(),
                 },
                 "tool": {
@@ -300,16 +469,25 @@ def build_execution_annotation_documents(
                     "points": [
                         {
                             "time": fill_time,
-                            "price": float(fill.fill_price if fill is not None else order.price or 0),
+                            "price": float(anchor_price or 0),
                         }
                     ],
                 },
                 "geometry": {"type": "point"},
-                "content": {"text": str(order.client_order_id)},
+                "content": {
+                    "text": str(order.client_order_id),
+                    "trade": order_trade_summary,
+                },
                 "style": {},
-                "relations": {},
+                "relations": (
+                    {"group_id": order_group_id}
+                    if order_group_id is not None
+                    else {}
+                ),
                 "lifecycle": {"editable": False},
-                "vendor_native": {},
+                "vendor_native": {
+                    "trade": order_trade_summary,
+                },
             }
         )
     for position in positions:
@@ -350,6 +528,16 @@ def build_execution_annotation_documents(
             else None
         )
         composite_members = _bundle_member_ids(stop_loss_id, take_profit_id)
+        trade_summary = _trade_summary_payload(
+            direction=direction,
+            entry_time=int(entry_time),
+            exit_time=int(exit_time),
+            entry_price=float(entry_price),
+            stop_price=stop_price,
+            target_price=take_price,
+            qty=_positive_float(position.qty),
+            mark_price=_positive_float(position.mark_price),
+        )
         docs.append(
             {
                 "id": f"position:{deployment_id}:{normalized_symbol}",
@@ -378,7 +566,7 @@ def build_execution_annotation_documents(
                     ],
                 },
                 "geometry": {"type": "composite"},
-                "content": {},
+                "content": {"trade": trade_summary},
                 "style": {},
                 "relations": (
                     {
@@ -390,19 +578,21 @@ def build_execution_annotation_documents(
                 ),
                 "lifecycle": {"editable": False},
                 "vendor_native": {
-                    "trade": {
-                        "entry_time": int(entry_time),
-                        "exit_time": int(exit_time),
-                        "entry_price": float(entry_price),
-                        "stop_price": stop_price,
-                        "target_price": take_price,
-                        "qty": _positive_float(position.qty),
-                        "mark_price": _positive_float(position.mark_price),
-                    }
+                    "trade": trade_summary,
                 },
             }
         )
         if stop_price is not None:
+            stop_trade_summary = _trade_summary_payload(
+                direction=direction,
+                entry_time=int(entry_time),
+                exit_time=int(exit_time),
+                entry_price=float(entry_price),
+                stop_price=stop_price,
+                target_price=take_price,
+                qty=_positive_float(position.qty),
+                mark_price=_positive_float(position.mark_price),
+            )
             docs.append(
                 {
                     "id": stop_loss_id,
@@ -430,24 +620,30 @@ def build_execution_annotation_documents(
                         ),
                     },
                     "geometry": {"type": "polyline"},
-                    "content": {"text": "Stop Loss"},
+                    "content": {
+                        "text": "Stop Loss",
+                        "trade": stop_trade_summary,
+                    },
                     "style": {},
                     "relations": {
                         "group_id": group_id,
                         "parent_id": f"position:{deployment_id}:{normalized_symbol}",
                     },
                     "lifecycle": {"editable": False},
-                    "vendor_native": {
-                        "trade": {
-                            "entry_time": int(entry_time),
-                            "exit_time": int(exit_time),
-                            "entry_price": float(entry_price),
-                            "stop_price": stop_price,
-                        }
-                    },
+                    "vendor_native": {"trade": stop_trade_summary},
                 }
             )
         if take_price is not None:
+            take_trade_summary = _trade_summary_payload(
+                direction=direction,
+                entry_time=int(entry_time),
+                exit_time=int(exit_time),
+                entry_price=float(entry_price),
+                stop_price=stop_price,
+                target_price=take_price,
+                qty=_positive_float(position.qty),
+                mark_price=_positive_float(position.mark_price),
+            )
             docs.append(
                 {
                     "id": take_profit_id,
@@ -475,21 +671,17 @@ def build_execution_annotation_documents(
                         ),
                     },
                     "geometry": {"type": "polyline"},
-                    "content": {"text": "Take Profit"},
+                    "content": {
+                        "text": "Take Profit",
+                        "trade": take_trade_summary,
+                    },
                     "style": {},
                     "relations": {
                         "group_id": group_id,
                         "parent_id": f"position:{deployment_id}:{normalized_symbol}",
                     },
                     "lifecycle": {"editable": False},
-                    "vendor_native": {
-                        "trade": {
-                            "entry_time": int(entry_time),
-                            "exit_time": int(exit_time),
-                            "entry_price": float(entry_price),
-                            "target_price": take_price,
-                        }
-                    },
+                    "vendor_native": {"trade": take_trade_summary},
                 }
             )
     return docs
@@ -556,6 +748,15 @@ def build_backtest_trade_annotation_documents(
     effective_exit_time = exit_time
     if effective_exit_time is None or effective_exit_time <= effective_entry_time:
         effective_exit_time = effective_entry_time + _timeframe_step_seconds(timeframe) * 12
+    trade_summary = _trade_summary_payload(
+        direction=side,
+        entry_time=int(effective_entry_time),
+        exit_time=int(effective_exit_time),
+        entry_price=_positive_float(entry_price),
+        exit_price=_positive_float(exit_price),
+        stop_price=stop_price,
+        target_price=take_price,
+    )
     for item in normalized_annotations:
         kind = str(item["kind"])
         timestamp = int(item["timestamp"])
@@ -600,7 +801,10 @@ def build_backtest_trade_annotation_documents(
                     ),
                 },
                 "geometry": {"type": "point" if kind.startswith("trade_") else "polyline"},
-                "content": {"text": item["label"]},
+                "content": {
+                    "text": item["label"],
+                    "trade": trade_summary,
+                },
                 "style": {},
                 "relations": {
                     "group_id": group_id,
@@ -611,16 +815,7 @@ def build_backtest_trade_annotation_documents(
                     ),
                 },
                 "lifecycle": {"editable": False},
-                "vendor_native": {
-                    "trade": {
-                        "entry_time": effective_entry_time,
-                        "exit_time": effective_exit_time,
-                        "entry_price": _positive_float(entry_price),
-                        "exit_price": _positive_float(exit_price),
-                        "stop_price": stop_price,
-                        "target_price": take_price,
-                    }
-                },
+                "vendor_native": {"trade": trade_summary},
             }
         )
     if entry_price is not None:
@@ -650,23 +845,14 @@ def build_backtest_trade_annotation_documents(
                     ]
                 },
                 "geometry": {"type": "composite"},
-                "content": {},
+                "content": {"trade": trade_summary},
                 "style": {},
                 "relations": {
                     "group_id": group_id,
                     "composite_members": _bundle_member_ids(stop_loss_id, take_profit_id),
                 },
                 "lifecycle": {"editable": False},
-                "vendor_native": {
-                    "trade": {
-                        "entry_time": int(effective_entry_time),
-                        "exit_time": int(effective_exit_time),
-                        "entry_price": normalized_entry_price,
-                        "exit_price": _positive_float(exit_price),
-                        "stop_price": stop_price,
-                        "target_price": take_price,
-                    }
-                },
+                "vendor_native": {"trade": trade_summary},
             }
         )
     return docs
