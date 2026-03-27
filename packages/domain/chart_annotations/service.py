@@ -228,6 +228,8 @@ _GEOMETRY_TYPES = {
 }
 _EDITABLE_SOURCE_TYPES = {"ai_agent", "user_manual", "system"}
 _OUTBOX_RETENTION_PER_OWNER = 4000
+_TABLE_CONTENT_PREVIEW_ROWS = 8
+_TABLE_CONTENT_PREVIEW_COLS = 8
 
 
 class ChartAnnotationConflictError(RuntimeError):
@@ -416,6 +418,87 @@ def _validate_native_line_tool_payload(
         )
 
 
+def _normalize_table_cells_preview(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    preview: list[list[str]] = []
+    for row in value[:_TABLE_CONTENT_PREVIEW_ROWS]:
+        if not isinstance(row, list):
+            continue
+        preview.append(
+            [
+                _string(cell)
+                for cell in row[:_TABLE_CONTENT_PREVIEW_COLS]
+            ]
+        )
+    return preview
+
+
+def _derive_content_summary(
+    *,
+    tool_family: str,
+    content: dict[str, Any],
+    anchors: dict[str, Any],
+    vendor_native: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = dict(content)
+    line_tool_state = _normalize_json_map(vendor_native.get("state"))
+    nested_state = _normalize_json_map(line_tool_state.get("state"))
+    if tool_family == "table":
+        table_payload = _normalize_json_map(normalized.get("table"))
+        rows_count = int(nested_state.get("rowsCount") or 0)
+        cols_count = int(nested_state.get("colsCount") or 0)
+        if rows_count <= 0 or cols_count <= 0:
+            preview = _normalize_table_cells_preview(nested_state.get("cells"))
+            if rows_count <= 0:
+                rows_count = len(preview)
+            if cols_count <= 0:
+                cols_count = len(preview[0]) if preview else 0
+        else:
+            preview = _normalize_table_cells_preview(nested_state.get("cells"))
+        table_payload["rows"] = rows_count
+        table_payload["cols"] = cols_count
+        if preview:
+            table_payload["cells_preview"] = preview
+        title = _optional_string(nested_state.get("title"))
+        if title is not None:
+            table_payload["title"] = title
+        normalized["table"] = table_payload
+    elif tool_family == "brush":
+        stroke_payload = _normalize_json_map(normalized.get("stroke"))
+        line_tool_points = line_tool_state.get("points")
+        if isinstance(line_tool_points, list):
+            point_count = len(line_tool_points)
+        else:
+            anchor_points = anchors.get("points")
+            point_count = len(anchor_points) if isinstance(anchor_points, list) else 0
+        stroke_payload["point_count"] = point_count
+        smooth = nested_state.get("smooth")
+        if isinstance(smooth, (int, float)):
+            stroke_payload["smooth"] = float(smooth)
+        normalized["stroke"] = stroke_payload
+    elif tool_family == "media":
+        media_payload = _normalize_json_map(normalized.get("media"))
+        size = nested_state.get("size")
+        if isinstance(size, (int, float)):
+            media_payload["size"] = float(size)
+        angle = nested_state.get("angle")
+        if isinstance(angle, (int, float)):
+            media_payload["angle"] = float(angle)
+        if media_payload:
+            normalized["media"] = media_payload
+        emoji = _optional_string(nested_state.get("emoji"))
+        if emoji is not None:
+            normalized["emoji"] = emoji
+        sticker = _optional_string(nested_state.get("sticker"))
+        if sticker is not None:
+            normalized["sticker"] = sticker
+        icon_code = nested_state.get("icon")
+        if isinstance(icon_code, (int, float)):
+            normalized["icon_code"] = int(icon_code)
+    return normalized
+
+
 def _normalize_annotation_payload(
     payload: Mapping[str, Any],
     *,
@@ -549,6 +632,12 @@ def _normalize_annotation_payload(
     _validate_native_line_tool_payload(
         tool_family=tool_family,
         tool_vendor_type=tool_vendor_type,
+        vendor_native=vendor_native,
+    )
+    content = _derive_content_summary(
+        tool_family=tool_family,
+        content=content,
+        anchors=anchors,
         vendor_native=vendor_native,
     )
 

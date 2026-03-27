@@ -346,6 +346,7 @@ def test_normalize_annotation_payload_accepts_brush_vendor_native_state_round_tr
     assert metadata["tool_vendor_type"] == "brush"
     assert document["geometry"]["type"] == "path"
     assert document["vendor_native"]["state"]["type"] == "LineToolBrush"
+    assert document["content"]["stroke"] == {"point_count": 3}
 
 
 def test_normalize_annotation_payload_rejects_non_object_brush_vendor_native_state():
@@ -630,6 +631,41 @@ def test_normalize_annotation_payload_accepts_media_without_native_state():
     assert document["vendor_native"] == {}
 
 
+def test_normalize_annotation_payload_derives_media_content_summary_from_native_state():
+    payload = _base_payload(
+        family="media",
+        vendor_type="emoji",
+    )
+    payload["geometry"] = {}
+    payload["anchors"] = {
+        "points": [
+            {"time": 1717000000, "price": 71234.56},
+        ]
+    }
+    payload["content"] = {"emoji": "🚀"}
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-emoji-1",
+            "type": "LineToolEmoji",
+            "state": {
+                "emoji": "😀",
+                "size": 72,
+                "angle": 1.57,
+            },
+        }
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "media"
+    assert metadata["tool_vendor_type"] == "emoji"
+    assert document["content"]["emoji"] == "😀"
+    assert document["content"]["media"] == {"size": 72.0, "angle": 1.57}
+
+
 def test_normalize_annotation_payload_accepts_table_without_native_state():
     payload = _base_payload(
         family="table",
@@ -651,3 +687,48 @@ def test_normalize_annotation_payload_accepts_table_without_native_state():
     assert metadata["tool_vendor_type"] == "table"
     assert document["geometry"]["type"] == "point"
     assert document["vendor_native"] == {}
+
+
+def test_normalize_annotation_payload_derives_table_content_summary_from_native_state():
+    payload = _base_payload(
+        family="table",
+        vendor_type="table",
+    )
+    payload["geometry"] = {}
+    payload["anchors"] = {
+        "points": [
+            {"time": 1717000000, "price": 71234.56},
+        ]
+    }
+    payload["vendor_native"] = {
+        "state": {
+            "id": "line-tool-table-1",
+            "type": "LineToolTable",
+            "state": {
+                "title": "Trade Plan",
+                "rowsCount": 2,
+                "colsCount": 3,
+                "cells": [
+                    ["Entry", "Stop", "Target"],
+                    ["100", "95", "110"],
+                ],
+            },
+        }
+    }
+
+    document, metadata = _normalize_annotation_payload(
+        payload,
+        owner_user_id=uuid4(),
+    )
+
+    assert metadata["tool_family"] == "table"
+    assert metadata["tool_vendor_type"] == "table"
+    assert document["content"]["table"] == {
+        "rows": 2,
+        "cols": 3,
+        "title": "Trade Plan",
+        "cells_preview": [
+            ["Entry", "Stop", "Target"],
+            ["100", "95", "110"],
+        ],
+    }
